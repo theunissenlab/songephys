@@ -97,7 +97,7 @@ def find_vocal_periods(audio_stream, fs=25000, fuse_duration=0.5, verbose=False)
 
 
 def extract_birdsong_features(signal, points, fs=25000, minfreq=1000, maxfreq=8000,
-                              pca_model='pca_projection.pkl'):
+                              pca_model='models/pca_projection.pkl'):
     """
     This function is given a signal and a set of intervals, and extracts the frequency
     characteristics of the interval. It then projects them onto a pretrained set of principle
@@ -150,7 +150,7 @@ def extract_birdsong_features(signal, points, fs=25000, minfreq=1000, maxfreq=80
     return features
 
 
-def classify_birdsong(signal, points, fs=25000.0, model='songvnoise_classifier.pkl'):
+def classify_birdsong(signal, points, fs=25000.0, model='models/songvnoise_classifier.pkl'):
     """
     Given a signal and a set of points, classifies which of the points are birdsong (versus other
     sorts of noise, such as calls, tets, and flapping/hopping).
