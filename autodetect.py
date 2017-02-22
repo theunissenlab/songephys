@@ -3,6 +3,7 @@ from lasp.signal import lowpass_filter, highpass_filter
 import matplotlib.mlab as mlab
 import numpy as np
 import scipy.stats
+from sklearn.cluster import KMeans
 
 
 def find_vocal_periods(audio_stream, fs=25000, fuse_duration=0.5, verbose=False):
@@ -133,19 +134,18 @@ def extract_birdsong_features(signal, points, fs=25000, minfreq=1000, maxfreq=80
     all_lengths = scipy.stats.zscore(np.expand_dims(map(lambda x: x[1] - x[0], points), 1))
     for pt in points:
         l, h = pt
-        Pxx, _, _ = mlab.specgram(signal[l:h], 256, Fs=fs,
-                                  detrend=mlab.detrend_none,
-                                  window=mlab.window_hanning)
+        Pxx, freqs, _ = mlab.specgram(signal[l:h], 256, Fs=fs,
+                                      detrend=mlab.detrend_none,
+                                      window=mlab.window_hanning)
         if minfreq is not None and maxfreq is not None:
             Pxx = Pxx[(freqs >= minfreq) & (freqs <= maxfreq)]
         Z = 10. * np.log10(Pxx)
         Z = np.flipud(Z)
         Z = np.maximum(Z, np.max(Z) - 50)
-        specs.append(Z)
         feats.append(np.mean(np.square(Z.T), axis=0))
 
     feats = np.array(feats)
-    proj_feats = pca.transform(feats)
+    proj_feats = pca_space.transform(feats)
     features = np.concatenate([proj_feats, all_lengths], axis=1)
     return features
 
@@ -178,4 +178,48 @@ def classify_birdsong(signal, points, fs=25000.0, model='models/songvnoise_class
     return svm.predict(features)
 
 
-def separate_song_sources():
+def separate_song_sources(audio_streams, points, fs=25000, tutor_mic=0):
+    """
+    Uses the two mic streams to separate the student and the tutor.
+
+    Parameters
+    ----------
+    audio_stream: np.array of floats. Shape (n_samples, 2)
+        The audio streams, one from each mic.
+    points: np.array of (int, int).
+        Each tuple represents a (low_index:high_index) interval in the original array.
+    fs: float.
+        The sampling rate of the signal in Hz.
+    tutor_mic: 0 or 1.
+        The index of the mic which was closer to the student.
+
+    Returns
+    -------
+    A dictionary with two lists of points, of keys 'student' and 'tutor'.
+    """
+    streams_filtered_env = np.zeros(np.shape(audio_streams))
+    streams_filtered_env[:, 0] = highpass_filter(audio_streams[:, 0], fs, 2000)
+    streams_filtered_env[:, 1] = highpass_filter(audio_streams[:, 1], fs, 2000)
+    streams_filtered_env[:, 0] = np.abs(lowpass_filter(streams_filtered_env[:, 0], fs, 5000))
+    streams_filtered_env[:, 1] = np.abs(lowpass_filter(streams_filtered_env[:, 1], fs, 5000))
+    streams_filtered_env[:, 0] = lowpass_filter(streams_filtered_env[:, 0], fs, 100)
+    streams_filtered_env[:, 1] = lowpass_filter(streams_filtered_env[:, 1], fs, 100)
+
+    def get_amp_envelope(coordinates, swindow=1000):
+        low, high = coordinates
+        return streams_filtered_env[low:high, :]
+    diff = lambda c: (np.mean(get_amp_envelope(c), axis=0)[0]
+                      - np.mean(get_amp_envelope(c), axis=0)[1])
+    pt_diffs = map(diff, points)
+    kmeans = KMeans(n_clusters=2, random_state=0).fit(pt_diffs)
+    if tutor_mic == 0:
+        student_label = np.argmin(kmeans.cluster_centers_)
+    else:
+        student_label = np.argmax(kmeans.cluster_centers_)
+    student_idx = np.where(kmeans.labels_ == student_label)[0]
+    tutor_idx = np.where(kmeans.labels_ != student_label)[0]
+
+    annotated_pts = {}
+    annotated_pts['student'] = points[student_idx]
+    annotated_pts['tutor'] = points[tutor_idx]
+    return annotated_pts
