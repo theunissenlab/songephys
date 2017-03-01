@@ -2,6 +2,7 @@ import cPickle as pickle
 from lasp.signal import lowpass_filter, highpass_filter
 import matplotlib.mlab as mlab
 import numpy as np
+import os
 import scipy.stats
 from sklearn.cluster import KMeans
 
@@ -126,7 +127,8 @@ def extract_birdsong_features(signal, points, fs=25000, minfreq=1000, maxfreq=80
     np.array of float. Shape (n_points, n_features)
         A numpy array of the resulting features for each point.
     """
-    pca_space = pickle.load(open(pca_model, "rb"))
+    pca_file = os.path.join(os.path.dirname(__file__), pca_model)
+    pca_space = pickle.load(open(pca_file, "rb"))
     feats = []
     minfreq = 1000
     maxfreq = 8000
@@ -172,7 +174,8 @@ def classify_birdsong(signal, points, fs=25000.0, model='models/songvnoise_class
     An array of labels, specified by the model. The default model labels as either 'birdsong' or
     'notbirdsong'.
     """
-    svm = pickle.load(open(model, "rb"))
+    svm_file = os.path.join(os.path.dirname(__file__), model)
+    svm = pickle.load(open(svm_file, "rb"))
 
     features = extract_birdsong_features(signal, points, fs=fs)
     return svm.predict(features)
