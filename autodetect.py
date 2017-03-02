@@ -95,11 +95,16 @@ def find_vocal_periods(audio_stream, fs=25000, fuse_duration=0.5, verbose=False)
         len(sound_onset) == len(sound_offset)
     except:
         print("Number of vocal onsets and offsets not equal!")
-    return sound_onset, sound_offset
+    
+    
+    vocal_periods = np.array(zip(sound_onset, sound_offset))
+    lengths = np.apply_along_axis(lambda p: p[1] - p[0], 1, vocal_periods)
+    vocal_periods = vocal_periods[lengths > fs/10]
+    return vocal_periods
 
 
 def extract_birdsong_features(signal, points, fs=25000, minfreq=1000, maxfreq=8000,
-                              pca_model='models/pca_projection.pkl'):
+                              pca_model=None):
     """
     This function is given a signal and a set of intervals, and extracts the frequency
     characteristics of the interval. It then projects them onto a pretrained set of principle
@@ -120,20 +125,23 @@ def extract_birdsong_features(signal, points, fs=25000, minfreq=1000, maxfreq=80
         The maximum frequency to be considered for the feature set.
     pca_model: string.
         A string pointing to a .pkl file specifying the trained PC-space. Note: the minfreq and
-        maxfreq parameters must match whatever dataset the PC space was fit on.
+        maxfreq parameters must match whatever dataset the PC space was fit on. May set None
+        to not reduce the dimensionality of spectral features.
 
     Returns
     -------
     np.array of float. Shape (n_points, n_features)
         A numpy array of the resulting features for each point.
     """
-    pca_file = os.path.join(os.path.dirname(__file__), pca_model)
-    pca_space = pickle.load(open(pca_file, "rb"))
+    if pca_model is not None:
+        pca_file = os.path.join(os.path.dirname(__file__), pca_model)
+        pca_space = pickle.load(open(pca_file, "rb"))
     feats = []
     minfreq = 1000
     maxfreq = 8000
 
-    all_lengths = scipy.stats.zscore(np.expand_dims(map(lambda x: x[1] - x[0], points), 1))
+    #all_lengths = scipy.stats.zscore(np.expand_dims(map(lambda x: x[1] - x[0], points), 1))
+    all_lengths = np.expand_dims(map(lambda x: x[1] - x[0], points), 1)
     for pt in points:
         l, h = pt
         Pxx, freqs, _ = mlab.specgram(signal[l:h], 256, Fs=fs,
@@ -147,12 +155,12 @@ def extract_birdsong_features(signal, points, fs=25000, minfreq=1000, maxfreq=80
         feats.append(np.mean(np.square(Z.T), axis=0))
 
     feats = np.array(feats)
-    proj_feats = pca_space.transform(feats)
+    proj_feats = pca_space.transform(feats) if pca_model is not None else feats
     features = np.concatenate([proj_feats, all_lengths], axis=1)
     return features
 
 
-def classify_birdsong(signal, points, fs=25000.0, model='models/songvnoise_classifier.pkl'):
+def classify_birdsong(signal, points, fs=25000.0, model='models/songvnoise_classifier_noz_big_nopca.pkl'):
     """
     Given a signal and a set of points, classifies which of the points are birdsong (versus other
     sorts of noise, such as calls, tets, and flapping/hopping).
@@ -176,7 +184,7 @@ def classify_birdsong(signal, points, fs=25000.0, model='models/songvnoise_class
     """
     svm_file = os.path.join(os.path.dirname(__file__), model)
     svm = pickle.load(open(svm_file, "rb"))
-
+    
     features = extract_birdsong_features(signal, points, fs=fs)
     return svm.predict(features)
 
@@ -200,6 +208,7 @@ def separate_song_sources(audio_streams, points, fs=25000, tutor_mic=0):
     -------
     A dictionary with two lists of points, of keys 'student' and 'tutor'.
     """
+    print "...Filtering Arrays to get Amp Envelope"
     streams_filtered_env = np.zeros(np.shape(audio_streams))
     streams_filtered_env[:, 0] = highpass_filter(audio_streams[:, 0], fs, 2000)
     streams_filtered_env[:, 1] = highpass_filter(audio_streams[:, 1], fs, 2000)
@@ -213,7 +222,10 @@ def separate_song_sources(audio_streams, points, fs=25000, tutor_mic=0):
         return streams_filtered_env[low:high, :]
     diff = lambda c: (np.mean(get_amp_envelope(c), axis=0)[0]
                       - np.mean(get_amp_envelope(c), axis=0)[1])
-    pt_diffs = map(diff, points)
+    print np.shape(points)
+    pt_diffs = np.expand_dims(map(diff, points), axis=1)
+    print pt_diffs
+    print np.shape(pt_diffs)
     kmeans = KMeans(n_clusters=2, random_state=0).fit(pt_diffs)
     if tutor_mic == 0:
         student_label = np.argmin(kmeans.cluster_centers_)
