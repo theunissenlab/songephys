@@ -34,6 +34,7 @@ def rhd_to_neo(experiment_dir, rhd_file, stimulus_file=None):
                                os.path.basename(experiment_file).replace(".rhd", "_neo.h5"))
     h5_exporter = NeoHdf5IO(h5_filename)
     h5_exporter.save(block)
+    print 'Block path is', block.hdf5_path
     h5_exporter.close()
 
 
