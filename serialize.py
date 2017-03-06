@@ -36,6 +36,7 @@ def rhd_to_neo(experiment_dir, rhd_file, stimulus_file=None):
     h5_exporter.save(block)
     print 'Block path is', block.hdf5_path
     h5_exporter.close()
+    rhd_importer.close()
 
 
 def write_playback_stim_to_neo(block, stim_file_name):
