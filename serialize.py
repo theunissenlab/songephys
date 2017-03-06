@@ -93,4 +93,39 @@ def read_audio_from_neo(experiment_dir, neo_filename):
     block = h5_exporter.get("/Block_0")
     sound_recording = block.segments[0].analogsignalarrays[1]
     norm_sound = sound_recording / np.max(sound_recording)
+    h5_exporter.close()
     return norm_sound
+
+
+def add_vocal_periods_to_neo(experiment_dir, neo_filename, vocal_periods_dict):
+    """
+    Adds annotated vocal periods to the neo file as an epoch array. Mutates the passed file, with
+    no return value.
+
+    Parameters
+    ----------
+    experiment_dir: string.
+        Root of the directory where all of the files for a particular bird are stored.
+    neo_filename: string.
+        The actual filename of the particular experiment session. Should be of the form:
+        <bird id><timestamp>_neo.h5
+    vocal_periods_dict: dictionary.
+        A dictionary with keys "student" and "tutor" containing lists of intervals [(int, int)].
+    """
+    full_filename = os.path.join(experiment_dir, neo_filename)
+    exporter = NeoHdf5IO(full_filename)
+    block = exporter.get("/Block_0")
+    segment = block.segments[0]
+    if segment.epocharrays is None:
+        segment.epocharrays = []
+    for k in ['student', 'tutor']:
+        intervals = vocal_periods_dict[k]
+        starts = map(lambda x: x[0], intervals)
+        durations = map(lambda p: p[1] - p[0], intervals)
+        labels = [k]*len(starts)
+        epocharr = EpochArray(times=starts, durations=durations, labels=labels,
+                              name=k+'_birdsong')
+        segment.epocharrays.append(epocharr)
+    segment.create_many_to_one_relationship()
+    exporter.save(block)
+    exporter.close()
