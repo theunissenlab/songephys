@@ -87,8 +87,9 @@ def write_playback_stim_to_neo(block, stim_file_name):
     segment.create_many_to_one_relationship()
 
 
-def read_audio_from_neo(neo_filename):
-    h5_exporter = NeoHdf5IO(neo_filename)
+def read_audio_from_neo(experiment_dir, neo_filename):
+    h5_filename = os.path.join(experiment_dir, neo_filename)
+    h5_exporter = NeoHdf5IO(h5_filename)
     block = h5_exporter.get("/Block_0")
     sound_recording = block.segments[0].analogsignalarrays[1]
     norm_sound = sound_recording / np.max(sound_recording)
