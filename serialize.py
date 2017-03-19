@@ -2,7 +2,8 @@ import os
 import quantities as pq
 from zeebeez.tdt2neo import stim
 from neo.core import Epoch
-from neo.io import RHDIO, NixIO, convert_digital_to_metadata
+from neo.io import RHDIO, NixIO
+from neo.io.tools import convert_digital_to_metadata
 from neosound import sound_manager
 from neosound.sound_store import HDF5Store
 
