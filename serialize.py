@@ -1,8 +1,8 @@
 import os
 import quantities as pq
-from zeebeez.tdt2neo import stim, import_multielectrode
+from zeebeez.tdt2neo import stim
 from neo.core import Epoch
-from neo.io import RHDIO, NixIO
+from neo.io import RHDIO, NixIO, convert_digital_to_metadata
 from neosound import sound_manager
 from neosound.sound_store import HDF5Store
 
@@ -53,7 +53,7 @@ def write_playback_stim_to_neo(block, stim_file_name):
     digital_signals = segment.eventarrays[0]
     sampling_rate = digital_signals.annotations["sampling_rate"]
     on_times = np.round(digital_signals.times * sampling_rate).astype("int")
-    codes = import_multielectrode.convert_digital_to_metadata(on_times)
+    codes = convert_digital_to_metadata(on_times)
 
     # Loop through each stimulus stored in metadata and add an EpochArray instance
     for ii, (start, metadata) in enumerate(codes):
@@ -92,13 +92,14 @@ def read_audio_from_neo(experiment_dir, neo_filename):
     h5_filename = os.path.join(experiment_dir, neo_filename)
     h5_exporter = NixIO(h5_filename)
     block = h5_exporter.read_block("")
-    sound_recording = block.segments[0].analogsignalarrays[1]
+    sound_recording = block.segments[0].analogsignals[1]
     norm_sound = sound_recording / np.max(sound_recording)
     h5_exporter.close()
     return norm_sound
 
 
-def add_vocal_periods_to_neo(experiment_dir, neo_filename, vocal_periods_dict):
+def add_vocal_periods_to_neo(experiment_dir, neo_filename,
+                             vocal_periods_dict, sampling_rate=25000.0):
     """
     Adds annotated vocal periods to the neo file as an epoch array. Mutates the passed file, with
     no return value.
@@ -114,8 +115,8 @@ def add_vocal_periods_to_neo(experiment_dir, neo_filename, vocal_periods_dict):
         A dictionary with keys "student" and "tutor" containing lists of intervals [(int, int)].
     """
     full_filename = os.path.join(experiment_dir, neo_filename)
-    exporter = NeoHdf5IO(full_filename)
-    block = exporter.get("/Block_0")
+    exporter = NixIO(full_filename)
+    block = exporter.read_block()
     segment = block.segments[0]
     if segment.epocharrays is None:
         segment.epocharrays = []
@@ -124,8 +125,8 @@ def add_vocal_periods_to_neo(experiment_dir, neo_filename, vocal_periods_dict):
         starts = map(lambda x: x[0], intervals)
         durations = map(lambda p: p[1] - p[0], intervals)
         labels = [k]*len(starts)
-        epocharr = Epoch(times=starts, durations=durations, labels=labels,
-                         name=k+'_birdsong')
+        epocharr = Epoch(times=starts/sampling_rate*pq.s, durations=durations/sampling_rate*pq.s,
+                         labels=labels, name=k+'_birdsong')
         segment.epocharrays.append(epocharr)
     segment.create_many_to_one_relationship()
     exporter.save(block)
