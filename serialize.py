@@ -23,24 +23,24 @@ def rhd_to_neo(experiment_dir, rhd_file, stimulus_file=None):
                                         os.path.basename(
                                             experiment_file).replace(".rhd", "_stimuli.h5"))
 
-    if stimulus_file is not None:
-        csv_reader = stim.StimCSVReader()
-
-        # Read all of the metadata and trial data
-        csv_reader.read(stimulus_file, root_dir=stimulus_dir)
-        csv_reader.write(stimulus_h5_filename)
-
-        write_playback_stim_to_neo(block, stimulus_h5_filename)
+    # if stimulus_file is not None:
+    #     csv_reader = stim.StimCSVReader()
+    #
+    #     # Read all of the metadata and trial data
+    #     csv_reader.read(stimulus_file, root_dir=stimulus_dir)
+    #     csv_reader.write(stimulus_h5_filename)
+    #
+    #     write_playback_stim_to_nix(block, stimulus_h5_filename)
     h5_filename = os.path.join(experiment_dir,
-                               os.path.basename(experiment_file).replace(".rhd", "_neo.h5"))
+                               os.path.basename(experiment_file).replace(".rhd", ".nix"))
     h5_exporter = NixIO(h5_filename)
     h5_exporter.write_block(block)
-    print 'Block path is', block.hdf5_path
+    # print 'Block path is', block.hdf5_path
     h5_exporter.close()
-    rhd_importer.close()
+    # rhd_importer.close()
 
 
-def write_playback_stim_to_neo(block, stim_file_name):
+def write_playback_stim_to_nix(block, stim_file_name):
     # Write sounds to a neosound database
     sm = sound_manager.SoundManager(HDF5Store, stim_file_name)
 
@@ -89,17 +89,17 @@ def write_playback_stim_to_neo(block, stim_file_name):
     segment.create_many_to_one_relationship()
 
 
-def read_audio_from_neo(experiment_dir, neo_filename):
+def read_audio_from_nix(experiment_dir, neo_filename):
     h5_filename = os.path.join(experiment_dir, neo_filename)
     h5_exporter = NixIO(h5_filename)
-    block = h5_exporter.read_block("")
+    block = h5_exporter.read_block()
     sound_recording = block.segments[0].analogsignals[1]
     norm_sound = sound_recording / np.max(sound_recording)
     h5_exporter.close()
     return norm_sound
 
 
-def add_vocal_periods_to_neo(experiment_dir, neo_filename,
+def add_vocal_periods_to_nix(experiment_dir, neo_filename,
                              vocal_periods_dict, sampling_rate=25000.0):
     """
     Adds annotated vocal periods to the neo file as an epoch array. Mutates the passed file, with
@@ -119,16 +119,16 @@ def add_vocal_periods_to_neo(experiment_dir, neo_filename,
     exporter = NixIO(full_filename)
     block = exporter.read_block()
     segment = block.segments[0]
-    if segment.epocharrays is None:
-        segment.epocharrays = []
+    if segment.epochs is None:
+        segment.epochs = []
     for k in ['student', 'tutor']:
         intervals = vocal_periods_dict[k]
-        starts = map(lambda x: x[0], intervals)
-        durations = map(lambda p: p[1] - p[0], intervals)
-        labels = [k]*len(starts)
+        starts = np.array(map(lambda x: x[0], intervals))
+        durations = np.array(map(lambda p: p[1] - p[0], intervals))
+        labels = np.array([k]*len(starts))
         epocharr = Epoch(times=starts/sampling_rate*pq.s, durations=durations/sampling_rate*pq.s,
                          labels=labels, name=k+'_birdsong')
-        segment.epocharrays.append(epocharr)
+        segment.epochs.append(epocharr)
     segment.create_many_to_one_relationship()
-    exporter.save(block)
+    exporter.write_block(block)
     exporter.close()

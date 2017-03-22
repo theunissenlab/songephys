@@ -3,19 +3,18 @@ from lasp.signal import lowpass_filter, highpass_filter
 import matplotlib.mlab as mlab
 import numpy as np
 import os
-import scipy.stats
 from sklearn.cluster import KMeans
 
 
-def find_vocal_periods(audio_stream, fs=25000, fuse_duration=0.5, verbose=False):
+def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.5, verbose=False):
     """
     Given an audio stream, attempts to detect all segments of noise that might be bird calls of
     some sort.
 
     Parameters
     ----------
-    audio_stream: np.array of floats.
-        The audio stream.
+    audio_stream_in: np.array of floats.
+        The audio stream. Will be immediately squeezed.
     fs: float.
         The sampling rate of audio_stream, in Hz.
     fuse_duration: float.
@@ -29,6 +28,7 @@ def find_vocal_periods(audio_stream, fs=25000, fuse_duration=0.5, verbose=False)
     np.array of (int, int).
         Each tuple represents a (low_index:high_index) interval in the original array.
     """
+    audio_stream = np.squeeze(audio_stream_in)
     # First we try to find the amplitude envelope. We only care about vocal sounds,
     # so we high-pass filter higher than normal.
     streams_filtered_env = np.zeros(np.shape(audio_stream))
@@ -95,8 +95,7 @@ def find_vocal_periods(audio_stream, fs=25000, fuse_duration=0.5, verbose=False)
         len(sound_onset) == len(sound_offset)
     except:
         print("Number of vocal onsets and offsets not equal!")
-    
-    
+
     vocal_periods = np.array(zip(sound_onset, sound_offset))
     lengths = np.apply_along_axis(lambda p: p[1] - p[0], 1, vocal_periods)
     vocal_periods = vocal_periods[lengths > fs/10]
@@ -140,7 +139,7 @@ def extract_birdsong_features(signal, points, fs=25000, minfreq=1000, maxfreq=80
     minfreq = 1000
     maxfreq = 8000
 
-    #all_lengths = scipy.stats.zscore(np.expand_dims(map(lambda x: x[1] - x[0], points), 1))
+    # all_lengths = scipy.stats.zscore(np.expand_dims(map(lambda x: x[1] - x[0], points), 1))
     all_lengths = np.expand_dims(map(lambda x: x[1] - x[0], points), 1)
     for pt in points:
         l, h = pt
@@ -160,14 +159,15 @@ def extract_birdsong_features(signal, points, fs=25000, minfreq=1000, maxfreq=80
     return features
 
 
-def classify_birdsong(signal, points, fs=25000.0, model='models/songvnoise_classifier_noz_big_nopca.pkl'):
+def classify_birdsong(signal_in, points, fs=25000.0,
+                      model='models/songvnoise_classifier_noz_big_nopca.pkl'):
     """
     Given a signal and a set of points, classifies which of the points are birdsong (versus other
     sorts of noise, such as calls, tets, and flapping/hopping).
 
     Parameters
     ----------
-    signal: np.array of float.
+    signal_in: np.array of float.
         A time series representing an audio recoding.
     points: np.array of (int, int).
         Each tuple represents a (low_index:high_index) interval in the original array.
@@ -182,9 +182,10 @@ def classify_birdsong(signal, points, fs=25000.0, model='models/songvnoise_class
     An array of labels, specified by the model. The default model labels as either 'birdsong' or
     'notbirdsong'.
     """
+    signal = np.squeeze(signal_in)
     svm_file = os.path.join(os.path.dirname(__file__), model)
     svm = pickle.load(open(svm_file, "rb"))
-    
+
     features = extract_birdsong_features(signal, points, fs=fs)
     return svm.predict(features)
 
@@ -210,8 +211,8 @@ def separate_song_sources(audio_streams, points, fs=25000, tutor_mic=0):
     """
     print "...Filtering Arrays to get Amp Envelope"
     streams_filtered_env = np.zeros(np.shape(audio_streams))
-    streams_filtered_env[:, 0] = highpass_filter(audio_streams[:, 0], fs, 2000)
-    streams_filtered_env[:, 1] = highpass_filter(audio_streams[:, 1], fs, 2000)
+    streams_filtered_env[:, 0] = highpass_filter(np.squeeze(audio_streams[:, 0]), fs, 2000)
+    streams_filtered_env[:, 1] = highpass_filter(np.squeeze(audio_streams[:, 1]), fs, 2000)
     streams_filtered_env[:, 0] = np.abs(lowpass_filter(streams_filtered_env[:, 0], fs, 5000))
     streams_filtered_env[:, 1] = np.abs(lowpass_filter(streams_filtered_env[:, 1], fs, 5000))
     streams_filtered_env[:, 0] = lowpass_filter(streams_filtered_env[:, 0], fs, 100)
