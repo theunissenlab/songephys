@@ -223,10 +223,10 @@ def separate_song_sources(audio_streams, points, fs=25000, tutor_mic=0):
         return streams_filtered_env[low:high, :]
     diff = lambda c: (np.mean(get_amp_envelope(c), axis=0)[0]
                       - np.mean(get_amp_envelope(c), axis=0)[1])
-    print np.shape(points)
+    #print np.shape(points)
     pt_diffs = np.expand_dims(map(diff, points), axis=1)
-    print pt_diffs
-    print np.shape(pt_diffs)
+    #print pt_diffs
+    #print np.shape(pt_diffs)
     kmeans = KMeans(n_clusters=2, random_state=0).fit(pt_diffs)
     if tutor_mic == 0:
         student_label = np.argmin(kmeans.cluster_centers_)
