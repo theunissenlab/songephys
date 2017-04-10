@@ -15,7 +15,7 @@ stimulus_file = os.path.join(experiment_dir, "pyoperant", "")
 stimulus_dir = os.path.join(experiment_dir, "stimuli", "")
 
 
-def rhd_to_neo(experiment_dir, rhd_file, stimulus_file=None):
+def rhd_to_nix(experiment_dir, rhd_file, stimulus_file=None):
     experiment_file = os.path.join(experiment_dir, "RHD", rhd_file)
     rhd_importer = RHDIO(experiment_file)
     block = rhd_importer.read_block()
@@ -89,8 +89,8 @@ def write_playback_stim_to_nix(block, stim_file_name):
     segment.create_many_to_one_relationship()
 
 
-def read_audio_from_nix(experiment_dir, neo_filename):
-    h5_filename = os.path.join(experiment_dir, neo_filename)
+def read_audio_from_nix(experiment_dir, nix_filename):
+    h5_filename = os.path.join(experiment_dir, nix_filename)
     h5_exporter = NixIO(h5_filename)
     block = h5_exporter.read_block()
     sound_recording = block.segments[0].analogsignals[1]
@@ -99,23 +99,23 @@ def read_audio_from_nix(experiment_dir, neo_filename):
     return norm_sound
 
 
-def add_vocal_periods_to_nix(experiment_dir, neo_filename,
+def add_vocal_periods_to_nix(experiment_dir, nix_filename,
                              vocal_periods_dict, sampling_rate=25000.0):
     """
-    Adds annotated vocal periods to the neo file as an epoch array. Mutates the passed file, with
+    Adds annotated vocal periods to the nix file as an epoch array. Mutates the passed file, with
     no return value.
 
     Parameters
     ----------
     experiment_dir: string.
         Root of the directory where all of the files for a particular bird are stored.
-    neo_filename: string.
+    nix_filename: string.
         The actual filename of the particular experiment session. Should be of the form:
         <bird id><timestamp>_neo.h5
     vocal_periods_dict: dictionary.
         A dictionary with keys "student" and "tutor" containing lists of intervals [(int, int)].
     """
-    full_filename = os.path.join(experiment_dir, neo_filename)
+    full_filename = os.path.join(experiment_dir, nix_filename)
     exporter = NixIO(full_filename)
     block = exporter.read_block()
     segment = block.segments[0]
