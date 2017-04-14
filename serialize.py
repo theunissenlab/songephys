@@ -16,13 +16,29 @@ stimulus_dir = os.path.join(experiment_dir, "stimuli", "")
 
 
 def rhd_to_nix(experiment_dir, rhd_file, stimulus_file=None):
+       
+    # Check to see if RHD file exists.
     experiment_file = os.path.join(experiment_dir, "RHD", rhd_file)
+    if not(os.path.isfile(experiment_file)):
+        print 'Error:', experiment_file, 'does not exist'
+        return 1
+    
+    # Check to see if NIX file exists.
+    experiment_file = os.path.join(experiment_dir, "RHD", rhd_file)
+    h5_filename = os.path.join(experiment_dir, "NIX",
+                               os.path.basename(experiment_file).replace(".rhd", ".nix"))
+    if os.path.isfile(h5_filename):
+        print 'Error:', h5_filename, 'exists'
+        return 1
+    
+    # Read RHD file.   
     rhd_importer = RHDIO(experiment_file)
     block = rhd_importer.read_block()
-    stimulus_h5_filename = os.path.join(experiment_dir,
-                                        os.path.basename(
-                                            experiment_file).replace(".rhd", "_stimuli.h5"))
-
+    
+    
+    # stimulus_h5_filename = os.path.join(experiment_dir,
+    #                                    os.path.basename(
+    #                                        experiment_file).replace(".rhd", "_stimuli.h5"))
     # if stimulus_file is not None:
     #     csv_reader = stim.StimCSVReader()
     #
@@ -31,13 +47,14 @@ def rhd_to_nix(experiment_dir, rhd_file, stimulus_file=None):
     #     csv_reader.write(stimulus_h5_filename)
     #
     #     write_playback_stim_to_nix(block, stimulus_h5_filename)
-    h5_filename = os.path.join(experiment_dir,
-                               os.path.basename(experiment_file).replace(".rhd", ".nix"))
+    
+    # Write NIX File  
     h5_exporter = NixIO(h5_filename)
     h5_exporter.write_block(block)
     # print 'Block path is', block.hdf5_path
     h5_exporter.close()
-    # rhd_importer.close()
+    return 0
+
 
 
 def write_playback_stim_to_nix(block, stim_file_name):
@@ -90,7 +107,12 @@ def write_playback_stim_to_nix(block, stim_file_name):
 
 
 def read_audio_from_nix(experiment_dir, nix_filename):
-    h5_filename = os.path.join(experiment_dir, nix_filename)
+    h5_filename = os.path.join(experiment_dir, 'NIX', nix_filename)
+    
+    if not(os.path.isfile(h5_filename)):
+        print 'Error:', nix_filename, 'is missing'
+        return None
+    
     h5_exporter = NixIO(h5_filename)
     block = h5_exporter.read_block()
     sound_recording = block.segments[0].analogsignals[1]
@@ -115,7 +137,12 @@ def add_vocal_periods_to_nix(experiment_dir, nix_filename,
     vocal_periods_dict: dictionary.
         A dictionary with keys "student" and "tutor" containing lists of intervals [(int, int)].
     """
-    full_filename = os.path.join(experiment_dir, nix_filename)
+    full_filename = os.path.join(experiment_dir, 'NIX', nix_filename)
+    
+    if not(os.path.isfile(full_filename)):
+        print 'Error:', full_filename, 'is missing'
+        return 1
+    
     exporter = NixIO(full_filename)
     block = exporter.read_block()
     segment = block.segments[0]
@@ -132,3 +159,4 @@ def add_vocal_periods_to_nix(experiment_dir, nix_filename,
     segment.create_many_to_one_relationship()
     exporter.write_block(block)
     exporter.close()
+    return 0
