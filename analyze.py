@@ -32,6 +32,8 @@ class SongSamples:
         streams_filtered_env[:, 1] = lowpass_filter(streams_filtered_env[:, 1], fs, 100)
 
         for i in xrange(len(seg.epochs)):
+            
+            ##  THIS CODE LOOKS WRONG?  ends shoudl be times+durations and it should be *fs?
             starts = map(int, seg.epochs[i].times / fs)
             ends = map(int, seg.epochs[i].durations / fs)
             periods = zip(starts, ends)

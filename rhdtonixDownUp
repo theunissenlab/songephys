@@ -1,0 +1,81 @@
+#! /bin/bash
+# Script to download rhd file for the theunissen gdrive, nix it and upload it again
+# Takes two arguments: birdname (i.e bird directory name) and rhd name.
+
+# Change the following two lines to your local paths
+cd '/Users/frederictheunissen/Documents/Data/Chronic V2'
+export PATH=/Users/frederictheunissen/Documents/Code/songephys:$PATH
+
+# Make the bird folder on local computer if needed
+if [ ! -e $1 ]
+then
+	echo "Making Folder $1"
+	mkdir $1
+fi
+
+# Move to the bird folder on local computer
+cd $1
+
+# Make the RHD and NIX folders on local computer if needed
+if [ ! -e RHD ]
+then
+        echo "Making Folder RHD"
+	mkdir RHD
+fi
+if [ ! -e NIX ]
+then
+	echo "Making Folder NIX"
+	mkdir NIX
+fi
+
+# Move to destination folder for the rhd file  on local computer
+cd RHD
+
+# Now let's talk to the google drive
+# First get the ID for the 'Intan Ephys Data' foler.
+parentID=$(gdrive list --query "name = 'Intan Ephys Data'" | awk '/dir/ {print $1}')
+
+# Now get the ID for Bird folder
+gdriveQuery="name = '$1' and '$parentID' in parents and trashed = false" 
+awkProg="/$1/ {print \$1}"
+birdID=$(gdrive list --query "$gdriveQuery" | awk "$awkProg")
+
+# Now get the ID for RHD  folders
+gdriveQuery="name = 'RHD' and '$birdID' in parents and trashed = false" 
+awkProg="/dir/ {print \$1}"
+rhdID=$(gdrive list --query "$gdriveQuery" | awk "$awkProg")
+# Now get the id of the RHD file
+awkProg="/$2/ {print \$1}"
+gdriveQuery="name = '$2.rhd' and '$rhdID' in parents and trashed = false"
+fileID=$(gdrive list --query "$gdriveQuery" | awk "$awkProg")
+
+# Next 4 lines are debugging commands.
+echo "parentID=$parentID"
+echo "birdID=$birdID"
+echo "rhdID=$rhdID"
+echo "fileID=$fileID"
+
+echo "Getting $2.rhd using id: $fileID"
+gdrive download -f $fileID
+pwd
+
+# Making rhd file into nix file
+python -m rhdtonix.py $2.rhd ../NIX/$2.nix
+
+# Make a NIX folder
+gdriveQuery="name = 'NIX' and '$birdID' in parents and trashed = false" 
+awkProg="/dir/ {print \$1}"
+nixID=$(gdrive list --query "$gdriveQuery" | awk "$awkProg")
+
+if [ -z "$nixID" ]
+then
+	gdrive mkdir -p $birdID NIX
+fi
+
+nixID=$(gdrive list --query "$gdriveQuery" | awk "$awkProg")
+echo "nixID=$nixID"
+
+# Upload to gdrive
+cd ../NIX
+gdrive upload -p $nixID $2.nix
+
