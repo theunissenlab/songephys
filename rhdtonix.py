@@ -1,3 +1,6 @@
+# Rhd to Nix scritp to be called on line with two arguments the name or path or 
+# the input rhd file and the name or path of the output nix file.
+
 import os
 #import quantities as pq
 #from zeebeez.tdt2neo import stim
