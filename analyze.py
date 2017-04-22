@@ -32,9 +32,9 @@ class SongSamples:
         streams_filtered_env[:, 1] = lowpass_filter(streams_filtered_env[:, 1], fs, 100)
 
         for i in xrange(len(seg.epochs)):
-            starts = map(int, seg.epochs[i].times / fs)
-            ends = map(int, seg.epochs[i].durations / fs)
-            periods = zip(starts, ends)
+            starts = map(int, seg.epochs[i].times * fs)
+            ends = map(int, seg.epochs[i].durations * fs)
+            periods = map(lambda se: (se[0], se[0]+se[1]), zip(starts, ends))
 
             for l, h in periods:
                 lb = max(l - self.buffer, 0)
