@@ -20,7 +20,7 @@ class SongSamples:
         self.amplitude_windows = []
         self.ephys_windows = []
         self.labels = []
-        self.buffer = 25000
+        self.buffer = 5000
 
     def read_from_nix(self, fname):
         exporter = NixIO(fname)
@@ -28,7 +28,6 @@ class SongSamples:
         block = exporter.read_block()
         seg = block.segments[0]
         fs = seg.analogsignals[1].sampling_rate
-
         audio_streams = seg.analogsignals[1]
         streams_filtered_env = np.zeros(np.shape(audio_streams))
         streams_filtered_env[:, 0] = highpass_filter(np.squeeze(audio_streams[:, 0]), fs, 2000)
@@ -42,12 +41,20 @@ class SongSamples:
 
         for i in xrange(len(seg.epochs)):
             starts = map(int, seg.epochs[i].times * fs)
+<<<<<<< Updated upstream
             ends = map(int, seg.epochs[i].durations * fs)
             periods = map(lambda se: (se[0], se[0]+se[1]), zip(starts, ends))
+=======
+            ends = starts + map(int, seg.epochs[i].durations * fs)
+            periods = zip(starts, ends)
+>>>>>>> Stashed changes
 
             for l, h in periods:
                 lb = max(l - self.buffer, 0)
                 hb = min(h + self.buffer, np.shape(streams_filtered_env)[0])
+#                print "audio indices:"
+#                print np.shape(streams_filtered_env)[0]
+#                print "l: " + str(l) + ", h: " + str(h) + ", lb: " + str(lb) + ", hb: " + str(hb)
                 self.amplitude_windows.append(np.copy(streams_filtered_env[lb:hb, :]))
                 self.audio_windows.append(np.copy(audio_streams[lb:hb, :]))
                 self.labels.append(seg.epochs[i].name)
@@ -59,3 +66,5 @@ class SongSamples:
 
     def save(self, fname):
         pickle.dump(self, open(fname, "wb"))
+        
+        

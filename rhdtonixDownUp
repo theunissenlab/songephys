@@ -3,8 +3,8 @@
 # Takes two arguments: birdname (i.e bird directory name) and rhd name.
 
 # Change the following two lines to your local paths
-cd '/Users/frederictheunissen/Documents/Data/Chronic V2'
-export PATH=/Users/frederictheunissen/Documents/Code/songephys:$PATH
+cd '/auto/tdrive/billewood/intan data'
+export PATH=/auto/fhome/billewood/Code/songephys:$PATH
 
 # Make the bird folder on local computer if needed
 if [ ! -e $1 ]
