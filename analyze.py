@@ -6,6 +6,15 @@ import numpy as np
 
 
 class SongSamples:
+    """
+    SongSamples is a class used as an in-memory container for birdsong data processed
+    by the analysis pipeline in this package. It is used because the RHD/NIX formats
+    use an enormous amount of memory, and aren't suitable for quick analysis based on
+    processed features. To use, simply instantiate, and then call read_from_nix()
+    on the nix file of your choice. You can then access the various attributes
+    as needed.
+    All data will be buffered by a number of points self.buffer, so be aware of that.
+    """
     def __init__(self):
         self.audio_windows = []
         self.amplitude_windows = []
@@ -32,11 +41,9 @@ class SongSamples:
         streams_filtered_env[:, 1] = lowpass_filter(streams_filtered_env[:, 1], fs, 100)
 
         for i in xrange(len(seg.epochs)):
-            
-            ##  THIS CODE LOOKS WRONG?  ends shoudl be times+durations and it should be *fs?
-            starts = map(int, seg.epochs[i].times / fs)
-            ends = map(int, seg.epochs[i].durations / fs)
-            periods = zip(starts, ends)
+            starts = map(int, seg.epochs[i].times * fs)
+            ends = map(int, seg.epochs[i].durations * fs)
+            periods = map(lambda se: (se[0], se[0]+se[1]), zip(starts, ends))
 
             for l, h in periods:
                 lb = max(l - self.buffer, 0)
