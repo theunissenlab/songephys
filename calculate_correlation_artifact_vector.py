@@ -3,12 +3,16 @@
 Created on Mon May  8 11:20:29 2017
 
 @author: billewood
-Should be done on all Intan generated pickle files, I believe.
-Creates a vector which is the squared correlation coefficient averaged for all pairs of electrodes over time. Default corr_window is 250 data points, 
-which is 10 ms at our 25kHz sampling rate. 
 Also highpass and lowpass filters the neural data and saves that if it wasn't already done.
-Calculates teh corr coeff over the highpassed and lowpassed data (seperately), and calculates it using both a local variance and a global variance,
+Should be done on all Intan generated pickle files, I believe.
+
+Calculates teh corr coeff over the highpassed and lowpassed data (separately), and calculates it using both a local variance and a global variance,
 meaning it produces 4 new analogsignal arrays, in addition to the highpassed and lowpassed signals, for potentially 6 new analogsignal arrays.
+
+So, in summary, creates 4 vectors which are the squared correlation coefficient averaged for all pairs of electrodes over time. Default corr_window is 250 data points, 
+which is 10 ms at our 25kHz sampling rate- 2 of the vectors are calculated on LFP data so the sampling window on those is 25 data points.
+
+Also deletes the unfiltered amplifier analogsignals to save space
 """
 import os
 import numpy as np
