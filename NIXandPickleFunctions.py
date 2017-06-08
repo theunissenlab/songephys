@@ -4,11 +4,66 @@ Created on Wed May 17 14:17:07 2017
 
 @author: billewood
 """
-from lasp.sound import spectrogram, plot_spectrogram
+from soundsig.sound import spectrogram, plot_spectrogram
 import numpy as np
-from lasp.signal import lowpass_filter, highpass_filter
+from soundsig.signal import lowpass_filter
 import matplotlib.gridspec as gridspec
 import matplotlib.pyplot as plt
+import pandas as pandas
+from soundsig.sound import BioSound 
+
+
+def getBioSoundProperties(soundIn, segName, plotme = False):
+    ## For processing data with BioSound and saving relevant info for sorting
+    ## soundIn is an analogsignal from a Nix file, segName is the segment Name
+    ## THIS IS STILL under construction
+
+    print 'Processing sound %s\n' % (segName)
+    maxAmp = np.asarray(np.abs(soundIn).max())      
+    myBioSound = BioSound(soundWave=np.squeeze(np.asarray(soundIn).astype(float))/maxAmp, fs=float(soundIn.sampling_rate), calltype = "")
+                 
+    # Create BioSound Object and store some values
+    myBioSound.spectroCalc(spec_sample_rate=100)
+    myBioSound.rms = myBioSound.sound.std()     # The rms
+       
+    # Calculate amplitude enveloppe
+    myBioSound.ampenv()
+       
+    # Calculate the power spectrum
+    myBioSound.spectrum(f_high=10000)
+
+    # Calculate fundamental and related values
+    myBioSound.fundest(maxFund = 1500, minFund = 100, lowFc = 50, highFc = 6000, minSaliency = 0.5)
+
+    meanF1 = np.mean(myBioSound.F1[~np.isnan(myBioSound.F1)])
+    meanF2 = np.mean(myBioSound.F2[~np.isnan(myBioSound.F2)])
+    meanF3 = np.mean(myBioSound.F3[~np.isnan(myBioSound.F3)])
+
+    if myBioSound.fund is not None:
+        fund = np.float(myBioSound.fund)
+        cvfund = np.float(myBioSound.cvfund)
+    else:
+        fund = None 
+        cvfund = None   
+    
+    vocSelData = []
+
+    vocSelData.append({"fund": fund, 
+                       "cvfund": cvfund, "F1": meanF1, "F2": meanF2, "F3":meanF3,
+                       "sal": np.float(myBioSound.sal), "rms": np.float(myBioSound.rms), 
+                       "meanS": np.float(myBioSound.meanspect), "stdS": np.float(myBioSound.stdspect), 
+                       "q1": np.float(myBioSound.q1), "q2": np.float(myBioSound.q2), "q3": np.float(myBioSound.q3),
+                       "timestd": np.float(myBioSound.stdtime)})
+
+    if plotme:  
+        myBioSound.plot()  
+        myBioSound.play()
+        waitstr = raw_input("Press Enter to continue...")
+        plt.close('all')
+
+    # Make a data frame with all the data and return it                    
+    vocSelTable = pandas.DataFrame(vocSelData)
+    return vocSelTable
 
 
 def plotSoundSeg(fig, seg, corr_plot=None, ephys_plot = None):
@@ -201,12 +256,12 @@ def filteredPlot(fig, seg, corr_plot=None, ephys_plot = [0]):
         plt.plot(tvals-tvals[0], filt_amp[:,iplt])
         plt.xlim(0.0, to[-1])
 
-        plt.xlabel('Time (s)')
+    plt.xlabel('Time (s)')
     plt.show()
     return sound, fs
     
     
-def windowFilteredPlot(fig, seg, corr_plot=None, ephys_plot = [0]):
+def windowFilteredPlot(fig, seg, corr_plot=None, ephys_plot = [0], filtered_sigs = [7,8]):
     
     # fig pointer to figure
     # seg is the segment
@@ -233,6 +288,7 @@ def windowFilteredPlot(fig, seg, corr_plot=None, ephys_plot = [0]):
         corr_loc_lfp = seg.analogsignals[6]        
 #        artifact = seg.analogsignals[corr_plot]
         a_tvals = corr_glob.times
+        a_lfp_tvals = corr_glob_lfp.times
     
     # Calculate the rms of each mic
     rms0 = np.std(soundSnip[:, 0])
@@ -259,13 +315,13 @@ def windowFilteredPlot(fig, seg, corr_plot=None, ephys_plot = [0]):
     if corr_plot == None: 
         ax.plot(tvals-tvals[0], sound_env/sound_env.max(), color="red", linewidth=2)
     else:# plot the artifacts
-        ax.plot(a_tvals-tvals[0], np.asarray(corr_loc), color="k", linewidth=2)
-        ax.plot(a_tvals-tvals[0], np.asarray(corr_loc_lfp), color="c", linewidth=2)
+        ax.plot(a_tvals-a_tvals[0], np.asarray(corr_loc), color="k", linewidth=2)
+        ax.plot(a_lfp_tvals-a_lfp_tvals[0], np.asarray(corr_loc_lfp), color="c", linewidth=2)
         ax = fig.add_subplot(gs[plot_y:plot_y + 10,0])
         plot_y += 10
         ax.plot(tvals-tvals[0], sound/sound.max())
-        ax.plot(a_tvals-tvals[0], np.asarray(corr_glob), color="k", linewidth=2)
-        ax.plot(a_tvals-tvals[0], np.asarray(corr_glob_lfp), color="c", linewidth=2)
+        ax.plot(a_tvals-a_tvals[0], np.asarray(corr_glob), color="k", linewidth=2)
+        ax.plot(a_lfp_tvals-a_lfp_tvals[0], np.asarray(corr_glob_lfp), color="c", linewidth=2)
 
     plt.title('%s %d' % (seg.name, seg.index))
     plt.xlim(0.0, to[-1])
@@ -277,20 +333,25 @@ def windowFilteredPlot(fig, seg, corr_plot=None, ephys_plot = [0]):
     plt.tick_params(labelbottom='off')
     plt.xlim(0.0, to[-1])
     y_size = (100 - plot_y) / (len(ephys_plot) * 2)
+    sigs = np.empty(len(filtered_sigs), len(seg.analogsignals[filtered_sigs[0]]))
+    for sig in filtered_sigs:
+        sigs[:,sig] = seg.analogsignals[filtered_sigs[sig]] #TODO need to account for electrodes
     amp = seg.analogsignals[7]
     filt_amp = seg.analogsignals[8]
     fs = amp.sampling_rate
     tvals = amp.times
     for iplt in ephys_plot:
-        ax = fig.add_subplot(gs[plot_y:plot_y+y_size,0])
-        plot_y = plot_y + y_size
-        plt.plot(tvals-tvals[0], amp[:,iplt])
-        plt.xlim(0.0, to[-1])
-        ax = fig.add_subplot(gs[plot_y:plot_y+y_size,0])
-        plot_y = plot_y + y_size
-        plt.plot(tvals-tvals[0], filt_amp[:,iplt])
-        plt.xlim(0.0, to[-1])
+        for sig in filtered_sigs:
+            ax = fig.add_subplot(gs[plot_y:plot_y+y_size,0])
+            plot_y = plot_y + y_size
+            plt.plot(tvals-tvals[0], sigs[:,iplt])
+            plt.xlim(0.0, to[-1])
+            ax = fig.add_subplot(gs[plot_y:plot_y+y_size,0])
+            plot_y = plot_y + y_size
+            plt.plot(tvals-tvals[0], filt_amp[:,iplt])
+            plt.xlim(0.0, to[-1])
 
-        plt.xlabel('Time (s)')
+    plt.xlabel('Time (s)')
     plt.show()
+    return sound, fs
     return sound, fs
