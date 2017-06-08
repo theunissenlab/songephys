@@ -32,9 +32,9 @@ from NIXandPickleFunctions import plotSoundSeg
 high_thresh = 300.0
 low_thresh = 200.0
 corr_window = 250
-corr_lfp_window = 25
+corr_lfp_window = 25 #honestly it's not clear doing an lfp correlation is really going to be helpful, although it also is easy.
 experiment_dir = "/auto/tdrive/billewood/intan data/LbY6074"
-pkl_file_in = "LbY6074__161215_104204_seg_c1.pkl"               
+pkl_file_in = "LbY6074__161215_132633_seg_c1.pkl"               
 # Open the Inupt Pkl file 
 pklFileIn = open(os.path.join(experiment_dir, 'NIX', pkl_file_in), 'rb')
 # Read the data
@@ -56,10 +56,11 @@ print '\t Segments appear to have ', len(seg.analogsignals), ' analog signals'
 print '\t Creating high passed (%dHz) and low passed (%dHZ) analog signals' %(high_thresh, low_thresh)
 # Highpass filter and store as a new analogsignal array on every segment 
 # Lowpass filter and store as a new " " "                          
-for seg in block.segments:
+for i,seg in enumerate(block.segments):
     channel = seg.analogsignals[0]
     high_channel = list()
     low_channel = list()    
+    print '\t Filtering segment %d out of %d segments' %(i, len(block.segments))
     for elec in range(seg.analogsignals[0].shape[1]): # number of electrodes
         h_filtered = np.float32(highpass_filter(np.asarray(channel)[:,elec], np.round(float(channel.sampling_rate)), high_thresh))
         high_channel.append(h_filtered)
