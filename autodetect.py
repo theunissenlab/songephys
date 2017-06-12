@@ -1,5 +1,5 @@
 import cPickle as pickle
-from sounsig.signal import lowpass_filter, highpass_filter
+from soundsig.signal import lowpass_filter, highpass_filter
 import matplotlib.mlab as mlab
 import numpy as np
 import os
