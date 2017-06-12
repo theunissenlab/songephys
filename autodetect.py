@@ -6,7 +6,7 @@ import os
 from sklearn.cluster import KMeans
 
 
-def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.5, verbose=False):
+def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.1, verbose=False):
     """
     Given an audio stream, attempts to detect all segments of noise that might be bird calls of
     some sort.
@@ -33,8 +33,8 @@ def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.5, verbose=Fal
     # so we high-pass filter higher than normal.
     streams_filtered_env = np.zeros(np.shape(audio_stream))
     streams_filtered_env = highpass_filter(audio_stream, fs, 2000)
-    streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env, fs, 5000))
-    streams_filtered_env = lowpass_filter(streams_filtered_env, fs, 100)
+    streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env, fs, 5000)) # Rectify and lowpass filter
+    streams_filtered_env = lowpass_filter(streams_filtered_env, fs, 100) # We essentially have an amplitude trace now
 
     # Simply threshold against the mean of the signal. This works surprisingly well.
     # If you think about it, all of the noises that get made during a session drag
