@@ -167,6 +167,7 @@ def high_low_filter(seg, debug = 0):
                                sampling_rate=lowSR,
                                file_origin=sig.file_origin,
                                copy=False)
+            lowSignalNeo.segment = seg
             
             highSignalNeo = AnalogSignal(highSignal,
                                name=sig.name+'HP',
@@ -175,6 +176,7 @@ def high_low_filter(seg, debug = 0):
                                sampling_rate=sr,
                                file_origin=sig.file_origin,
                                copy=False)
+            highSignalNeo.segment = seg
             
             highCleanSignalNeo = AnalogSignal(highSignal_clean,
                                name=sig.name+'HPC',
@@ -183,6 +185,7 @@ def high_low_filter(seg, debug = 0):
                                sampling_rate=sr,
                                file_origin=sig.file_origin,
                                copy=False)
+            highCleanSignalNeo.segment = seg
             
             # Add signals to segment
             seg.analogsignals.append(lowSignalNeo)
@@ -196,11 +199,11 @@ def high_low_filter(seg, debug = 0):
                     ci.analogsignals.append(lowSignalNeo)
                     ci.analogsignals.append(highSignalNeo)
                     ci.analogsignals.append(highCleanSignalNeo)
-                    ci.create_many_to_one_relationship()
+                    ci.create_relationship()
                     
             # Delete sig from segment
             seg.analogsignals.remove(sig)
-            seg.create_many_to_one_relationship()
+            seg.create_relationship()
     return
 
 # Fixing the channels from one for the array to one per electrode - to be done BERFORE adding units
@@ -230,10 +233,12 @@ def fix_chIndex(block):
         chx = ChannelIndex(index = np.array([ie]), name = 'Amp Elec %d' % ie, channel_names=np.array(['ch %d'% chIndex.index[ie]]))
         chx.block = block
         chx.analogsignals = chIndex.analogsignals
+        # chx.create_relationship()  # This is commented out because it creates a sig.channel_index?
                 
         block.channel_indexes.append(chx)
                            
     block.channel_indexes.remove(chIndex)
+    block.create_relationship(recursive=False)  # Just do one level so that signals are not linked to channels.
     
 def extract_spikes(block):
     """ Generates Units based on threshold crossing of the analog signals that end with HPC (High Pass Clean). 
@@ -293,6 +298,7 @@ def extract_spikes(block):
                 st = SpikeTrain(spikeTimes, t_start=sig.t_start, t_stop=sig.t_stop, name='seg.name'+'_MU_%d'%ie)
                 st.segment = seg
                 seg.spiketrains.append(st)
+                seg.create_relationship()
 
                 # remember the spike waveforms
                 wf_list = []
@@ -325,7 +331,9 @@ def unit_report(block):
             print unit.name, ':', unit.size['spiketrains'], 'spiketrains'
             totspikes = 0;
             for st in unit.spiketrains:
-                totspikes += st.size
+                if totspikes == 0:
+                    print st.segment    # Debugging...
+                totspikes += st.size                
                 if st.size != 0:
                     wavelen = st.waveforms.shape[1]
             print '\t Total Spikes (in all segments):', totspikes
