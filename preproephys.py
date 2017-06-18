@@ -199,11 +199,11 @@ def high_low_filter(seg, debug = 0):
                     ci.analogsignals.append(lowSignalNeo)
                     ci.analogsignals.append(highSignalNeo)
                     ci.analogsignals.append(highCleanSignalNeo)
-                    ci.create_relationship()
+                    ci.create_relationship(force=True)
                     
             # Delete sig from segment
             seg.analogsignals.remove(sig)
-            seg.create_relationship()
+            seg.create_relationship(force=True)
     return
 
 # Fixing the channels from one for the array to one per electrode - to be done BERFORE adding units
@@ -238,7 +238,7 @@ def fix_chIndex(block):
         block.channel_indexes.append(chx)
                            
     block.channel_indexes.remove(chIndex)
-    block.create_relationship(recursive=False)  # Just do one level so that signals are not linked to channels.
+    block.create_relationship(force=True, append = False, recursive=False)  # Just do one level so that signals are not linked to channels.
     
 def extract_spikes(block):
     """ Generates Units based on threshold crossing of the analog signals that end with HPC (High Pass Clean). 
@@ -295,10 +295,10 @@ def extract_spikes(block):
                 # create a spike train
                 spikeTimes = sig.times[spikeIndex]
                 seg = sig.segment
-                st = SpikeTrain(spikeTimes, t_start=sig.t_start, t_stop=sig.t_stop, name='seg.name'+'_MU_%d'%ie)
+                st = SpikeTrain(spikeTimes, t_start=sig.t_start, t_stop=sig.t_stop, name= seg.name+'_MU_%d'%ie)
                 st.segment = seg
                 seg.spiketrains.append(st)
-                seg.create_relationship()
+                seg.create_relationship(force=True, append=False, recursive=False)
 
                 # remember the spike waveforms
                 wf_list = []
@@ -311,7 +311,12 @@ def extract_spikes(block):
         # We got all the spike trains for an unsorted unit
         u = Unit(name='MU %d'%ie)
         u.spiketrains = st_list
+        u.create_relationship(force=True, append=False, recursive=False)
         chIndex.units.append(u)
+        u.channel_index = chIndex
+        
+        # Doing the links for all the children does not work as it restores the sig-->channel_index link that we don't have
+        # chIndex.create_relationship(force=True, append=False, recursive=False)
         
 def unit_report(block):
     """ Makes a little report and plot of snippets for all the units in the block """
