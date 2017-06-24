@@ -1,10 +1,190 @@
 import cPickle as pickle
 from soundsig.signal import lowpass_filter, highpass_filter
 import matplotlib.mlab as mlab
+import matplotlib.pyplot as plt
 import numpy as np
 import os
 from sklearn.cluster import KMeans
+from soundsig.sound import BioSound 
+import pandas as pandas
+from sklearn.ensemble import RandomForestClassifier
 
+
+def find_syllables(audio_stream_in, amp_thresh = '', fs=25000, fuse_duration=0.1,  syll_dur = 20.0, sil_dur = 5.0, verbose=False):
+ 
+    """
+    For segmenting into syllables.
+    You should pass amp_thresh, which should come from find_vocal_periods
+
+    """
+    audio_stream = np.squeeze(audio_stream_in)
+    # First we try to find the amplitude envelope. We only care about vocal sounds,
+    # so we high-pass filter higher than normal.
+    streams_filtered_env = np.zeros(np.shape(audio_stream))
+    streams_filtered_env = highpass_filter(audio_stream, fs, 2000)
+    streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env, fs, 5000)) # Rectify and lowpass filter
+    env = lowpass_filter(streams_filtered_env, fs, 100)
+
+    if amp_thresh == '':
+        amp_thresh = np.mean(env)
+    # Now iterate through amplitude envelop and look for syllables. It would be more pythonic to do this in a 
+    # linear algebraish way, but I am going to just try to get it to work for now.
+    sound_on = 0 # keep count of how many points had sound
+    sil_on = 0 #  " " silence
+    hold = 0 # hold the value of sound_on in case of short silences
+    syllables = list()
+    for i in range(len(env)):
+        if i < syll_dur + sil_dur: # When we havn't had enough time to gather a syllable yet
+            if env[i] > amp_thresh:  
+                sound_on += 1
+                if sil_on < sil_dur: # if the silence was transient act like it didn't exist
+                    sound_on = sound_on + hold + sil_on # add the transient silence time to the syllable time
+                sil_on = 0
+                hold = 0
+            else:
+                sil_on += 1
+                if sound_on > 0: # previous point had sound
+                    hold = sound_on # prepare to look if the silence is brief
+                    sound_on = 0                
+        else: # the main loop
+            if env[i] > amp_thresh:  
+                sound_on += 1
+                if sil_on < sil_dur: # if the silence was transient act like it didn't exist
+                    sound_on = sound_on + hold + sil_on # add the transient silence time to the syllable time
+                sil_on = 0
+                hold = 0
+            else:
+                sil_on += 1
+                if sound_on > 0: # previous point had sound
+                    hold = sound_on # prepare to look if the silence is brief
+                    sound_on = 0                    
+                elif sil_on == sil_dur: # if it's been silent long enough to trigger a syllable end check if there was a syllable
+                    if hold > syll_dur: # Indicating there was a long enough period of sound to save as a syllable before
+                        syll_end = i - sil_dur
+                        syll_start = syll_end - hold
+                        syllables.append([syll_start,syll_end])
+                        
+    if verbose:
+        plt.figure()
+        plt.plot(env)
+        for i in range(len(syllables)):
+            plt.plot(syllables[i][0], min(env),'*', markersize= 12)
+            plt.plot(syllables[i][1], min(env),'x', markersize= 12)
+#            plt.plot(range(len(env)), np.ones(len(env)) * lower_thresh,'b')
+            plt.plot(range(len(env)), np.ones(len(env)) * amp_thresh,'r')
+            
+    # TODO turn syllables into seconds.
+            
+    return syllables
+
+def getBioSoundProperties(soundIn, syllables = 0, plotme = False):
+    ## Returns biosoudn properties from a chunk of sound.
+
+    #print 'Processing sound'
+    maxAmp = np.asarray(np.abs(soundIn).max())      
+    myBioSound = BioSound(soundWave=np.squeeze(np.asarray(soundIn).astype(float))/maxAmp, fs=float(soundIn.sampling_rate), calltype = "")
+                 
+    # Create BioSound Object and store some values
+    myBioSound.spectroCalc(spec_sample_rate=100)
+    myBioSound.rms = myBioSound.sound.std()     # The rms  
+    # Calculate amplitude enveloppe
+    myBioSound.ampenv()  
+    # Calculate the power spectrum
+    myBioSound.spectrum(f_high=10000)
+    # Calculate fundamental and related values
+    myBioSound.fundest(maxFund = 1500, minFund = 100, lowFc = 50, highFc = 6000, minSaliency = 0.5)
+    meanF1 = np.mean(myBioSound.F1[~np.isnan(myBioSound.F1)])
+    meanF2 = np.mean(myBioSound.F2[~np.isnan(myBioSound.F2)])
+    meanF3 = np.mean(myBioSound.F3[~np.isnan(myBioSound.F3)])
+
+    if myBioSound.fund is not None:
+        fund = np.float(myBioSound.fund)
+        cvfund = np.float(myBioSound.cvfund)
+    else:
+        fund = None 
+        cvfund = None   
+    
+    vocSelData ={"fund": fund, 
+                       "cvfund": cvfund, "F1": meanF1, "F2": meanF2, "F3":meanF3,
+                       "sal": np.float(myBioSound.sal), "rms": np.float(myBioSound.rms), 
+                       "meanS": np.float(myBioSound.meanspect), "stdS": np.float(myBioSound.stdspect), 
+                       "q1": np.float(myBioSound.q1), "q2": np.float(myBioSound.q2), "q3": np.float(myBioSound.q3),
+                       "timestd": np.float(myBioSound.stdtime)}
+    if plotme:  
+        myBioSound.plot()  
+        myBioSound.play()
+        waitstr = raw_input("Press Enter to continue...")
+        plt.close('all')
+    # Make a data frame with all the data and return it                    
+    #vocSelTable = pandas.DataFrame(vocSelData)
+    #return vocSelTable
+    return vocSelData
+    
+def classify_vocalizations_random_forest(signal, points, classifier_dataset = '/auto/tdrive/billewood/intan data/song_sorting/from_FET_Julie/vocSelTable.h5', fs=25000):
+    #This is very slow, probably because I don't properly know how to allocate pandas df's.
+
+    # Import the classifier dataset and format if necessary
+    classifier_df = pandas.read_hdf(classifier_dataset)
+    if classifier_dataset == '/auto/tdrive/billewood/intan data/song_sorting/from_FET_Julie/vocSelTable.h5':
+        features = classifier_df.columns[[2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]]
+        classifier_df['calltype'] = pandas.Series(classifier_df['calltype'], dtype="category") # make calltype categorica
+        
+    classifier_df = make_nans_col_means(classifier_df,features)  
+    new_df_data = list()
+    # make a pandas DataFrame with biousound properties of all syllables/vocalizations
+    for i, pt in enumerate(points):
+        l,h = pt
+        new_df_data.append(getBioSoundProperties(signal[l:h,0]))
+    df = pandas.DataFrame(new_df_data)
+    
+    # check it for NANs
+    df = make_nans_col_means(df, features)  
+    
+    # add the durations as a column
+    durations = np.expand_dims(map(lambda x: x[1] - x[0], points), 1)
+    df['duration'] = durations
+    df['vocal_category'] = pandas.Series('unknown', dtype = "category") 
+    
+    # and mabe sort the columns to look teh same as classifier_df...?
+   # df = df['sort columns here??'] #TODO
+    
+    # Make a vocalization type category column here TODO
+
+    #Shouldn't need to train it every time TODO save the actual trained matrix whatchamacallit    
+    train = classifier_df
+
+    target_names = np.unique(classifier_df['calltype'])
+    y = train['calltype'].cat.codes
+
+    clf = RandomForestClassifier(n_jobs=2)
+    clf.fit(train[features], y)
+    test = df
+    preds = target_names[clf.predict(test[features])]
+    return preds
+#    pandas.crosstab(test['calltype'], preds, rownames=['actual'], colnames=['preds'])
+
+
+
+
+
+def make_nans_col_means(df, features = ""):
+    """
+        Goes through a pandas dataframe and replaces NANs with column averages.
+    """    
+    if features.all == "":
+        features = df.columns
+    nans = list()
+    for i in range(len(df)):
+        for feature in features:
+            if np.isnan(df[feature][i]):
+                df.loc[i,(feature)] = df[feature].mean()
+                nans.append([feature,i])
+    nan_ind = np.unique([number for name,number in nans])
+    nan_feats = np.unique([feature for feature, number in nans])
+    if len(nan_ind) > 0:
+        print "Warning, %d entries were replaced by column averages" %len(nan_ind)
+        print "Features containing NaNs are: ", nan_feats
+    return df
 
 def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.1, verbose=False):
     """
@@ -99,7 +279,8 @@ def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.1, verbose=Fal
     vocal_periods = np.array(zip(sound_onset, sound_offset))
     lengths = np.apply_along_axis(lambda p: p[1] - p[0], 1, vocal_periods)
     vocal_periods = vocal_periods[lengths > fs/10]
-    return vocal_periods
+    return vocal_periods, amp_thresh
+    
 
 
 def extract_birdsong_features(signal, points, fs=25000, minfreq=1000, maxfreq=8000,
