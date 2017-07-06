@@ -8,6 +8,7 @@ from sklearn.cluster import KMeans
 from soundsig.sound import BioSound 
 import pandas as pandas
 from sklearn.ensemble import RandomForestClassifier
+from scipy.stats import zscore
 
 
 def find_syllables(audio_stream_in, amp_thresh = '', fs=25000, fuse_duration=0.1,  syll_dur = 20.0, sil_dur = 5.0, verbose=False):
@@ -77,7 +78,7 @@ def find_syllables(audio_stream_in, amp_thresh = '', fs=25000, fuse_duration=0.1
             
     return syllables
 
-def getBioSoundProperties(soundIn, syllables = 0, plotme = False):
+def getBioSoundProperties(soundIn, plotme = False):
     ## Returns biosoudn properties from a chunk of sound.
 
     #print 'Processing sound'
@@ -96,6 +97,8 @@ def getBioSoundProperties(soundIn, syllables = 0, plotme = False):
     meanF1 = np.mean(myBioSound.F1[~np.isnan(myBioSound.F1)])
     meanF2 = np.mean(myBioSound.F2[~np.isnan(myBioSound.F2)])
     meanF3 = np.mean(myBioSound.F3[~np.isnan(myBioSound.F3)])
+    # kurtosis
+
 
     if myBioSound.fund is not None:
         fund = np.float(myBioSound.fund)
@@ -109,7 +112,9 @@ def getBioSoundProperties(soundIn, syllables = 0, plotme = False):
                        "sal": np.float(myBioSound.sal), "rms": np.float(myBioSound.rms), 
                        "meanS": np.float(myBioSound.meanspect), "stdS": np.float(myBioSound.stdspect), 
                        "q1": np.float(myBioSound.q1), "q2": np.float(myBioSound.q2), "q3": np.float(myBioSound.q3),
-                       "timestd": np.float(myBioSound.stdtime)}
+                       "timestd": np.float(myBioSound.stdtime), "skewspect":np.float(myBioSound.skewspect),
+                       "kurtosisspect": np.float(myBioSound.kurtosisspect), "entropyspect": np.float(myBioSound.entropyspect)}
+                          
     if plotme:  
         myBioSound.plot()  
         myBioSound.play()
@@ -118,72 +123,142 @@ def getBioSoundProperties(soundIn, syllables = 0, plotme = False):
     # Make a data frame with all the data and return it                    
     #vocSelTable = pandas.DataFrame(vocSelData)
     #return vocSelTable
-    return vocSelData
+    fpsd = myBioSound.fpsd
+    psd = myBioSound.psd
+    freqvar = np.var(myBioSound.spectro, axis = 1) # variance of frequencies in the spectrogram
+    f_freqvar = myBioSound.fo
+    spectro = myBioSound.spectro
+    ampenv = myBioSound.amp
+    return vocSelData, fpsd, psd, freqvar, f_freqvar, spectro, ampenv
     
-def classify_vocalizations_random_forest(signal, points, classifier_dataset = '/auto/tdrive/billewood/intan data/song_sorting/from_FET_Julie/vocSelTable.h5', fs=25000):
-    #This is very slow, probably because I don't properly know how to allocate pandas df's.
-
-    # Import the classifier dataset and format if necessary
+def classify_vocalizations_random_forest(data_df, classifier_dataset = '/auto/tdrive/billewood/intan data/song_sorting/from_FET_Julie/vocSelTable.h5', fs=25000, save_it = False, pca_model = ""):
+    
+        # Import the classifier dataset and format if necessary
     classifier_df = pandas.read_hdf(classifier_dataset)
     if classifier_dataset == '/auto/tdrive/billewood/intan data/song_sorting/from_FET_Julie/vocSelTable.h5':
-        features = classifier_df.columns[[2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]]
+        classifier_features = [2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
         classifier_df['calltype'] = pandas.Series(classifier_df['calltype'], dtype="category") # make calltype categorica
-        
-    classifier_df = make_nans_col_means(classifier_df,features)  
-    new_df_data = list()
-    # make a pandas DataFrame with biousound properties of all syllables/vocalizations
-    for i, pt in enumerate(points):
-        l,h = pt
-        new_df_data.append(getBioSoundProperties(signal[l:h,0]))
-    df = pandas.DataFrame(new_df_data)
+    print "Importing classifier dataframe: ", classifier_dataset
+    classifier_df = make_nans_col_means(classifier_df,classifier_features)  
     
-    # check it for NANs
-    df = make_nans_col_means(df, features)  
-    
-    # add the durations as a column
-    durations = np.expand_dims(map(lambda x: x[1] - x[0], points), 1)
-    df['duration'] = durations
-    df['vocal_category'] = pandas.Series('unknown', dtype = "category") 
-    
-    # and mabe sort the columns to look teh same as classifier_df...?
-   # df = df['sort columns here??'] #TODO
-    
-    # Make a vocalization type category column here TODO
+    if pca_model == "":
+        print "No PCA model (pkl file) passed for determining pca dimensionality reduction, attempting to use hard-coded one"
+        pca_model = '/auto/fhome/billewood/Code/songephys/models/pca_projection.pkl'
+    print "pca model = ", pca_model    
+    if pca_model is not None:
+        pca_file = os.path.join(os.path.dirname(__file__), pca_model)
+        pca_space = pickle.load(open(pca_file, "rb"))
 
-    #Shouldn't need to train it every time TODO save the actual trained matrix whatchamacallit    
+
+
+    feats = np.array(feats)
+    feats = pca_space.transform(feats)
+    print feats.shape
+    for i in range(feats.shape[1]):
+        name = 'PCA feature %i' %i
+        data_df[name] = feats[:,i]
+
+    #Shouldn't need to train it every time TODO save the actual trained matrix whatchamacallit, working as is    
     train = classifier_df
 
     target_names = np.unique(classifier_df['calltype'])
     y = train['calltype'].cat.codes
 
     clf = RandomForestClassifier(n_jobs=2)
-    clf.fit(train[features], y)
-    test = df
-    preds = target_names[clf.predict(test[features])]
-    return preds
-#    pandas.crosstab(test['calltype'], preds, rownames=['actual'], colnames=['preds'])
+    clf.fit(train[classifier_features], y)
+    non_pca_cols = range(data_df.shape[1]-classifier_features.shape[1])
+    test = data_df.iloc[:,non_pca_cols] # TODO make this the whole df, but I need a better training database (with specgram features)
+    predictions = target_names[clf.predict(test[classifier_features])]
+    data_df['predictions'] = predictions
 
 
+    return classified_categories
 
 
+def populate_dataframe(signal, points, fs=25000, minfreq=1000, maxfreq=8000):
+    """
+
+        Returns a pandas database of sound properties useful for sorting and analyzing vocalizations.
+        Most features come from the Theunissen lab Biosound object:
+            sound.py, https://github.com/theunissenlab/soundsig.git)        
+        Most features are self-evident, but:
+            -Spectrogram derived data is generally only calculated for frequency bins
+            between minfreq and maxfreq.
+            -freqvars is the variance of each frequency bin in the spectrogram.
+            -The pandas df that is returned is pretty unwieldy but is in a good format 
+            for PCA and t-sne analysis/visualization (amongst others)
+        Values with NaNs are replaced with column averages (warnings given).
+    """
+    new_df_data = list() #will transform into a pandas dataframe eventually
+    freqvars = []
+    psds = []
+    ampenvs = []
+    spectro_list = list() # contains the spectrograms for plotting later
+    
+    # make a pandas DataFrame with biousound properties of all syllables/vocalizations
+    print "Calculating biosound qualities and populating a database, this may take a while."
+    for i, pt in enumerate(points):
+        if np.mod(i,10) == 0:
+            print "Working on sound ", i+1, " out of ", len(points), ". Printing updates every 10 sounds."
+        l,h = pt
+        new_biosound, fpsd, psd, freqvar, f_freqvar, spectro, ampenv = getBioSoundProperties(signal[l:h,0])
+        new_df_data.append(new_biosound)
+        spectro_list.append(spectro)
+        ampenvs.append(ampenv)
+        # cut out frequencies we aren't interested in for both the psd and the freqvar
+        if minfreq is not None and maxfreq is not None:
+            psds.append(psd[(fpsd >= minfreq) & (fpsd <= maxfreq)])
+            fpsd = fpsd[(fpsd >= minfreq) & (fpsd <= maxfreq)]
+            freqvars.append(freqvar[(f_freqvar >= minfreq) & (f_freqvar <= maxfreq)])
+            f_freqvar = f_freqvar[(f_freqvar >= minfreq) & (f_freqvar <= maxfreq)]
+            
+    print "Finished most calculations, populating pandas database."    
+    df = pandas.DataFrame(new_df_data)
+    durations = np.expand_dims(map(lambda x: x[1] - x[0], points), 1)
+    df['duration'] = durations # add a duration column
+    psds = np.asarray(psds)
+    freqvars = np.asarray(freqvars)
+    ampenvs = np.asarray(ampenvs)
+    print "Adding fpsd columns and values"
+    for i in range(len(fpsd)): #add a column for every frequency bin of the PSD
+        name = 'PSDf=%d' %fpsd[i]
+        df[name] = psds[:,i]
+    print "Adding freqfvar columns and values"
+    for i in range(len(f_freqvar)): #add a column for every frequency bin of freqvar
+        name = 'VARf=%d' %f_freqvar[i]
+        df[name] = freqvars[:,i]
+    maxl = max(len(l) for l in ampenvs)
+    ampenvs = np.array([np.pad(xi,[0,(maxl-len(xi))],"constant") for xi in ampenvs])
+    print "Adding amplitude envelope values"
+    for i in range(ampenvs.shape[1]): # add a column for every time bin of the amplitue envelope
+        name = 'AMPENV t=%d' %i
+        df[name] = ampenvs[:,i]
+    print "Checking for NANS"
+    # check it all for NANs
+    df = make_nans_col_means(df, [])  
+    
+    # add catagorical columns for sorting later.
+    df['vocal_category'] = pandas.Series('unknown', dtype = "category") 
+    print "Finished calculating biosound properties, returning dataframe."                 
+    return df, spectro_list #spectrogram list, for plotting spectrograms
 
 def make_nans_col_means(df, features = ""):
     """
         Goes through a pandas dataframe and replaces NANs with column averages.
     """    
-    if features.all == "":
-        features = df.columns
+    if len(features) <= 0:
+        features = range(df.shape[1])
     nans = list()
     for i in range(len(df)):
         for feature in features:
-            if np.isnan(df[feature][i]):
-                df.loc[i,(feature)] = df[feature].mean()
+            if np.isnan(df.iloc[i,feature]) or np.isinf(df.iloc[i,feature]):
+                df.iloc[i,feature] = np.mean(df.iloc[:,feature])
                 nans.append([feature,i])
     nan_ind = np.unique([number for name,number in nans])
     nan_feats = np.unique([feature for feature, number in nans])
     if len(nan_ind) > 0:
         print "Warning, %d entries were replaced by column averages" %len(nan_ind)
-        print "Features containing NaNs are: ", nan_feats
+        print "Features containing NaNs are: ", df.columns[[nan_feats]]
     return df
 
 def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.1, verbose=False):
@@ -275,6 +350,9 @@ def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.1, verbose=Fal
         len(sound_onset) == len(sound_offset)
     except:
         print("Number of vocal onsets and offsets not equal!")
+        
+    sound_onset -= np.int(np.round(fuse_duration*fs))
+    sound_offset += np.int(np.round(fuse_duration*fs))
 
     vocal_periods = np.array(zip(sound_onset, sound_offset))
     lengths = np.apply_along_axis(lambda p: p[1] - p[0], 1, vocal_periods)
@@ -288,7 +366,7 @@ def extract_birdsong_features(signal, points, fs=25000, minfreq=1000, maxfreq=80
     """
     This function is given a signal and a set of intervals, and extracts the frequency
     characteristics of the interval. It then projects them onto a pretrained set of principle
-    components. Finally, it appends the length of the interval. All features are z-scored, and
+    components. Finally, it appends the length of the interval. All features
     are intended to be used with a classifer to classify vocal segment type.
 
     Parameters

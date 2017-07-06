@@ -13,57 +13,57 @@ import pandas as pandas
 from soundsig.sound import BioSound 
 
 
-def getBioSoundProperties(soundIn, segName, plotme = False):
-    ## For processing data with BioSound and saving relevant info for sorting
-    ## soundIn is an analogsignal from a Nix file, segName is the segment Name
-    ## THIS IS STILL under construction
-
-    print 'Processing sound %s\n' % (segName)
-    maxAmp = np.asarray(np.abs(soundIn).max())      
-    myBioSound = BioSound(soundWave=np.squeeze(np.asarray(soundIn).astype(float))/maxAmp, fs=float(soundIn.sampling_rate), calltype = "")
-                 
-    # Create BioSound Object and store some values
-    myBioSound.spectroCalc(spec_sample_rate=100)
-    myBioSound.rms = myBioSound.sound.std()     # The rms
-       
-    # Calculate amplitude enveloppe
-    myBioSound.ampenv()
-       
-    # Calculate the power spectrum
-    myBioSound.spectrum(f_high=10000)
-
-    # Calculate fundamental and related values
-    myBioSound.fundest(maxFund = 1500, minFund = 100, lowFc = 50, highFc = 6000, minSaliency = 0.5)
-
-    meanF1 = np.mean(myBioSound.F1[~np.isnan(myBioSound.F1)])
-    meanF2 = np.mean(myBioSound.F2[~np.isnan(myBioSound.F2)])
-    meanF3 = np.mean(myBioSound.F3[~np.isnan(myBioSound.F3)])
-
-    if myBioSound.fund is not None:
-        fund = np.float(myBioSound.fund)
-        cvfund = np.float(myBioSound.cvfund)
-    else:
-        fund = None 
-        cvfund = None   
-    
-    vocSelData = []
-
-    vocSelData.append({"fund": fund, 
-                       "cvfund": cvfund, "F1": meanF1, "F2": meanF2, "F3":meanF3,
-                       "sal": np.float(myBioSound.sal), "rms": np.float(myBioSound.rms), 
-                       "meanS": np.float(myBioSound.meanspect), "stdS": np.float(myBioSound.stdspect), 
-                       "q1": np.float(myBioSound.q1), "q2": np.float(myBioSound.q2), "q3": np.float(myBioSound.q3),
-                       "timestd": np.float(myBioSound.stdtime)})
-
-    if plotme:  
-        myBioSound.plot()  
-        myBioSound.play()
-        waitstr = raw_input("Press Enter to continue...")
-        plt.close('all')
-
-    # Make a data frame with all the data and return it                    
-    vocSelTable = pandas.DataFrame(vocSelData)
-    return vocSelTable
+#def getBioSoundProperties(soundIn, segName, plotme = False):
+#    ## For processing data with BioSound and saving relevant info for sorting
+#    ## soundIn is an analogsignal from a Nix file, segName is the segment Name
+#    ## THIS IS STILL under construction
+#
+#    print 'Processing sound %s\n' % (segName)
+#    maxAmp = np.asarray(np.abs(soundIn).max())      
+#    myBioSound = BioSound(soundWave=np.squeeze(np.asarray(soundIn).astype(float))/maxAmp, fs=float(soundIn.sampling_rate), calltype = "")
+#                 
+#    # Create BioSound Object and store some values
+#    myBioSound.spectroCalc(spec_sample_rate=100)
+#    myBioSound.rms = myBioSound.sound.std()     # The rms
+#       
+#    # Calculate amplitude enveloppe
+#    myBioSound.ampenv()
+#       
+#    # Calculate the power spectrum
+#    myBioSound.spectrum(f_high=10000)
+#
+#    # Calculate fundamental and related values
+#    myBioSound.fundest(maxFund = 1500, minFund = 100, lowFc = 50, highFc = 6000, minSaliency = 0.5)
+#
+#    meanF1 = np.mean(myBioSound.F1[~np.isnan(myBioSound.F1)])
+#    meanF2 = np.mean(myBioSound.F2[~np.isnan(myBioSound.F2)])
+#    meanF3 = np.mean(myBioSound.F3[~np.isnan(myBioSound.F3)])
+#
+#    if myBioSound.fund is not None:
+#        fund = np.float(myBioSound.fund)
+#        cvfund = np.float(myBioSound.cvfund)
+#    else:
+#        fund = None 
+#        cvfund = None   
+#    
+#    vocSelData = []
+#
+#    vocSelData.append({"fund": fund, 
+#                       "cvfund": cvfund, "F1": meanF1, "F2": meanF2, "F3":meanF3,
+#                       "sal": np.float(myBioSound.sal), "rms": np.float(myBioSound.rms), 
+#                       "meanS": np.float(myBioSound.meanspect), "stdS": np.float(myBioSound.stdspect), 
+#                       "q1": np.float(myBioSound.q1), "q2": np.float(myBioSound.q2), "q3": np.float(myBioSound.q3),
+#                       "timestd": np.float(myBioSound.stdtime)})
+#
+#    if plotme:  
+#        myBioSound.plot()  
+#        myBioSound.play()
+#        waitstr = raw_input("Press Enter to continue...")
+#        plt.close('all')
+#
+#    # Make a data frame with all the data and return it                    
+#    vocSelTable = pandas.DataFrame(vocSelData)
+#    return vocSelTable
 
 
 def plotSoundSeg(fig, seg, corr_plot=None, ephys_plot = None):
