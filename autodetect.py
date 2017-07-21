@@ -9,14 +9,15 @@ from soundsig.sound import BioSound
 import pandas as pandas
 from sklearn.ensemble import RandomForestClassifier
 from scipy.stats import zscore
-
+import sys
 
 def find_syllables(audio_stream_in, amp_thresh = '', fs=25000, fuse_duration=0.1,  syll_dur = 20.0, sil_dur = 5.0, verbose=False):
  
     """
     For segmenting into syllables.
     You should pass amp_thresh, which should come from find_vocal_periods
-
+    The idea of this function is that instead of just a threshold based amplitude sorting into v
+    putative vocalization periods, we can use 
     """
     audio_stream = np.squeeze(audio_stream_in)
     # First we try to find the amplitude envelope. We only care about vocal sounds,
@@ -80,7 +81,7 @@ def find_syllables(audio_stream_in, amp_thresh = '', fs=25000, fuse_duration=0.1
 
 def getBioSoundProperties(soundIn, plotme = False):
     ## Returns biosoudn properties from a chunk of sound.
-
+    soundIn = soundIn - np.mean(soundIn,axis=0) # correct for DC offsets if they exist.
     #print 'Processing sound'
     maxAmp = np.asarray(np.abs(soundIn).max())      
     myBioSound = BioSound(soundWave=np.squeeze(np.asarray(soundIn).astype(float))/maxAmp, fs=float(soundIn.sampling_rate), calltype = "")
@@ -97,8 +98,6 @@ def getBioSoundProperties(soundIn, plotme = False):
     meanF1 = np.mean(myBioSound.F1[~np.isnan(myBioSound.F1)])
     meanF2 = np.mean(myBioSound.F2[~np.isnan(myBioSound.F2)])
     meanF3 = np.mean(myBioSound.F3[~np.isnan(myBioSound.F3)])
-    # kurtosis
-
 
     if myBioSound.fund is not None:
         fund = np.float(myBioSound.fund)
@@ -131,51 +130,133 @@ def getBioSoundProperties(soundIn, plotme = False):
     ampenv = myBioSound.amp
     return vocSelData, fpsd, psd, freqvar, f_freqvar, spectro, ampenv
     
-def classify_vocalizations_random_forest(data_df, classifier_dataset = '/auto/tdrive/billewood/intan data/song_sorting/from_FET_Julie/vocSelTable.h5', fs=25000, save_it = False, pca_model = ""):
+def reduce_dimensions_pca(df, pca_columns="", zscore_columns="", pca_file=""):
+    """
+        Takes a pandas dataframe created with autodetect.populate_dataframe.
+        Reduces the dimensionality by PCAing most of the columns,
+        Zscores the other columns, returns a np array ready to be sorted.
+    """        
+        
+    if zscore_columns == "":
+        zscore_columns = list()
+        zscore_columns = df.columns[range(16) + [-3]]
+        print("columns to be zscored: ", zscore_columns)
+    else:
+        print "Warning changing the default columns might still be buggy..."
+        
+    if pca_columns == "":
+        pca_columns = df.columns[17:4000] # I stop at 4000 because not all the files are long enough...
+        # TODO I should really find the shortest database and use that as my index? (above)
+    else:
+        print "Warning changing the default columns might still be buggy..."    
     
-        # Import the classifier dataset and format if necessary
-    classifier_df = pandas.read_hdf(classifier_dataset)
-    if classifier_dataset == '/auto/tdrive/billewood/intan data/song_sorting/from_FET_Julie/vocSelTable.h5':
-        classifier_features = [2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-        classifier_df['calltype'] = pandas.Series(classifier_df['calltype'], dtype="category") # make calltype categorica
-    print "Importing classifier dataframe: ", classifier_dataset
-    classifier_df = make_nans_col_means(classifier_df,classifier_features)  
-    
-    if pca_model == "":
+    if pca_file == "":
         print "No PCA model (pkl file) passed for determining pca dimensionality reduction, attempting to use hard-coded one"
-        pca_model = '/auto/fhome/billewood/Code/songephys/models/pca_projection.pkl'
-    print "pca model = ", pca_model    
-    if pca_model is not None:
-        pca_file = os.path.join(os.path.dirname(__file__), pca_model)
-        pca_space = pickle.load(open(pca_file, "rb"))
+        pca_file = '/auto/tdrive/billewood/intan data/LbY6074/LbY6074__161215_145633_PCA.pkl'
+    
+    with open(pca_file,"r") as f:
+        pca = pickle.load(f)    
+
+    PCAd_array = pca.transform(df[pca_columns]) # PSD, freqVAR, and ampenv freatures.
+    zscore_array = np.array(df[zscore_columns].apply(zscore))
+    
+    pca_df = pandas.DataFrame()
+    for col in range(len(zscore_columns)):
+        pca_df["%s"%zscore_columns[col]] = zscore_array[:,col]
+        
+    for col in range(PCAd_array.shape[1]):
+        pca_df["PCA %i"%col] = PCAd_array[:,col]
+
+    
+    pca_df['vocal_category'] = df['vocal_category']
+
+    return pca_df
 
 
+def test_random_forest(classifier_dataset = "", fs=25000, save_it = False, pca_model = ""):
+    
+    if classifier_dataset == "":
+        classifier_dataset = "/auto/tdrive/billewood/intan data/LbY6074/LbY6074__161215_145633_categorized_final.pkl"
+        
+        # Import the classifier dataset and format if necessary
+    with open(classifier_dataset,"r") as f:
+        classifier_df = pickle.load(f)
 
-    feats = np.array(feats)
-    feats = pca_space.transform(feats)
-    print feats.shape
-    for i in range(feats.shape[1]):
-        name = 'PCA feature %i' %i
-        data_df[name] = feats[:,i]
+    features = classifier_df.columns[range(classifier_df.shape[1]-2)]
+    classifier_df['is_train'] = np.random.uniform(0, 1, len(classifier_df)) <= .5
+    train, test = classifier_df[classifier_df['is_train']==True], classifier_df[classifier_df['is_train']==False] 
+   
+    target_names = np.unique(classifier_df['vocal_category'])
+    y = train['vocal_category'].cat.codes
+
+    clf = RandomForestClassifier(n_jobs=2)
+    clf.fit(train[features], y)
+
+#    non_pca_cols = range(data_df.shape[1]-classifier_features.shape[1])
+    predictions = target_names[clf.predict(test[features])]
+
+    pandas.crosstab(test['vocal_category'], predictions, rownames=['actual'], colnames=['preds'])
+
+
+    return test, predictions    
+    
+    
+def classify_vocalizations_random_forest(data_df, classifier_dataset = "", fs=25000, save_it = False, pca_model = ""):
+    
+    if type(classifier_dataset) == str:
+        if classifier_dataset == "":
+            classifier_dataset = "/auto/tdrive/billewood/intan data/LbY6074/LbY6074__161215_145633_categorized_final.pkl"
+        
+    if type(classifier_dataset) == pandas.DataFrame:
+        classifier_df = classifier_dataset
+    else:
+        with open(classifier_dataset,"r") as f:
+            classifier_df = pickle.load(f)
+
+    last_feature = min(classifier_df.shape[0], data_df.shape[0])        
+    classifier_features = classifier_df.columns[range(last_feature) + [-3]]
+    print classifier_features
+    
+#    if classifier_dataset == '/auto/tdrive/billewood/intan data/song_sorting/from_FET_Julie/vocSelTable.h5':
+#        classifier_features = [2, 3, 4, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+#        classifier_df['calltype'] = pandas.Series(classifier_df['calltype'], dtype="category") # make calltype categorica
+#    print "Importing classifier dataframe: ", classifier_dataset
+    
+#    if pca_model == "":
+#        print "No PCA model (pkl file) passed for determining pca dimensionality reduction, attempting to use hard-coded one"
+#        pca_model = '/auto/fhome/billewood/Code/songephys/models/pca_projection.pkl'
+#    print "pca model = ", pca_model    
+#    if pca_model is not None:
+#        pca_file = os.path.join(os.path.dirname(__file__), pca_model)
+#        pca_space = pickle.load(open(pca_file, "rb"))
+
+
+#    feats = np.array(feats)
+#    feats = pca_space.transform(feats)
+#    print feats.shape
+#    for i in range(feats.shape[1]):
+#        name = 'PCA feature %i' %i
+#        data_df[name] = feats[:,i]
 
     #Shouldn't need to train it every time TODO save the actual trained matrix whatchamacallit, working as is    
     train = classifier_df
 
-    target_names = np.unique(classifier_df['calltype'])
-    y = train['calltype'].cat.codes
+    target_names = np.unique(classifier_df['vocal_category'])
+    y = train['vocal_category'].cat.codes
 
     clf = RandomForestClassifier(n_jobs=2)
     clf.fit(train[classifier_features], y)
-    non_pca_cols = range(data_df.shape[1]-classifier_features.shape[1])
-    test = data_df.iloc[:,non_pca_cols] # TODO make this the whole df, but I need a better training database (with specgram features)
-    predictions = target_names[clf.predict(test[classifier_features])]
-    data_df['predictions'] = predictions
+#    non_pca_cols = range(data_df.shape[1]-classifier_features.shape[1])
+
+    predictions = target_names[clf.predict(data_df[classifier_features])]
+
+    data_df['vocal_category'] = pandas.Series(predictions, dtype = "category")
+#    df['vocal_category'] = pandas.Series('UV', dtype = "category") 
+
+    return data_df, predictions
 
 
-    return classified_categories
-
-
-def populate_dataframe(signal, points, fs=25000, minfreq=1000, maxfreq=8000):
+def populate_dataframe(audio_streams, points, fs=25000, minfreq=1000, maxfreq=8000):
     """
 
         Returns a pandas database of sound properties useful for sorting and analyzing vocalizations.
@@ -187,8 +268,9 @@ def populate_dataframe(signal, points, fs=25000, minfreq=1000, maxfreq=8000):
             -freqvars is the variance of each frequency bin in the spectrogram.
             -The pandas df that is returned is pretty unwieldy but is in a good format 
             for PCA and t-sne analysis/visualization (amongst others)
-        Values with NaNs are replaced with column averages (warnings given).
+        Values with NaNs are replaced with column averages (without warnings, unfortunately).
     """
+    signal = audio_streams[:,0]
     new_df_data = list() #will transform into a pandas dataframe eventually
     freqvars = []
     psds = []
@@ -198,8 +280,13 @@ def populate_dataframe(signal, points, fs=25000, minfreq=1000, maxfreq=8000):
     # make a pandas DataFrame with biousound properties of all syllables/vocalizations
     print "Calculating biosound qualities and populating a database, this may take a while."
     for i, pt in enumerate(points):
-        if np.mod(i,10) == 0:
+        #print "points: ", points
+        if i == 0:
             print "Working on sound ", i+1, " out of ", len(points), ". Printing updates every 10 sounds."
+        elif np.mod(i,40) == 0:
+            print('..',i)
+        else: sys.stdout.write('..',i)
+
         l,h = pt
         new_biosound, fpsd, psd, freqvar, f_freqvar, spectro, ampenv = getBioSoundProperties(signal[l:h,0])
         new_df_data.append(new_biosound)
@@ -223,7 +310,7 @@ def populate_dataframe(signal, points, fs=25000, minfreq=1000, maxfreq=8000):
     for i in range(len(fpsd)): #add a column for every frequency bin of the PSD
         name = 'PSDf=%d' %fpsd[i]
         df[name] = psds[:,i]
-    print "Adding freqfvar columns and values"
+    print "Adding variance across frequency columns and values"
     for i in range(len(f_freqvar)): #add a column for every frequency bin of freqvar
         name = 'VARf=%d' %f_freqvar[i]
         df[name] = freqvars[:,i]
@@ -233,33 +320,25 @@ def populate_dataframe(signal, points, fs=25000, minfreq=1000, maxfreq=8000):
     for i in range(ampenvs.shape[1]): # add a column for every time bin of the amplitue envelope
         name = 'AMPENV t=%d' %i
         df[name] = ampenvs[:,i]
-    print "Checking for NANS"
-    # check it all for NANs
-    df = make_nans_col_means(df, [])  
+    print "Checking for NANS and replacing with column averages"
+    print "dataframe shape: ", df.shape    
     
-    # add catagorical columns for sorting later.
-    df['vocal_category'] = pandas.Series('unknown', dtype = "category") 
-    print "Finished calculating biosound properties, returning dataframe."                 
+    # check it all for NANs and replace with column averages
+    df = df.fillna(df.mean())
+
+    print "Finished calculating biosound properties, calculating vocalizer and mic_diff."      
+    # Add a column with the amplitude ratio of the mics and a putative identify of caller.
+    annotated_pts, pt_diffs, std_idx = separate_song_sources(audio_streams, points, fs)
+    df['mic_diff'] = pt_diffs
+    df['vocalizer'] = "tutor"
+    df['vocalizer'][std_idx] = "student"
+              
+    # add categorical columns for sorting later.
+    df['vocal_category'] = pandas.Series('UV', dtype = "category") 
+    df['vocal_category'] = "UV"
+
     return df, spectro_list #spectrogram list, for plotting spectrograms
 
-def make_nans_col_means(df, features = ""):
-    """
-        Goes through a pandas dataframe and replaces NANs with column averages.
-    """    
-    if len(features) <= 0:
-        features = range(df.shape[1])
-    nans = list()
-    for i in range(len(df)):
-        for feature in features:
-            if np.isnan(df.iloc[i,feature]) or np.isinf(df.iloc[i,feature]):
-                df.iloc[i,feature] = np.mean(df.iloc[:,feature])
-                nans.append([feature,i])
-    nan_ind = np.unique([number for name,number in nans])
-    nan_feats = np.unique([feature for feature, number in nans])
-    if len(nan_ind) > 0:
-        print "Warning, %d entries were replaced by column averages" %len(nan_ind)
-        print "Features containing NaNs are: ", df.columns[[nan_feats]]
-    return df
 
 def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.1, verbose=False):
     """
@@ -497,4 +576,4 @@ def separate_song_sources(audio_streams, points, fs=25000, tutor_mic=0):
     annotated_pts = {}
     annotated_pts['student'] = points[student_idx]
     annotated_pts['tutor'] = points[tutor_idx]
-    return annotated_pts
+    return annotated_pts, pt_diffs, student_idx
