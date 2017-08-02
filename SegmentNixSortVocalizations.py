@@ -2,8 +2,14 @@
 """
 Created on Thu Jul 20 11:44:17 2017
 
-Script to segment nix files into sections where there has been automatic recognition of song or calls. Designed to create
-Segment should have:
+Script to segment nix files into sections where there has been automatic recognition of song or calls. 
+Designed primarily as the first step in the Intan analysis pipeline, creating many segments from 
+our Nix files and storing them in Neo format HDF5.
+It also creates a few files for visualizing how the sorting went.
+
+!!!! Currently only working for live song, need to update for auditory playback
+
+Segments should have:
 
 analog signals -> 16
 epochs -> syllables? events? Not functional yet
@@ -44,18 +50,17 @@ import hashlib
 
 
 
-# Adds a little time before and after each 
+# Adds a little time before and after each !!!!!!!!!!!!!!!!!!1 Thsi is in progress
 tbefore = 0.2*pq.s # Time before begining of event
 tafter = 0.2*pq.s # Time after end of even
-      
-      
+#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 # Specify the Nix input file and two directories and the pickle file out. classifier dataset optional
 
-nix_file = sys.argv[1]
-experiment_dir = sys.argv[2] # "/auto/tdrive/billewood/intan data/LbY6074"
-spikes_vis_core_dir = sys.argv[3] # "/auto/fhome/billewood/Code/spikes-vis/data/vocalizations"
-pickle_file_out = sys.argv[4]
+nix_file = sys.argv[1] # nix_file = "/auto/tdrive/billewood/intan data/LbY6074/NIX/LbY6074__161216_104808.nix"
+experiment_dir = sys.argv[2] # experiment_dir = "/auto/tdrive/billewood/intan data/LbY6074"
+spikes_vis_core_dir = sys.argv[3] # spikes_vis_core_dir = "/auto/fhome/billewood/Code/spikes-vis/data/vocalizations"
+pickle_file_out = sys.argv[4] # pickle_file_out = "/auto/tdrive/billewood/intan data/LbY6074/104808"
 if sys.argv[5] :
     classifier_dataset = sys.argv[5]
 else:
@@ -105,7 +110,8 @@ print "FINISHED."
 print "Classifying Vocalizations."
 df, predictions = autodetect.classify_vocalizations_random_forest(df, classifier_dataset)
 
-# For the moment I discard BOS classifications- this will need to be optimized as we begin working on multiple birds...
+# For the moment I discard BOS classifications- this could be optimized as we begin working on multiple birds but it's possible
+# the mic amplitude step makes this obselete anyway.
 # TODO
 bos_trials = np.where(df['vocal_category'] == 'BOS')
 df['vocal_category'][bos_trials[0]] = 'So'
@@ -138,13 +144,12 @@ plt.scatter(Y.T[0], Y.T[1])
 tsne_name = os.path.join(spikes_vis_dir, '2d.pkl') 
 with open(tsne_name, "wb") as output_file:
     pickle.dump(Y, output_file)
-    
-# this is for spikes-vis
+
+# this is for spikes-vis, not crucial to the pipeline but still nice
 clusters = np.asarray(df['vocal_category'].cat.codes + 1, dtype = int)
 cluster_name = os.path.join(spikes_vis_dir, 'clusters.pkl') 
 with open(cluster_name, "wb") as output_file:
     pickle.dump(clusters, output_file)
-    
 
 
 print 'Making new segments...Loading whole data file...'
@@ -158,11 +163,12 @@ nixInput = NixIO(nix_file)
 
 # We are reading the entire block and all the data since lazy reading does not work
 # This next line is slow
-print 'Reading input file', nix_file, '...'
+print 'Reading input file ', nix_file, ', will probably take a couple minutes...'
 block = nixInput.read_block()
 nixInput.close()
 print 'Done.'
 fullSeg = block.segments[0]
+
 
 # Loop through channels and delete links to analog signals
 for ci in block.channel_indexes:
@@ -174,34 +180,43 @@ for ci in block.channel_indexes:
 #analog signals -> 16
 #epochs -> syllables? events? Not functional yet
 #spiketrain -> empty for now
-#index -> ascending
+
 #name -> SoundType_Vocalizer_Index_
 #desciption -> Created by thisfile.py + hashcode of this file
 #file_origin -> original rhd file, or nix maybe
+#index -> ascending
 #sound_type -> Playback, Live; Silence
 #Vocalization_Type: So, Te, DC, UV (Song, Tet, Distance Call, Unknown Vocalization)
 #Vocalizer -> Self; Tutor; Mom; Sister; Con_Male; Con_Female
 #Playback_File -> 
+
+
+"""
 hashtag = hashlib.md5(os(__file__))
-j = 0 #ascending index of segments
+ind = 0 #ascending index of segments
 good_vocs = ['DC', 'So', 'Te']
-for i in df.shape[0]:
-    if df['vocal_category'][i] in good_vocs:
-        
-        newSeg = Segment(name='%s_%s_%d' % (df['vocal_category'][i], df['vocalizer'][i], j)), 
-                         description = 'Created by %s, hashtag: %s', %(os.path.basename(__file__), hashtag),
-                         file_origin=fullSeg.file_origin,
-                         file_datetime=fullSeg.file_datetime, 
-                         rec_datetime=fullSeg.rec_datetime, 
-                         index=j)
+for row in df.shape[0]:
+    if df['vocal_category'][row] in good_vocs: 
+        newSeg = Segment(name='%s_%s_%d' % (df['vocal_category'][row], df['vocalizer'][row], ind), 
+                         description = 'Created by %s, hashtag: %s' % (os.path.basename(__file__), hashtag),
+                         file_origin = nix_file, 
+                         index = ind,
+                         sound_type = 'Only live sounds being processed currently, stay tuned',
+                         vocalization_type = df['vocal_category'][row],
+                         vocalizer = df['vocalizer'][row],
+                         #file_datetime=fullSeg.file_datetime, 
+                         #rec_datetime=fullSeg.rec_datetime,      
+                         playback_file = 'work in progress',                         
+                         )
 
 
         newSeg.annotate(**fullSeg.annotations)
-        j += 1
+        ind += 1
         
         # Take a time slice of a segment
         start = timevals[0]
         duration = timevals[1] - timevals[0]
+        
         for sig in fullSeg.analogsignals:
             startTime = start/sig.sampling_rate
             durationTime = duration/sig.sampling_rate
@@ -232,3 +247,4 @@ print 'Done.'
 fullSeg = block.segments[0]
 sound_recording = fullSeg.analogsignals[1]
 norm_sound = sound_recording / np.max(sound_recording)
+"""
