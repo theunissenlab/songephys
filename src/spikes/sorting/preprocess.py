@@ -32,10 +32,10 @@ def collect_waveforms(spiketrains, threshold=0, force_single_peak=False):
     for spiketrain in spiketrains:
         if len(spiketrain.waveforms):
             if force_single_peak:
-                mins = np.argmin(spiketrain.waveforms.squeeze()[:, 8:40], axis=1) == 16
+                mins = np.argmin(spiketrain.waveforms[:, 8:40, 0], axis=1) == 16
             else:
                 mins = np.ones(len(spiketrain.waveforms)).astype(bool)
-            midpoints = spiketrain.waveforms.squeeze()[:, 8:40][:, 16]
+            midpoints = spiketrain.waveforms[:, 8:40, 0][:, 16]
             waveforms += list(spiketrain.waveforms[(midpoints < threshold) & (mins)])
             times += list(spiketrain.times[(midpoints < threshold) & (mins)])
 
@@ -96,3 +96,39 @@ def binned_spikes(unsorted_unit, threshold, clusterer):
     X_data = np.vstack(X_data)
 
     return t_arrs, sparse.csr_matrix(X_data)
+
+
+def sort_spikes_on_unit(unsorted_unit, threshold, model, unit_clusters):
+    """Bin spikes by their clusters
+
+    Params
+    unsorted_unit (neo.core.Unit)
+        Unit that has references to a spiketrain for each segment. The spiketrain
+        contains all waveforms for potential spikes found on one electrode
+    threshold (float)
+        Exclude waveforms with peaks that do not cross this threshold
+    clusterer (model)
+        KMeans model
+    unit_clusters
+        list of lists, each inner list is a list of cluster ids to group as one unit
+
+    Returns
+    spike_times (list)
+    """
+    overall_spike_times = []
+    for i, st in enumerate(unsorted_unit.spiketrains):
+        spike_times = []
+        waveforms, times = collect_waveforms([st], threshold=threshold, force_single_peak=True)
+        if not len(waveforms):
+            for _ in unit_clusters:
+                spike_times.append([])
+        else:
+            waveforms = waveforms[:, 8:40]  # TODO hardcoded slice again...
+            labels = model.predict(waveforms)
+            for unit_group in unit_clusters:
+                mapped_labels = np.array([True if l in unit_group else False for l in labels])
+                spike_times.append(times[mapped_labels])
+
+        overall_spike_times.append(spike_times)
+
+    return overall_spike_times
