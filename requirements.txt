@@ -11,6 +11,6 @@ statsmodels==0.8.0
 
 # Modified neo package
 -e git://github.com/theunissenlab/python-neo.git@715db06#egg=neo
--e git://github.com/theunissenlab/soundsig.git@master#egg=soundsig
+# -e git://github.com/theunissenlab/soundsig.git@master#egg=soundsig
 
 --process-dependency-links
