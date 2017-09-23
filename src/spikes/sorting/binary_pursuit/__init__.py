@@ -13,9 +13,21 @@ from scipy.linalg import sqrtm, inv, toeplitz
 from numpy.fft import fft, ifft
 
 import spikes.utils as utils
-from spikes.utils import bin_spikes
-from preprocess import collect_waveforms, make_V
 from estimate_waveforms import fit_waveforms
+
+from spikes.binning import unravel_into_spiketimes
+
+
+def make_V(block, electrode_idx):
+    """Concatenate voltages of electrode across all segments in block
+
+    Assumes analogsignals[-1] has the voltage traces
+    """
+    return np.vstack([
+        # TODO: should make this more robust than taking analogsignals[-1]
+        segment.analogsignals[-1].as_array()[:, electrode_idx:electrode_idx+1]
+        for segment in block.segments
+    ])
 
 
 def apply_filter(X, filters, flip=False, valid=False):
@@ -385,3 +397,44 @@ def pursue_iter(n_iter, X, V):
     X = X.copy()
     for _ in range(n_iter):
         yield pursue(X, V)
+
+
+def resegment(t_arrs, X, V):
+    """Using list of t_arrs (corresponding to segments), split up X and V by segment
+
+    Params
+    t_arrs (list):
+        A list of 1d arrays. Each element corresponds to one neo.core.Segment of the block,
+        and is an array of times corresponding to the time bins used in each segment.
+    X (np.ndarray, (n_timesteps, n_units))
+        2d binary array, with the rows corresponding to individual time bins and columns
+        corresponding to unit. X and V both include data over all segmenets, with their
+        rows concatenated together
+    V (np.ndarray, (n_timesteps,))
+        A single 1d array of the voltage trace of the electrode uesd in binary pursuit
+
+    Returns
+    t_arrs (list):
+        Same list that came in
+    spike_times_list (list)
+        Spike times per unit, per segment
+    X_list (list):
+        Binary spike arrays per segment
+    V_list (list):
+        Voltage traces per segment
+    """
+    # TODO: could turn into a generic function to slice arbitrary arrays using t_arrs
+    splits = np.cumsum([0] + [len(t) for t in t_arrs])
+
+    spike_times_list = []
+    X_list = []
+    V_list = []
+
+    for segment_idx, t_arr in enumerate(t_arrs):
+        start, stop = splits[segment_idx], splits[segment_idx + 1]
+
+        X_list.append(X[start:stop])
+        V_list.append(V[start:stop])
+        spike_times_list.append(unravel_into_spiketimes(t_arr, X_list[-1]))
+
+    return t_arrs, spike_times_list, X_list, V_list

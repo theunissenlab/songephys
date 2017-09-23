@@ -19,6 +19,8 @@ import matplotlib.pyplot as plt
 from neo.core import AnalogSignal, SpikeTrain, Unit, ChannelIndex
 from soundsig.signal import lowpass_filter, highpass_filter, resample_signal, linear_filter1D
 
+import config
+
 
 # Function to divide segment signals into low pass and high pass signals.
 def high_low_filter(seg, debug = 0):
@@ -246,7 +248,7 @@ def extract_spikes(block):
 
     # Parameters
     SPIKEWIDTH = 1*pq.ms    # Sets the number of data points to be saved in the spike snippet - on each side from peak
-    NSTD = 3.0              # The level of the threshold in rms
+    NSTD = config.Z_THRESHOLD              # The level of the threshold in rms
 
     # Following neo's phylosophy we look through the analogsignals from the channel index since we want to get spikes
     # across segments. We assume one channel per electrode.

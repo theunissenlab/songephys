@@ -17,7 +17,7 @@ def plot_spikes_with_timeseries(t, spike_times, y, t_start, t_stop, ax, spike_al
             axes[0].plot(t, row, alpha=y_alpha[i])
     else:
         if y_alpha is None: y_alpha = 0.5
-        axes[0].plot(t, y, alpha=y_alpha)
+        axes[0].plot(t, y, alpha=y_alpha, linewidth=1)
 
     axes[0].set_xlim(t_start, t_stop)
     raster.plot(spike_times, min_time=t_start, max_time=t_stop, alpha=spike_alpha, ax=axes[1])

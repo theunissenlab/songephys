@@ -8,18 +8,21 @@ from neo.io import NixIO
 from rhd2nix import Rhd2Nix
 from segmentation.audio_segment import segment
 
+from utils import session_basename
+
 
 class DetectSoundSegments(luigi.Task):
     """Segment data based on audio where songs are detected"""
 
-    in_rhdfile = luigi.Parameter()
+    session_dir = luigi.Parameter()
 
     def requires(self):
-        return Rhd2Nix(self.in_rhdfile)
+        return Rhd2Nix(self.session_dir)
 
     def output(self):
-        input_file = os.path.splitext(self.in_rhdfile)[0]
-        return luigi.LocalTarget("{}-segmented.pkl".format(input_file))
+        segmentation_dir = os.path.join(self.session_dir, "segmentation")
+        output_filename = "{}-segmented.pkl".format(session_basename(self.session_dir))
+        return luigi.LocalTarget(os.path.join(segmentation_dir, output_filename))
 
     def run(self):
         nix = NixIO(self.input().path)
@@ -28,21 +31,22 @@ class DetectSoundSegments(luigi.Task):
 
         block = segment(block)
 
-        with open(self.output().path, "wb") as outputfile:
-           pickle.dump(block, outputfile)
+        with open(self.output().path, "wb") as output_file:
+           pickle.dump(block, output_file)
 
 
 class ValidateSongs(luigi.Task):
     """Placeholder task for manual validation of songs"""
 
-    in_rhdfile = luigi.Parameter()
+    session_dir = luigi.Parameter()
 
     def output(self):
-        input_file = os.path.splitext(self.in_rhdfile)[0]
-        return luigi.LocalTarget("{}-validated.pkl".format(input_file))
+        segmentation_dir = os.path.join(self.session_dir, "segmentation")
+        output_filename = "{}-validated.pkl".format(session_basename(self.session_dir))
+        return luigi.LocalTarget(os.path.join(segmentation_dir, output_filename))
 
     def requires(self):
-        return DetectSoundSegments(self.in_rhdfile)
+        return DetectSoundSegments(self.session_dir)
 
     def run(self):
         shutil.copy(self.input().path, self.output().path)

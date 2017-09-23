@@ -1,9 +1,6 @@
 import numpy as np
-import scipy.sparse as sparse
 
-from config import config
-
-from spikes.utils import bin_spikes
+import config
 
 
 def collect_waveforms(spiketrains, threshold=0, force_single_peak=False):
@@ -29,73 +26,24 @@ def collect_waveforms(spiketrains, threshold=0, force_single_peak=False):
     """
     waveforms = []
     times = []
+
+    wf_peak_idx = (spiketrains[0].waveforms.shape[1] // 2) - config.WF_START
+
     for spiketrain in spiketrains:
         if len(spiketrain.waveforms):
             if force_single_peak:
-                mins = np.argmin(spiketrain.waveforms[:, 8:40, 0], axis=1) == 16
+                # array that selects waveforms whose peak value is at the array center
+                mins = np.argmin(spiketrain.waveforms[:, config.WF_SLICE, 0], axis=1) == wf_peak_idx
             else:
                 mins = np.ones(len(spiketrain.waveforms)).astype(bool)
-            midpoints = spiketrain.waveforms[:, 8:40, 0][:, 16]
+
+            # this lets us apply a secondary threshold
+            midpoints = spiketrain.waveforms[:, config.WF_SLICE, 0][:, wf_peak_idx]
+
             waveforms += list(spiketrain.waveforms[(midpoints < threshold) & (mins)])
             times += list(spiketrain.times[(midpoints < threshold) & (mins)])
 
     return np.array(waveforms)[:, :, 0] if len(waveforms) else np.array([]), np.array(times)
-
-
-def make_V(block, electrode_idx):
-    """Concatenate voltages of electrode across all segments in block
-    """
-    return np.vstack([
-        # TODO: should make this more robust than taking analogsignals[-1]
-        segment.analogsignals[-1].as_array()[:, electrode_idx:electrode_idx+1]
-        for segment in block.segments
-    ])
-
-
-def binned_spikes(unsorted_unit, threshold, clusterer):
-    """Bin spikes by their clusters
-
-    Params
-    unsorted_unit (neo.core.Unit)
-        Unit that has references to a spiketrain for each segment. The spiketrain
-        contains all waveforms for potential spikes found on one electrode
-    threshold (float)
-        Exclude waveforms with peaks that do not cross this threshold
-    clusterer (spikes.sorting.clustering.GaussianMixtureClustererPruned)
-        Clustering object that has already been fitted
-
-    Returns
-    t_arrs (list)
-        list of time arrays for each unit
-    X (np.ndarray; (n_bins, n_units))
-        Full binary spike data over all segments concatenated together
-    """
-    X_data = []
-    t_arrs = []
-
-    for i, st in enumerate(unsorted_unit.spiketrains):
-        spike_times = []
-        waveforms, times = collect_waveforms([st], threshold=threshold)
-        if not len(waveforms):
-            for label in clusterer.good_labels:
-                spike_times.append([])
-        else:
-            waveforms = waveforms[:, 8:40]  # TODO hardcoded slice again...
-            labels, p = clusterer.predict(waveforms)
-            for label in clusterer.good_labels:
-                spike_times.append(times[labels == label])
-
-        V = st.segment.analogsignals[-1]
-        t_arr, X = bin_spikes(spike_times,  # TODO include this in spikes lib?
-                min_time=st.t_start.item(),
-                dt=V.sampling_period.item(),
-                n_bins=len(V))
-
-        X_data.append(X)
-        t_arrs.append(t_arr)
-    X_data = np.vstack(X_data)
-
-    return t_arrs, sparse.csr_matrix(X_data)
 
 
 def sort_spikes_on_unit(unsorted_unit, threshold, model, unit_clusters):
@@ -123,7 +71,7 @@ def sort_spikes_on_unit(unsorted_unit, threshold, model, unit_clusters):
             for _ in unit_clusters:
                 spike_times.append([])
         else:
-            waveforms = waveforms[:, 8:40]  # TODO hardcoded slice again...
+            waveforms = waveforms[:, config.WF_SLICE]
             labels = model.predict(waveforms)
             for unit_group in unit_clusters:
                 mapped_labels = np.array([True if l in unit_group else False for l in labels])

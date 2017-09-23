@@ -6,18 +6,21 @@ import luigi
 from detect_sound_segments import ValidateSongs
 from preproephys import high_low_filter
 
+from utils import session_basename
+
 
 class FilterElectrodeSignals(luigi.Task):
     """huhh"""
 
-    in_rhdfile = luigi.Parameter()
+    session_dir = luigi.Parameter()
 
     def requires(self):
-        return ValidateSongs(self.in_rhdfile)
+        return ValidateSongs(self.session_dir)
 
     def output(self):
-        input_file = os.path.splitext(self.in_rhdfile)[0]
-        return luigi.LocalTarget("{}-segmented.pkl".format(input_file))
+        segmentation_dir = os.path.join(self.session_dir, "segmentation")
+        output_filename = "{}-filtered.pkl".format(session_basename(self.session_dir))
+        return luigi.LocalTarget(os.path.join(segmentation_dir, output_filename))
 
     def run(self):
         with open(self.input().path, "rb") as inputfile:
@@ -27,5 +30,5 @@ class FilterElectrodeSignals(luigi.Task):
         for seg in block.segments:
             high_low_filter(seg)
 
-        with open(self.output().path, "wb") as outputfile:
-            pickle.dump(block, outputfile)
+        with open(self.output().path, "wb") as output_file:
+            pickle.dump(block, output_file)
