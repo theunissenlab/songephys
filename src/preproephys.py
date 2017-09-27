@@ -246,7 +246,7 @@ def extract_spikes(block):
 
     # Parameters
     SPIKEWIDTH = 1*pq.ms    # Sets the number of data points to be saved in the spike snippet - on each side from peak
-    NSTD = 2              # The level of the threshold in rms
+    NSTD = 3.0              # The level of the threshold in rms
 
     # Following neo's phylosophy we look through the analogsignals from the channel index since we want to get spikes
     # across segments. We assume one channel per electrode.

@@ -42,7 +42,7 @@ except:
 
 from neo.core import Segment
 from neo.io import NixIO
-import autodetect
+from segmentation import autodetect
 import serialize
 from sklearn.manifold import TSNE
 import matplotlib.pyplot as plt
