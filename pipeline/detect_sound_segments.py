@@ -1,4 +1,5 @@
 import cPickle as pickle
+import glob
 import os
 import shutil
 
@@ -6,7 +7,12 @@ import luigi
 from neo.io import NixIO
 
 from rhd2nix import Rhd2Nix
-from segmentation.audio_segment import segment
+from segmentation.audio_segment import (
+    segment,
+    generate_stim_dicts,
+    generate_sound_dicts,
+    save_stimulus_database
+)
 
 from utils import session_basename
 
@@ -29,7 +35,24 @@ class DetectSoundSegments(luigi.Task):
         block = nix.read_block()
         nix.close()
 
-        block = segment(block)
+        input_directory = os.path.join(self.session_dir, "raw")
+        csv_files = glob.glob(os.path.join(input_directory, "*.csv"))
+        assert len(csv_files) == 1
+
+        # FIXME dont hardcode stim dir
+        stim_dir = os.path.join(self.session_dir, "stimuli", "TutFamBos")
+
+        # locate pyoperant file
+        pyoperant_file = csv_files[0]
+
+        sm = save_stimulus_database(pyoperant_file,
+                stim_dir,
+                "{}_db".format(session_basename(self.session_dir)))
+        digital_signals = block.segments[0].events[0]
+
+        new_block = segment(block, generate_stim_dicts(digital_signals, sm.database))
+
+        # block = segment(block)
 
         with open(self.output().path, "wb") as output_file:
            pickle.dump(block, output_file)

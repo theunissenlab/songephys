@@ -9,35 +9,92 @@ except:
 
 from neo.core import Segment
 from neo.io import NixIO
+from neosound import sound_manager
+from neosound.sound_store import HDF5Store
+from zeebeez.tdt2neo import stim, import_multielectrode
+
 
 import autodetect
-from config import config
+import config
 
 
-# Adds a little time before and after each 
-tbefore = 0.2 * pq.s # Time before begining of event
-tafter = 0.2 * pq.s # Time after end of even
-      
+def save_stimulus_database(pyoperant_file, stim_dir, db_name):
+    csv_reader = stim.StimCSVReader()
 
-def segment(block):
-    """Convert a block of ephys data into segments of singing
+    # Read all of the metadata and trial data
+    csv_reader.read(pyoperant_file, root_dir=stim_dir)
 
-    The data starts with one segment and two analog signals:
-        * 16 channel neural data
-        * 2 channel microphone data
+    # Write sounds to a neosound database
+    db_path = os.path.join(stim_dir, db_name)
+    csv_reader.write(db_path)
+
+    return sound_manager.SoundManager(HDF5Store, db_path)
+
+
+def generate_stim_dicts(digital_signals, sound_db):
+    """Generate segment data from digital signal data and sound (stim) database
+
+    Args:
+        digital_signals (neo.core.Events)
+        sound_db (neosound.sound_store.HDF5Store)
+    
+    Returns:
+        list of dicts: List of segment information
+            Each element is a dict defining segment start and end,
+            and metadata to include in Segment annotations
+            See docstring for audio_segment.segment() for required fields
     """
-    fullSeg = block.segments[0]
-    sound_recording = fullSeg.analogsignals[1]
-    norm_sound = sound_recording / np.max(sound_recording)
+    sample_rate = digital_signals.annotations["sampling_rate"]
+    on_times = np.round(digital_signals.times * sample_rate).astype("int")
 
+    digital_codes = import_multielectrode.convert_digital_to_metadata(on_times)
+
+    stim_dicts = []
+
+    for trial_id, (start_time, metadata) in enumerate(digital_codes):
+        start_time = float(start_time) / sample_rate
+        trial = metadata.get("trial", trial_id + 1)
+
+        stim_id = sound_db.filter_ids(index=trial)[0]
+        duration = sound_db.get_annotations(stim_id)["duration"]
+
+        metadata = sound_db.get_metadata(stim_id)
+        annotations = sound_db.get_annotations(stim_id)
+
+        stim_dicts.append({
+            "name": "playback_{}".format(annotations["emitter"]),
+            "description": "Created by kevin",
+            "sound_type": "playback",
+            "vocalization_type": annotations.get("callid", "UV"),
+            "vocalizer": annotations.get("source"),  # need a helper to make this more specific
+            "playback_file": annotations.get("original_filename"),
+            "start_time": start_time.rescale(pq.s),
+            "duration": duration * pq.s
+        })
+
+    return stim_dicts
+
+
+def generate_sound_dicts(block):
+    """Generate segment data by detecting periods acoustic activity
+
+    Args:
+        block (neo.core.Block)
+    
+    Returns:
+        list of dicts: List of segment information
+            Each element is a dict defining segment start and end,
+            and metadata to include in Segment annotations
+            See docstring for audio_segment.segment() for required fields
+    """
+    main_segment = block.segments[0]
     # Find periods of vocal output
     # Modify so that it does not include playback...
 
-    sound_recording = fullSeg.analogsignals[1]
+    sound_recording = main_segment.analogsignals[1]
     norm_sound = sound_recording / np.max(sound_recording)
     vocal_periods, _ = autodetect.find_vocal_periods(norm_sound[:, 0], fuse_duration=0.2)
-    vocal_periods = vocal_periods[1:]
-    # FIXME: negative index possible on first one
+    vocal_periods = vocal_periods[1:]  # FIXME: negative index possible on first one
 
     # Find periods of song withing vocal periods
     birdsong_points = autodetect.classify_birdsong(
@@ -46,71 +103,112 @@ def segment(block):
             model=config.SONG_CLASSIFIER_PARAMS)
     song_points = vocal_periods[birdsong_points == 'birdsong']
 
+        '''
+                name - {sound_type}_{vocalizer}_index
+                description - Created by <file.py> + hashcode of file
+                file_origin - original rhd file  (this could come from the block itself already though?)
+                sound_type - playback, live, or silence
+                vocalization_type - So, Te, DC, UV (Song, Tet, Distance Call, Unknown Vocalization)
+                vocalizer - self, tutor, mom, sister, con_male, con_female
+                playback_file - stimulus id?
+                start_time (pq.Quantity) - start time of segment
+                duration (pq.Quantity) - duration of segment
+
+        '''
+
     # Classify songs into tutor/tutee based on amplitude.
     student_teacher_dict = autodetect.separate_song_sources(norm_sound, song_points)[0]
 
-    # Loop through channels and delete links to analog signals
+    seg_dicts = []
+    for emitter in ["student", "tutor"]:
+        intervals = student_teacher_dict[emitter]
+        for i, timevals in enumerate(intervals):
+            seg_dicts.append({
+                "name": "live_{}".format(emitter),
+                "description": "Created by kevin",
+                "sound_type": "live",
+                "vocalization_type": "So",  # TODO: assuming in the future we will be classifying these vocal periods?
+                "vocalizer": emitter,  # need a helper to make this more specific
+                "playback_file": None,
+                "start_time": timevals[0]
+                "duration": timevals[1] - timevals[0]
+            })
+
+    return seg_dicts
+
+
+def segment(block, segment_dicts):
+    """Segment a block in-place
+
+    Args:
+        block (neo.core.Block):
+            The original neo block to be segmented
+        segment_dicts (list of dict): List of segment information
+            Each element is a dict defining segment start and end,
+            and metadata to include in Segment annotations
+            Each dict requires the following keys:
+                name - {sound_type}_{vocalizer}_index
+                description - Created by <file.py> + hashcode of file
+                file_origin - original rhd file  (this could come from the block itself already though?)
+                sound_type - playback, live, or silence
+                vocalization_type - So, Te, DC, UV (Song, Tet, Distance Call, Unknown Vocalization)
+                vocalizer - self, tutor, mom, sister, con_male, con_female
+                playback_file - stimulus id?
+                start_time (pq.Quantity) - start time of segment
+                duration (pq.Quantity) - duration of segment
+    
+    Returns:
+        neo.core.Block: The original block, modified with new segments
+    """
+    main_segment = block.segments[0]
+
+    # Remove the link to main analogsignal from the Amplifier and Board ADC channel indexes
     for ci in block.channel_indexes:
         if ci.name == 'Amplifier':
             ci.analogsignals = []       
         if ci.name == 'ADC':
             ci.analogsignals = []
 
-    # Loop through all epochs
-    j = 0   # j will  be used as an index for trials/segments
-    for k in ['student', 'tutor']:
-        intervals = student_teacher_dict[k]
-        for i, timevals in enumerate(intervals):
-            newSeg = Segment(
-                    name='%s_song_%d' % (k,i),
-                    description=k+'_song',
-                    file_origin=fullSeg.file_origin,
-                    file_datetime=fullSeg.file_datetime,
-                    rec_datetime=fullSeg.rec_datetime,
-                    index=j)
-            newSeg.annotate(**fullSeg.annotations)
-            j += 1
-            
-            # Take a time slice of a segment
-            start = timevals[0]
-            duration = timevals[1] - timevals[0]
-            for sig in fullSeg.analogsignals:
-                if sig.name not in ["Amplifier", "Board ADC"]:
-                    continue
+    if len(block.segments) > 1:
+        raise Exception("This block already has more than one segment. What are you doing?")
 
-                startTime = start / sig.sampling_rate
-                durationTime = duration/sig.sampling_rate
+    for trial_id, segment_dict in enumerate(segment_dicts):
+        start_time = segment_dict["start_time"]
+        duration = segment_dict["duration"]
 
-                print "startTime", startTime
-                print "tbefore", config.PAD_SONG_BEFORE
-                print "durationTime", durationTime
-                print "tafter", config.PAD_SONG_AFTER
-                print "sig", sig
-                print "sigshape", sig.shape
-                print "sample rate", sig.sampling_rate
+        new_segment = Segment(
+                name="{}_{}".format(segment_dict["name"], trial_id),  # must be unique!
+                description=segment_dict["description"],
+                file_origin=main_segment.file_origin,
+                file_datetime=main_segment.file_datetime,
+                rec_datetime=main_segment.rec_datetime,
+                index=trial_id,
+                times=start_time,
+                sound_type=segment_dict.get("sound_type"),
+                vocalization_type=segment_dict.get("vocalization_type"),
+                vocalizer=segment_dict.get("vocalizer"),
+                playback_file=segment_dict.get("playback_file")
+        )
 
-                sigslice = sig.time_slice(
-                        startTime - config.PAD_SONG_BEFORE * pq.s,
-                        startTime + durationTime + config.PAD_SONG_AFTER * pq.s)
-                sigslice.name = '%s_%d' % (sigslice.name, j)
-                # The code below is clunky but the names are a bit different -
-                # something to fix in rhdio and then here
-                if sigslice.name.startswith('Amplifier') :
-                    for ci in block.channel_indexes:
-                        if ci.name == 'Amplifier':
-                            ci.analogsignals.append(sigslice)
-                elif sigslice.name.startswith('Board ADC'):
-                    for ci in block.channel_indexes:
-                        if ci.name == 'ADC':
-                            ci.analogsignals.append(sigslice)
-                newSeg.analogsignals.append(sigslice)
-                
-            newSeg.create_many_to_one_relationship()
-            block.segments.append(newSeg)
+        for signal in main_segment.analogsignals:
+            sliced_signal = signal.time_slice(
+                start_time - config.PAD_SONG_BEFORE * pq.s,
+                start_time + segment_dict["duration"] + config.PAD_SONG_AFTER * pq.s
+            )
+            for channel_index in block.channel_indexes:
+                # TODO: preserve the channel number (e.g. 8 instead of 0)
+                if channel_index.name in signal.name:  # Amplifier or Board ADC
+                    channel_index.analogsignals.append(sliced_signal)
 
-    # Deleting the first full segment
+            new_segment.analogsignals.append(sliced_signal)
+
+        new_segment.create_many_to_one_relationship()
+        block.segments.append(new_segment)
+
     del block.segments[0]
     block.create_many_to_one_relationship(force=True, recursive=True)
     block.create_many_to_many_relationship()
+    block.create_relationship(force=True, recursive=True, append=True)
 
     return block
+
