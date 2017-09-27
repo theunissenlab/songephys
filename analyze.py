@@ -41,13 +41,8 @@ class SongSamples:
 
         for i in xrange(len(seg.epochs)):
             starts = map(int, seg.epochs[i].times * fs)
-<<<<<<< Updated upstream
-            ends = map(int, seg.epochs[i].durations * fs)
-            periods = map(lambda se: (se[0], se[0]+se[1]), zip(starts, ends))
-=======
             ends = starts + map(int, seg.epochs[i].durations * fs)
             periods = zip(starts, ends)
->>>>>>> Stashed changes
 
             for l, h in periods:
                 lb = max(l - self.buffer, 0)
