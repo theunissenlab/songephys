@@ -1,6 +1,6 @@
 import os
 import quantities as pq
-from zeebeez.tdt2neo import stim
+# from zeebeez.tdt2neo import stim
 from neo.core import Epoch
 from neo.io import RHDIO, NixIO
 # from neo.io.tools import convert_digital_to_metadata
@@ -107,6 +107,7 @@ def write_playback_stim_to_nix(block, stim_file_name):
 
 
 def read_audio_from_nix(experiment_dir, nix_filename):
+    # To be improved, TODO: get lazy loading working.
     h5_filename = os.path.join(experiment_dir, 'NIX', nix_filename)
     
     if not(os.path.isfile(h5_filename)):
