@@ -17,6 +17,7 @@ import sys
 def find_syllables(audio_stream_in, amp_thresh = '', fs=25000, fuse_duration=0.1,  syll_dur = 20.0, sil_dur = 5.0, verbose=False):
  
     """
+    This function is not yet very functional (Bill, 9/2017)
     For segmenting into syllables.
     You should pass amp_thresh, which should come from find_vocal_periods
     The idea of this function is that instead of just a threshold based amplitude sorting into v
@@ -97,7 +98,7 @@ def getBioSoundProperties(soundIn, plotme = False): # FET CHANGES!!!!!!!!, minFu
     # Calculate the power spectrum
     myBioSound.spectrum(f_high=10000)
     # Calculate fundamental and related values
-    myBioSound.fundest(maxFund = 1500, minFund = 100, lowFc = 50, highFc = 6000, minSaliency = 0.5)   
+    myBioSound.fundest(maxFund = 1500, minFund = 500, lowFc = 50, highFc = 6000, minSaliency = 0.5)   
 #    myBioSound.fundest(maxFund, minFund, lowFc = 150, highFc = 6000, minSaliency = 0.5) FET CHANGES!!!!!!!!!!!!!!!1
     meanF1 = np.mean(myBioSound.F1[~np.isnan(myBioSound.F1)])
     meanF2 = np.mean(myBioSound.F2[~np.isnan(myBioSound.F2)])
@@ -270,7 +271,6 @@ def align_spectrograms(spectro_list, freq_bins = [], t_before = 30, t_after = 30
     if freq_bins == []:
         freq_bins = [0,spectro_list[0].shape[0]]
     num_freq_bins = freq_bins[1] - freq_bins[0]
-    spect_len = t_before+t_after
     shifted_spect_array = list()# np.array(np.zeros((spect_len,len(spectro_list))))
     for i, spect in enumerate(spectro_list):
         max_amp_ind = np.argmax(np.sum(spect[freq_bins[0]:freq_bins[1],:], axis = 0)) # find point of maximum amplitude
@@ -293,7 +293,7 @@ def align_spectrograms(spectro_list, freq_bins = [], t_before = 30, t_after = 30
     print 'returning shifted spectogram array'    
     return shifted_spect_array
 
-def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=7000, num_pcs_to_save=50, spect_pca_filename = "/auto/tdrive/billewood/intan data/LbY6074/spect_pca_combined.pkl", return_big_df=0, pca_model=""):
+def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=7000, num_pcs_to_save=50, spect_pca_filename = "/auto/tdrive/billewood/intan data/LbY6074/spect_pca_combined.pkl", return_big_df=0, pca_model="", lowpass_thresh=4800, tutor_mic=0):
     """
 
         Returns a pandas database of sound properties useful for sorting and analyzing vocalizations.
@@ -316,6 +316,8 @@ def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=700
     
     # make a pandas DataFrame with biousound properties of all syllables/vocalizations
     print "Calculating biosound qualities and populating a database, this may take a while."
+    annotated_pts, pt_diffs, std_idx = separate_song_sources(audio_streams, points, fs, tutor_mic)
+
     for i, pt in enumerate(points):
         #print "points: ", points
         if i == 0:
@@ -323,9 +325,11 @@ def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=700
         elif np.mod(i,40) == 0:
             print('..',i)
         else: sys.stdout.write('..'+str(i))
-
         l,h = pt
-        new_biosound, fpsd, psd, freqvar, f_freqvar, spectro, ampenv = getBioSoundProperties(signal[l:h,0])
+        if i in annotated_pts['tutor']:
+            sound = lowpass_filter(signal[l:h,tutor_mic], fs, lowpass_thresh)
+            sound = highpass_filter(sound, fs, 300)
+        new_biosound, fpsd, psd, freqvar, f_freqvar, spectro, ampenv = getBioSoundProperties(sound)
         new_df_data.append(new_biosound)
         spectro_list.append(spectro)
         ampenvs.append(ampenv)
@@ -390,7 +394,6 @@ def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=700
       
     #print "Finished calculating biosound properties, calculating vocalizer and mic_diff."      
     # Add a column with the amplitude ratio of the mics and a putative identify of caller.
-    annotated_pts, pt_diffs, std_idx = separate_song_sources(audio_streams, points, fs)
     df['segment start and stop'] = list(points)
     df['mic_diff'] = pt_diffs
     df['vocalizer'] = "tutor"
@@ -620,8 +623,8 @@ def separate_song_sources(audio_streams, points, fs=25000, tutor_mic=0):
     streams_filtered_env = np.zeros(np.shape(audio_streams))
     streams_filtered_env[:, 0] = highpass_filter(np.squeeze(audio_streams[:, 0]), fs, 2000)
     streams_filtered_env[:, 1] = highpass_filter(np.squeeze(audio_streams[:, 1]), fs, 2000)
-    streams_filtered_env[:, 0] = np.abs(lowpass_filter(streams_filtered_env[:, 0], fs, 5000))
-    streams_filtered_env[:, 1] = np.abs(lowpass_filter(streams_filtered_env[:, 1], fs, 5000))
+    streams_filtered_env[:, 0] = np.abs(lowpass_filter(streams_filtered_env[:, 0], fs, 4800))
+    streams_filtered_env[:, 1] = np.abs(lowpass_filter(streams_filtered_env[:, 1], fs, 4800))
     streams_filtered_env[:, 0] = lowpass_filter(streams_filtered_env[:, 0], fs, 100)
     streams_filtered_env[:, 1] = lowpass_filter(streams_filtered_env[:, 1], fs, 100)
 
