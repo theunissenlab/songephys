@@ -75,12 +75,16 @@ def generate_stim_dicts(digital_signals, sound_db):
     return stim_dicts
 
 
-def generate_sound_dicts(block):
+def generate_live_vocalization_dicts(block, df):
     """Generate segment data by detecting periods acoustic activity
 
     Args:
-        block (neo.core.Block)
-    
+        -block (RHD)
+        -df -a pandas dataframe which is produced upstream, mostly by autodetect.populate_dataframe
+            -contains:
+                -vocalization start and stop times : df.columns[-3]
+                -vocalizer  :                        df.columns[-2]
+                -vocal_category  :                   df.columns[-1]
     Returns:
         list of dicts: List of segment information
             Each element is a dict defining segment start and end,
@@ -88,20 +92,14 @@ def generate_sound_dicts(block):
             See docstring for audio_segment.segment() for required fields
     """
     main_segment = block.segments[0]
-    # Find periods of vocal output
+    vocal_periods = df.columns[-3]
+    vocalizer = df.columns[-2]
+    vocal_category = df.columns[-1]
+    
     # Modify so that it does not include playback...
 
     sound_recording = main_segment.analogsignals[1]
     norm_sound = sound_recording / np.max(sound_recording)
-    vocal_periods, _ = autodetect.find_vocal_periods(norm_sound[:, 0], fuse_duration=0.2)
-    vocal_periods = vocal_periods[1:]  # FIXME: negative index possible on first one
-
-    # Find periods of song withing vocal periods
-    birdsong_points = autodetect.classify_birdsong(
-            norm_sound[:, 0],
-            vocal_periods,
-            model=config.SONG_CLASSIFIER_PARAMS)
-    song_points = vocal_periods[birdsong_points == 'birdsong']
 
         '''
                 name - {sound_type}_{vocalizer}_index
@@ -115,10 +113,12 @@ def generate_sound_dicts(block):
                 duration (pq.Quantity) - duration of segment
 
         '''
-
-    # Classify songs into tutor/tutee based on amplitude.
-    student_teacher_dict = autodetect.separate_song_sources(norm_sound, song_points)[0]
-
+    for vocalization in ["DC","So","Te"]:
+        intervals = vocal_category[vocalization]
+        for i, timevals in enumerate(intervals):
+            
+            
+            
     seg_dicts = []
     for emitter in ["student", "tutor"]:
         intervals = student_teacher_dict[emitter]
