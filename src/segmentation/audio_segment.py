@@ -75,7 +75,7 @@ def generate_stim_dicts(digital_signals, sound_db):
     return stim_dicts
 
 
-def generate_live_vocalization_dicts(block, df):
+def generate_live_vocalization_dicts(df):
     """Generate segment data by detecting periods acoustic activity
 
     Args:
@@ -91,49 +91,23 @@ def generate_live_vocalization_dicts(block, df):
             and metadata to include in Segment annotations
             See docstring for audio_segment.segment() for required fields
     """
-    main_segment = block.segments[0]
     vocal_periods = df.columns[-3]
     vocalizer = df.columns[-2]
     vocal_category = df.columns[-1]
-    
-    # Modify so that it does not include playback...
 
-    sound_recording = main_segment.analogsignals[1]
-    norm_sound = sound_recording / np.max(sound_recording)
-
-        '''
-                name - {sound_type}_{vocalizer}_index
-                description - Created by <file.py> + hashcode of file
-                file_origin - original rhd file  (this could come from the block itself already though?)
-                sound_type - playback, live, or silence
-                vocalization_type - So, Te, DC, UV (Song, Tet, Distance Call, Unknown Vocalization)
-                vocalizer - self, tutor, mom, sister, con_male, con_female
-                playback_file - stimulus id?
-                start_time (pq.Quantity) - start time of segment
-                duration (pq.Quantity) - duration of segment
-
-        '''
-    for vocalization in ["DC","So","Te"]:
-        intervals = vocal_category[vocalization]
-        for i, timevals in enumerate(intervals):
-            
-            
-            
     seg_dicts = []
-    for emitter in ["student", "tutor"]:
-        intervals = student_teacher_dict[emitter]
-        for i, timevals in enumerate(intervals):
-            seg_dicts.append({
-                "name": "live_{}".format(emitter),
-                "description": "Created by kevin",
-                "sound_type": "live",
-                "vocalization_type": "So",  # TODO: assuming in the future we will be classifying these vocal periods?
-                "vocalizer": emitter,  # need a helper to make this more specific
-                "playback_file": None,
-                "start_time": timevals[0]
-                "duration": timevals[1] - timevals[0]
-            })
-
+    for (start_time, stop_time), emitter, category in zip(vocal_periods, vocalizer, vocal_category):
+        seg_dicts.append({
+            "name": "live_{}".format(emitter),
+            "description": "Created by kevin",
+            "sound_type": "live",
+            "vocalization_type": category,
+            "vocalizer": emitter,
+            "playback_file": None,
+            "start_time": start_time
+            "duration": stop_time - start_time
+        })
+            
     return seg_dicts
 
 
