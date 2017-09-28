@@ -82,7 +82,7 @@ def generate_live_vocalization_dicts(df):
         -block (RHD)
         -df -a pandas dataframe which is produced upstream, mostly by autodetect.populate_dataframe
             -contains:
-                -vocalization start and stop times : df.columns[-3]
+                -vocalization start and stop times : df.columns[-3]  (as pq.Quantity tuple)
                 -vocalizer  :                        df.columns[-2]
                 -vocal_category  :                   df.columns[-1]
     Returns:
@@ -91,12 +91,13 @@ def generate_live_vocalization_dicts(df):
             and metadata to include in Segment annotations
             See docstring for audio_segment.segment() for required fields
     """
-    vocal_periods = df.columns[-3]
-    vocalizer = df.columns[-2]
-    vocal_category = df.columns[-1]
+    vocal_periods = df.iloc[:, -3].values
+    vocalizer = df.iloc[:, -2].values
+    vocal_category = df.iloc[:, -1].values
 
     seg_dicts = []
     for (start_time, stop_time), emitter, category in zip(vocal_periods, vocalizer, vocal_category):
+        print start_time, stop_time
         seg_dicts.append({
             "name": "live_{}".format(emitter),
             "description": "Created by kevin",
@@ -104,7 +105,7 @@ def generate_live_vocalization_dicts(df):
             "vocalization_type": category,
             "vocalizer": emitter,
             "playback_file": None,
-            "start_time": start_time
+            "start_time": start_time,
             "duration": stop_time - start_time
         })
             
