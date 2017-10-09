@@ -68,6 +68,7 @@ def generate_stim_dicts(digital_signals, sound_db):
             "vocalization_type": annotations.get("callid", "UV"),
             "vocalizer": annotations.get("source"),  # need a helper to make this more specific
             "playback_file": annotations.get("original_filename"),
+            "stim_id": stim_id,
             "start_time": start_time.rescale(pq.s),
             "duration": duration * pq.s
         })
