@@ -27,10 +27,9 @@ def collect_waveforms(spiketrains, threshold=0, force_single_peak=False):
     waveforms = []
     times = []
 
-    wf_peak_idx = (spiketrains[0].waveforms.shape[1] // 2) - config.WF_START
-
     for spiketrain in spiketrains:
         if len(spiketrain.waveforms):
+            wf_peak_idx = (spiketrain.waveforms.shape[1] // 2) - config.WF_START
             if force_single_peak:
                 # array that selects waveforms whose peak value is at the array center
                 mins = np.argmin(spiketrain.waveforms[:, config.WF_SLICE, 0], axis=1) == wf_peak_idx
@@ -38,12 +37,13 @@ def collect_waveforms(spiketrains, threshold=0, force_single_peak=False):
                 mins = np.ones(len(spiketrain.waveforms)).astype(bool)
 
             # this lets us apply a secondary threshold
+            # FIXME: it seems like there are some cases where spiketrain.waveforms is 2D?
             midpoints = spiketrain.waveforms[:, config.WF_SLICE, 0][:, wf_peak_idx]
 
             waveforms += list(spiketrain.waveforms[(midpoints < threshold) & (mins)])
             times += list(spiketrain.times[(midpoints < threshold) & (mins)])
 
-    return np.array(waveforms)[:, :, 0] if len(waveforms) else np.array([]), np.array(times)
+    return np.array(waveforms)[:, :, 0] if len(waveforms) else np.array(waveforms), np.array(times)
 
 
 def sort_spikes_on_unit(unsorted_unit, threshold, model, unit_clusters):
@@ -64,19 +64,25 @@ def sort_spikes_on_unit(unsorted_unit, threshold, model, unit_clusters):
     spike_times (list)
     """
     overall_spike_times = []
+    overall_spike_waveforms = []
+
     for i, st in enumerate(unsorted_unit.spiketrains):
         spike_times = []
+        spike_waveforms = []
         waveforms, times = collect_waveforms([st], threshold=threshold, force_single_peak=True)
         if not len(waveforms):
             for _ in unit_clusters:
                 spike_times.append([])
+                spike_waveforms.append([])
         else:
             waveforms = waveforms[:, config.WF_SLICE]
             labels = model.predict(waveforms)
             for unit_group in unit_clusters:
                 mapped_labels = np.array([True if l in unit_group else False for l in labels])
                 spike_times.append(times[mapped_labels])
+                spike_waveforms.append(waveforms[mapped_labels])
 
         overall_spike_times.append(spike_times)
+        overall_spike_waveforms.append(spike_waveforms)
 
-    return overall_spike_times
+    return overall_spike_times, overall_spike_waveforms

@@ -17,8 +17,8 @@ SONG_CLASSIFIER_PARAMS = os.path.join(
 )
 
 ### Audio segmentation params ###
-PAD_SONG_BEFORE = 0.2   # Time to pad detected song segments (in seconds)
-PAD_SONG_AFTER = 0.2
+PAD_SONG_BEFORE = 1.0   # Time to pad detected song segments (in seconds)
+PAD_SONG_AFTER = 1.0
 
 
 ### spike sorting params ###
@@ -28,6 +28,7 @@ WF_START = 10           # start index to slice waveforms at
 WF_STOP = 50            # stop index to slice waveforms at
 WF_SIZE = WF_STOP - WF_START
 WF_SLICE = slice(WF_START, WF_STOP)
+
 
 ### web views ###
 

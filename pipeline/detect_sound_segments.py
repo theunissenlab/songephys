@@ -10,7 +10,8 @@ from rhd2nix import Rhd2Nix
 from segmentation.audio_segment import (
     segment,
     generate_stim_dicts,
-    generate_sound_dicts,
+    generate_live_vocalization_dicts,
+    merge_segments,
     save_stimulus_database
 )
 
@@ -50,12 +51,17 @@ class DetectSoundSegments(luigi.Task):
                 "{}_db".format(session_basename(self.session_dir)))
         digital_signals = block.segments[0].events[0]
 
-        new_block = segment(block, generate_stim_dicts(digital_signals, sm.database))
+        playback_dicts = generate_stim_dicts(digital_signals, sm.database)
 
-        # block = segment(block)
+        # TODO: need to generate dataframe or input to live vocalization detector
+        # live_dicts = generate_live_vocalization_dicts(df)
+        # segment_dicts = merge_segments(playback_dicts, live_dict)
+        segment_dicts = playback_dicts
+
+        new_block = segment(block, segment_dicts)
 
         with open(self.output().path, "wb") as output_file:
-           pickle.dump(block, output_file)
+           pickle.dump(new_block, output_file)
 
 
 class ValidateSongs(luigi.Task):

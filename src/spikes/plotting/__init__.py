@@ -5,9 +5,40 @@ import numpy as np
 import raster
 
 
-def plot_spikes_with_timeseries(t, spike_times, y, t_start, t_stop, ax, spike_alpha=0.5, y_alpha=None):
-    """
-    y can be a 2d array of multiple timeseries to plot
+def plot_spikes_with_timeseries(
+        t,
+        spike_times,
+        y,
+        t_start,
+        t_stop,
+        ax,
+        spike_alpha=0.5,
+        y_alpha=None
+    ):
+    """Plot spike rasters on top of timeseries data
+
+    Args:
+        t (np.ndarray, n_samples):
+            time array
+        spike_times (list of np.ndarray)
+            Arrays of spike times for each unit to display
+            (e.g. multiple units on one trial, or repeated trials of a single unit)
+        y (np.ndarray, n_signals x n_samples):
+            timeseries data
+        t_start (float):
+            time in seconds of xmin
+        t_stop (float):
+            time in seconds of xmax
+        ax (matplotlib.pyplot.axis)
+            matplotlib.axes to draw on
+        spike_alpha (float, default=1.0)
+            Opacity of spike raster lines
+        y_alpha (list of floats, len=n_signals)
+            List of opacity values for each timeseries signal
+
+    Returns:
+        (raster_axis, timeseries_axis)
+            The two axes 
     """
     axes = [ax, ax.twinx()]
 
@@ -21,6 +52,7 @@ def plot_spikes_with_timeseries(t, spike_times, y, t_start, t_stop, ax, spike_al
 
     axes[0].set_xlim(t_start, t_stop)
     raster.plot(spike_times, min_time=t_start, max_time=t_stop, alpha=spike_alpha, ax=axes[1])
+    return axes
 
 
 def plot_waveform_overlay(waveforms, labels=None, colors=None, light_colors=None, alpha=1.0):

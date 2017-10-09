@@ -179,9 +179,11 @@ class WriteSorted(luigi.Task):
             print unit
         
             data = np.load(self.input()[elec_id + 1].path)[()]
-            results.append(sort_spikes_on_unit(unit, -50, data["model"], data["units"]))
+            new_times, new_wfs = sort_spikes_on_unit(unit, -50, data["model"], data["units"])
+            results.append((new_times, new_wfs))
+        results = zip(*results)
 
-        new_block = write_neo(block, results)
+        new_block = write_neo(block, *results)
         new_block.create_relationship(force=True, append=True, recursive=True)
 
         with open(self.output().path, "wb") as output_file:

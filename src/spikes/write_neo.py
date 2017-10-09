@@ -3,7 +3,7 @@ import numpy as np
 from neo.core import SpikeTrain, Unit, Segment, Block, ChannelIndex
 
 
-def write_neo(old_block, new_spike_times):
+def write_neo(old_block, new_spike_times, new_spike_waveforms):
     """Create a new neo.core.Block with new spiketrain data
 
     Params
@@ -25,7 +25,16 @@ def write_neo(old_block, new_spike_times):
                        for channel_index in old_block.channel_indexes
                        if channel_index.name.startswith("Amp Elec")]
 
-    new_segments = [Segment(name=seg.name, index=seg.index) for seg in old_block.segments]
+    new_segments = [
+            Segment(
+                name=seg.name,
+                description=seg.description,
+                file_origin=seg.file_origin,
+                file_datetime=seg.file_datetime,
+                rec_datetime=seg.rec_datetime,
+                index=seg.index,
+                **seg.annotations
+            ) for seg in old_block.segments]
     new_channel_index_units = dict((i, []) for i in range(len(channel_indexes)))
 
     new_audio_channel_index = ChannelIndex(name=old_block.channel_indexes[0].name, index=100)
@@ -37,8 +46,8 @@ def write_neo(old_block, new_spike_times):
         new_audio_channel_index.analogsignals.append(old_signal)
         new_segments[i].analogsignals.append(old_signal)
 
-    for electrode_idx, (spike_times_list, old_channel_index) in enumerate(zip(new_spike_times, channel_indexes)):
-
+    iterator = enumerate(zip(new_spike_times, new_spike_waveforms, channel_indexes))
+    for electrode_idx, (spike_times_list, spike_waveforms_list, old_channel_index) in iterator:
         if not spike_times_list:
             continue
 
@@ -50,12 +59,12 @@ def write_neo(old_block, new_spike_times):
             new_unit = Unit(name="e{}u{}".format(electrode_idx, new_unit_idx))
 
             for segment_idx, old_spiketrain in enumerate(old_unsorted_unit.spiketrains):
-
                 spike_train = SpikeTrain(
                         spike_times_list[segment_idx][new_unit_idx],
                         t_start=old_spiketrain.t_start,
                         t_stop=old_spiketrain.t_stop,
                         units=old_spiketrain.units,
+                        waveforms=np.array(spike_waveforms_list[segment_idx][new_unit_idx]),
                         # uhhh... how can we get the waveforms at this point?
                         # sampling_rate=old_spiketrain.sampling_rate
                 )
