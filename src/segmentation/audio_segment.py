@@ -63,7 +63,7 @@ def generate_stim_dicts(digital_signals, sound_db):
 
         stim_dicts.append({
             "name": "playback_{}".format(annotations["emitter"]),
-            "description": "Created by kevin",
+            "description": "Created by segmentation.audio_segment.generate_stim_dicts",
             "sound_type": "playback",
             "vocalization_type": annotations.get("callid", "UV"),
             "vocalizer": annotations.get("source"),  # need a helper to make this more specific
@@ -76,8 +76,38 @@ def generate_stim_dicts(digital_signals, sound_db):
     return stim_dicts
 
 
+def generate_vocal_periods_dicts(audio, sampling_rate):
+    """Generate segment data by detecting periods of acoustic activity
+
+    Does not include any classification/categorization step
+    """
+    vocal_periods, _ = autodetect.find_vocal_periods(
+        audio,
+        fs=sampling_rate,
+        fuse_duration=config.AUTODETECT_FUSE_DURATION,
+        shortest_duration=config.AUTODETECT_SHORTEST_DURATION
+    )
+
+    seg_dicts = []
+    for start_time, stop_time in vocal_periods:
+        start_time = float(start_time) / sampling_rate
+        stop_time = float(stop_time) / sampling_rate
+        seg_dicts.append({
+            "name": "live_unknown",
+            "description": "Created by segmentation.audio_segment.generate_vocal_periods_dicts",
+            "sound_type": "live",
+            "vocalization_type": "unknown",
+            "vocalizer": "unknown",
+            "playback_file": None,
+            "start_time": start_time,
+            "duration": stop_time - start_time
+        })
+
+    return seg_dicts
+
+
 def generate_live_vocalization_dicts(df):
-    """Generate segment data by detecting periods acoustic activity
+    """Generate segment data by detecting periods of CLASSIFIED acoustic activity
 
     Args:
         -block (RHD)
@@ -100,7 +130,7 @@ def generate_live_vocalization_dicts(df):
     for (start_time, stop_time), emitter, category in zip(vocal_periods, vocalizer, vocal_category):
         seg_dicts.append({
             "name": "live_{}".format(emitter),
-            "description": "Created by kevin",
+            "description": "Created by segmentation.audio_segment.generate_live_vocalization_dicts",
             "sound_type": "live",
             "vocalization_type": category,
             "vocalizer": emitter,

@@ -145,7 +145,7 @@ class RunManualClustering(luigi.Task):
         in_tsne, in_waveforms = self.input()
 
         app = create_server(in_waveforms[self.electrode].path, in_tsne.path, self.output().path)
-        webbrowser.open_new("http://0.0.0.0:{}/".format(8100 + self.electrode))
+        webbrowser.open_new("http://0.0.0.0:{}/".format(8500 + self.electrode))
         app.run(host="0.0.0.0", port=8500 + self.electrode, debug=False)
 
 

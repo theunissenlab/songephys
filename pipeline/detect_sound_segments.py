@@ -11,6 +11,7 @@ from segmentation.audio_segment import (
     segment,
     generate_stim_dicts,
     generate_live_vocalization_dicts,
+    generate_vocal_periods_dicts,
     merge_segments,
     save_stimulus_database
 )
@@ -38,30 +39,39 @@ class DetectSoundSegments(luigi.Task):
 
         input_directory = os.path.join(self.session_dir, "raw")
         csv_files = glob.glob(os.path.join(input_directory, "*.csv"))
-        assert len(csv_files) == 1
 
-        # FIXME dont hardcode stim dir
-        stim_dir = os.path.join(self.session_dir, "stimuli", "TutFamBos")
+        sound = block.segments[0].analogsignals[0].as_array()[:, 0]
 
-        # locate pyoperant file
-        pyoperant_file = csv_files[0]
-
-        sm = save_stimulus_database(pyoperant_file,
-                stim_dir,
-                "{}_db".format(session_basename(self.session_dir)))
-        digital_signals = block.segments[0].events[0]
-
-        playback_dicts = generate_stim_dicts(digital_signals, sm.database)
-
-        # TODO: need to generate dataframe or input to live vocalization detector
+        # TODO: will at some point want live dicts to be categorized/labeled
         # live_dicts = generate_live_vocalization_dicts(df)
-        # segment_dicts = merge_segments(playback_dicts, live_dict)
-        segment_dicts = playback_dicts
+        live_dicts = generate_vocal_periods_dicts(sound)
+
+        if len(csv_files) == 0:
+            # then there are no playbacks
+            segment_dicts = live_dicts
+        elif len(csv_files) == 1:
+            # FIXME dont hardcode stim dir
+            stim_dir = os.path.join(self.session_dir, "stimuli", "TutFamBos")
+
+            # locate pyoperant file
+            pyoperant_file = csv_files[0]
+
+            # FIXME: stimulus database location must be an output of this task!
+            sm = save_stimulus_database(pyoperant_file,
+                    stim_dir,
+                    "{}_db".format(session_basename(self.session_dir)))
+            digital_signals = block.segments[0].events[0]
+
+            playback_dicts = generate_stim_dicts(digital_signals, sm.database)
+            segment_dicts = merge_segments(playback_dicts, live_dicts)
+        else:
+            # to handle multiple, will need to modify generate_stim_dicts??
+            raise Exception("The code is not equipped for more than one playback file yet")
 
         new_block = segment(block, segment_dicts)
 
         with open(self.output().path, "wb") as output_file:
-           pickle.dump(new_block, output_file)
+            pickle.dump(new_block, output_file)
 
 
 class ValidateSongs(luigi.Task):
