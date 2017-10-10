@@ -14,6 +14,7 @@ from scipy.stats import zscore
 from scipy.signal import decimate
 import sys
 
+
 def find_syllables(audio_stream_in, amp_thresh = '', fs=25000, fuse_duration=0.1,  syll_dur = 20.0, sil_dur = 5.0, verbose=False):
  
     """
@@ -83,6 +84,7 @@ def find_syllables(audio_stream_in, amp_thresh = '', fs=25000, fuse_duration=0.1
             
     return syllables
 
+
 def getBioSoundProperties(soundIn, plotme = False): # FET CHANGES!!!!!!!!, minFund = 500, maxFund = 3000):
     ## Returns biosoudn properties from a chunk of sound.
     soundIn = soundIn - np.mean(soundIn,axis=0) # correct for DC offsets if they exist.
@@ -137,6 +139,7 @@ def getBioSoundProperties(soundIn, plotme = False): # FET CHANGES!!!!!!!!, minFu
     ampenv = myBioSound.amp # biosound downsamples to 1000Hz always
     return vocSelData, fpsd, psd, freqvar, f_freqvar, spectro, ampenv
     
+
 def reduce_dimensions_pca(df, fs, pca_model="", pca_columns="", zscore_columns=""):
     """
         Takes a pandas dataframe created with autodetect.populate_dataframe.
