@@ -99,8 +99,8 @@ def generate_vocal_periods_dicts(audio, sampling_rate):
             "vocalization_type": "unknown",
             "vocalizer": "unknown",
             "playback_file": None,
-            "start_time": start_time,
-            "duration": stop_time - start_time
+            "start_time": start_time * pq.s,
+            "duration": (stop_time - start_time) * pq.s
         })
 
     return seg_dicts
@@ -153,17 +153,17 @@ def merge_segments(segments_1, segments_2, dedupe=True):
         for seg in segments_2:
             # there are three conditions for overlap:
             # Case 1: my start time occurs between your start and end times
-            start_diffs = seg["start_time"] - seg_1_starts
+            start_diffs = seg["start_time"].item() - seg_1_starts
             start_overlaps = (start_diffs > 0) & (start_diffs < seg_1_durations)
 
             # Case 2: my end time occurs between your start and end times
-            end_diffs = seg["start_time"] + seg["duration"] - seg_1_starts
+            end_diffs = seg["start_time"].item() + seg["duration"].item() - seg_1_starts
             end_overlaps = (end_diffs > 0) & (end_diffs < seg_1_durations)
 
             # Case 3: my start time occurs before your start time and my end time occurs after your end time
             encompasses = (
-                    (seg["start_time"] < seg_1_starts) &
-                    (seg["start_time"] + seg["duration"] - seg_1_starts > seg_1_durations)
+                    (seg["start_time"].item() < seg_1_starts) &
+                    (seg["start_time"].item() + seg["duration"].item() - seg_1_starts > seg_1_durations)
             )
 
             if np.any(start_overlaps + end_overlaps + encompasses):

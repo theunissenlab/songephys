@@ -87,6 +87,8 @@ class SegmentViewer(object):
         self.t_stop = self.seg.t_stop.item()
         self.t = np.linspace(self.t_start, self.t_stop, len(self.sound))
 
+        self._spectrogram_cache = {}
+
     def spectrogram(self, source="playback"):
         """Plot spectrogram of segment audio
 
@@ -97,8 +99,11 @@ class SegmentViewer(object):
         """
         if source == "playback" and self.playback_sound is None:
             raise ValueError("This segment does not have playback; must specify source channel")
-        if type(source, int) and source >= self.sound.shape[1]:
+        if isinstance(source, int) and source >= self.sound.shape[1]:
             raise ValueError("This segment only has {} channels".format(self.sound.shape[1]))
+
+        if source in self._spectrogram_cache:
+            return self._spectrogram_cache[source]
 
         if source == "playback":
             sound_source = self.playback_sound
@@ -108,7 +113,7 @@ class SegmentViewer(object):
             sampling_rate = self.sampling_rate
 
         t_spec, f_spec, spec, rms = spectrogram(
-                sound_source - np.mean(sound_source)
+                sound_source - np.mean(sound_source),
                 sampling_rate,
                 1000.0,
                 50.0,
@@ -116,11 +121,14 @@ class SegmentViewer(object):
                 max_freq=10000,
                 nstd=6)
 
-        return t_spec, f_spec, spec, rms
+        result = t_spec, f_spec, spec, rms
+        self._spectrogram_cache[source] = result
+
+        return result
 
     def plot_spectrogram(self, source="playback", ax=None, t_start=0.0):
         t_spec, f_spec, spec, _ = self.spectrogram(source=source)
-        t_spec += t_start
+        t_spec = t_spec + t_start
         plot_spectrogram(t_spec, f_spec, spec, colormap="gray_r", ax=ax, colorbar=False)
 
     def spikes(self):
@@ -162,6 +170,9 @@ class TrialsViewer(object):
         self.n_units = len(self.segments[0].spiketrains)
         self.units = range(self.n_units)
 
+        # FIXME: put this somehwere else
+        self.cut_at = np.min([len(seg_view.binned_spikes()[1]) for seg_view in self.segment_viewers])
+
     def binned_spikes(self):
         """Collect spikes by unit
        
@@ -169,11 +180,11 @@ class TrialsViewer(object):
             np.ndarray: (n_trials, n_units, n_bins)
                 Binary spike array by units for all segments
         """
-        return np.array([seg_view.binned_spikes()[1] for seg_view in self.segment_viewers])
+        return np.array([seg_view.binned_spikes()[1][:self.cut_at] for seg_view in self.segment_viewers])
 
     def t_arr(self):
         """Corresponding time domain array for self.binned_spikes and self.psths"""
-        return self.segment_viewers[0].binned_spikes()[0]
+        return self.segment_viewers[0].binned_spikes()[0][:self.cut_at]
 
     def psths(self, mean=True):
         convolved = conv(self.binned_spikes(), gaussian_convolver, 20.0)
@@ -182,12 +193,12 @@ class TrialsViewer(object):
         else:
             return convolved.mean(axis=0)
 
-    def plot_psth(self, unit, ax=None):
+    def plot_psth(self, unit, ax=None, color="Black"):
         if ax is None:
             ax = plt.gca()
         psths = self.psths(mean=False)[:, :, unit].T
-        ax.plot(self.t_arr(), psths, alpha=0.3, color="Gray")
-        ax.plot(self.t_arr(), np.mean(psths, axis=1), linewidth=2, color="Black")
+        ax.plot(self.t_arr(), psths, alpha=0.05, color=color)
+        ax.plot(self.t_arr(), np.mean(psths, axis=1), linewidth=2, color=color)
 
     def waveforms(self, unit=None):
         wfs = []
