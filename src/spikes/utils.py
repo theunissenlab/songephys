@@ -44,7 +44,7 @@ def bin_spikes(
         min_time = min(row[0] for row in spike_times if len(row))
 
     n_timesteps = n_bins
-    max_time = min_time + (n_timesteps - 1) * dt
+    max_time = min_time + (n_timesteps) * dt
     t_arr = np.linspace(min_time, max_time, n_timesteps)
     dt = (max_time - min_time) / n_timesteps
 

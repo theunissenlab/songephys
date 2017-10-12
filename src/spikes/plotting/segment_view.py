@@ -164,14 +164,34 @@ class TrialsViewer(object):
     >>> trials_viewer.plot_psth(unit=0)
     >>> plt.show()
     """
-    def __init__(self, segments):
+    def __init__(self, segments, offsets=None):
         self.segments = segments
         self.segment_viewers = [SegmentViewer(seg) for seg in self.segments]
         self.n_units = len(self.segments[0].spiketrains)
         self.units = range(self.n_units)
 
+        # FIXME: offsets right now are in s
+        if offsets is None:
+            self.offsets = np.array([0 for _ in segments])
+        else:
+            self.offsets = np.array([int(off * 1000) for off in offsets])
+
         # FIXME: put this somehwere else
         self.cut_at = np.min([len(seg_view.binned_spikes()[1]) for seg_view in self.segment_viewers])
+
+    def _secret_pad(self, x, offset, end_at):
+        if offset > 0:
+            temp = x[offset:end_at+offset]
+            shortness = end_at - len(temp)
+            if shortness:
+                x = np.lib.pad(temp, ((0, shortness), (0, 0)), "constant", constant_values=0)
+            else:
+                x = temp
+        elif offset < 0:
+            temp = x[:end_at+offset]
+            x = np.lib.pad(temp, ((-offset, 0), (0, 0)), "constant", constant_values=0)
+
+        return x
 
     def binned_spikes(self):
         """Collect spikes by unit
@@ -180,25 +200,34 @@ class TrialsViewer(object):
             np.ndarray: (n_trials, n_units, n_bins)
                 Binary spike array by units for all segments
         """
-        return np.array([seg_view.binned_spikes()[1][:self.cut_at] for seg_view in self.segment_viewers])
+        # FIXME: i hope this paddy thing is okay
+        return [
+            self._secret_pad(seg_view.binned_spikes()[1], offset, self.cut_at)
+            for (seg_view, offset)
+            in zip(self.segment_viewers, self.offsets)]
 
     def t_arr(self):
         """Corresponding time domain array for self.binned_spikes and self.psths"""
         return self.segment_viewers[0].binned_spikes()[0][:self.cut_at]
 
     def psths(self, mean=True):
-        convolved = conv(self.binned_spikes(), gaussian_convolver, 20.0)
+        convolved = conv(self.binned_spikes(), gaussian_convolver, 10.0)
         if not mean:
             return convolved
         else:
             return convolved.mean(axis=0)
 
-    def plot_psth(self, unit, ax=None, color="Black"):
+    def plot_psth(self, unit, ax=None, color="Black", t_start=None, alpha=0.1):
         if ax is None:
             ax = plt.gca()
         psths = self.psths(mean=False)[:, :, unit].T
-        ax.plot(self.t_arr(), psths, alpha=0.05, color=color)
-        ax.plot(self.t_arr(), np.mean(psths, axis=1), linewidth=2, color=color)
+
+        if t_start is not None:
+            t_arr = (self.t_arr() - self.t_arr()[0]) + t_start
+        else:
+            t_arr = self.t_arr()
+        ax.plot(t_arr, psths, alpha=alpha, color=color)
+        ax.plot(t_arr, np.mean(psths, axis=1), linewidth=2, color=color)
 
     def waveforms(self, unit=None):
         wfs = []
