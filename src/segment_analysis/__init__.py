@@ -1,9 +1,12 @@
 import numpy as np
 
 from spikes.utils import bin_spikes
+from spikes.psth import conv, exponential_convolver, gaussian_convolver
+
 
 
 class MultiSegment(object):
+
     @classmethod
     def _read_annotations(cls, segments):
         original_annotations = dict(segments[0].annotations)
@@ -41,6 +44,10 @@ class MultiSegment(object):
         self._t_stop = t_stop
         self.set_t_start(self._t_start)
         self.set_t_stop(self._t_stop)
+
+    def filter(self, fn):
+        """Will be a helper to narrow down MultiSegment"""
+        pass
 
     def set_t_start(self, t_start=None):
         self._t_start = t_start
@@ -91,3 +98,19 @@ class MultiSegment(object):
 
         return t_arr, np.vstack(np.array(results)[None])
 
+    def t_arr(self):
+        return self.binarized()[0]
+
+    def psths(self, mean=True, mode="gaussian", *args):
+        """Compute psth spike data"""
+        if mode == "gaussian":
+            convolved = conv(self.binarized()[1].swapaxes(1, 2), gaussian_convolver, *args)
+        elif mode == "exponential":
+            convolved = conv(self.binarized()[1].swapaxes(1, 2), exponential_convolver, *args)
+        elif mode == "kde":
+            raise Exception("Not did this yet")
+
+        if not mean:
+            return convolved
+        else:
+            return convolved.mean(axis=0)

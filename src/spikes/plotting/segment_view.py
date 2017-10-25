@@ -178,11 +178,7 @@ class TrialsViewer(object):
         return self.multisegment.binarized()[0]
 
     def psths(self, mean=True):
-        convolved = conv(self.binarized().swapaxes(1, 2), gaussian_convolver, 10.0)
-        if not mean:
-            return convolved
-        else:
-            return convolved.mean(axis=0)
+        return self.multisegment.psths(mean=mean)
 
     def plot_psth(self, unit, ax=None, color="Black", t_start=None, alpha=0.1):
         if ax is None:
