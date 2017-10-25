@@ -128,9 +128,9 @@ class SegmentViewer(object):
 
         return result
 
-    def plot_spectrogram(self, source="playback", ax=None, t_start=0.0):
+    def plot_spectrogram(self, source="playback", ax=None, zero_point=0.0):
         t_spec, f_spec, spec, _ = self.spectrogram(source=source)
-        t_spec = t_spec + t_start
+        t_spec = t_spec - zero_point
         plot_spectrogram(t_spec, f_spec, spec, colormap="gray_r", ax=ax, colorbar=False)
 
     def spikes(self):
