@@ -8,6 +8,7 @@ from soundsig.sound import spectrogram, plot_spectrogram
 
 import config
 
+from segment_analysis import MultiSegment
 from spikes.utils import bin_spikes
 from spikes.psth import conv, gaussian_convolver
 
@@ -40,7 +41,8 @@ class PlaybacksManager(object):
 
     def get_playback_responses(self, stim_id):
         """Return TrialsViewer helper object for the given playback"""
-        return TrialsViewer(self.filter_segments_by_stim_id(stim_id))
+        multiseg = MultiSegment(self.filter_segments_by_stim_id(stim_id))
+        return TrialsViewer(multiseg)
 
 
 class SegmentViewer(object):
@@ -164,54 +166,19 @@ class TrialsViewer(object):
     >>> trials_viewer.plot_psth(unit=0)
     >>> plt.show()
     """
-    def __init__(self, segments, offsets=None):
-        self.segments = segments
-        self.segment_viewers = [SegmentViewer(seg) for seg in self.segments]
-        self.n_units = len(self.segments[0].spiketrains)
-        self.units = range(self.n_units)
+    def __init__(self, multisegment, offsets=None):
+        self.multisegment = multisegment
+        self.segment_viewers = [SegmentViewer(seg) for seg in self.multisegment.segments]
 
-        # FIXME: offsets right now are in s
-        if offsets is None:
-            self.offsets = np.array([0 for _ in segments])
-        else:
-            self.offsets = np.array([int(off * 1000) for off in offsets])
-
-        # FIXME: put this somehwere else
-        self.cut_at = np.min([len(seg_view.binned_spikes()[1]) for seg_view in self.segment_viewers])
-
-    def _secret_pad(self, x, offset, end_at):
-        if offset > 0:
-            temp = x[offset:end_at+offset]
-            shortness = end_at - len(temp)
-            if shortness:
-                x = np.lib.pad(temp, ((0, shortness), (0, 0)), "constant", constant_values=0)
-            else:
-                x = temp
-        elif offset < 0:
-            temp = x[:end_at+offset]
-            x = np.lib.pad(temp, ((-offset, 0), (0, 0)), "constant", constant_values=0)
-
-        return x
-
-    def binned_spikes(self):
-        """Collect spikes by unit
-       
-        Returns
-            np.ndarray: (n_trials, n_units, n_bins)
-                Binary spike array by units for all segments
-        """
-        # FIXME: i hope this paddy thing is okay
-        return [
-            self._secret_pad(seg_view.binned_spikes()[1], offset, self.cut_at)
-            for (seg_view, offset)
-            in zip(self.segment_viewers, self.offsets)]
+    def binarized(self):
+        return self.multisegment.binarized()[1]
 
     def t_arr(self):
         """Corresponding time domain array for self.binned_spikes and self.psths"""
-        return self.segment_viewers[0].binned_spikes()[0][:self.cut_at]
+        return self.multisegment.binarized()[0]
 
     def psths(self, mean=True):
-        convolved = conv(self.binned_spikes(), gaussian_convolver, 10.0)
+        convolved = conv(self.binarized().swapaxes(1, 2), gaussian_convolver, 10.0)
         if not mean:
             return convolved
         else:
@@ -223,7 +190,7 @@ class TrialsViewer(object):
         psths = self.psths(mean=False)[:, :, unit].T
 
         if t_start is not None:
-            t_arr = (self.t_arr() - self.t_arr()[0]) + t_start
+            t_arr = self.t_arr() + t_start
         else:
             t_arr = self.t_arr()
         ax.plot(t_arr, psths, alpha=alpha, color=color)
@@ -231,11 +198,11 @@ class TrialsViewer(object):
 
     def waveforms(self, unit=None):
         wfs = []
-        units = [unit] if unit is not None else range(self.n_units)
+        units = [unit] if unit is not None else self.multisegment.units
 
         for unit_idx in units:
             unit_wfs = []
-            for seg in self.segments:
+            for seg in self.multisegment.segments:
                 if len(seg.spiketrains[unit_idx].waveforms):
                     unit_wfs += list(seg.spiketrains[unit_idx].waveforms)
             wfs.append(unit_wfs)
