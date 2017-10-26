@@ -1,6 +1,7 @@
 import os
 
 import matplotlib.pyplot as plt
+import neo.core
 import numpy as np
 from scipy.io import wavfile
 
@@ -10,7 +11,6 @@ import config
 
 from segment_analysis import MultiSegment
 from spikes.utils import bin_spikes
-from spikes.psth import conv, gaussian_convolver
 
 
 class PlaybacksManager(object):
@@ -41,8 +41,9 @@ class PlaybacksManager(object):
 
     def get_playback_responses(self, stim_id):
         """Return TrialsViewer helper object for the given playback"""
-        multiseg = MultiSegment(self.filter_segments_by_stim_id(stim_id))
-        return TrialsViewer(multiseg)
+        return MultiSegment(self.filter_segments_by_stim_id(stim_id))
+
+
 
 
 class SegmentViewer(object):
@@ -145,62 +146,3 @@ class SegmentViewer(object):
 
         return t_arr, spikes
 
-
-class TrialsViewer(object):
-    """Helper class for grouping segments together
-
-    Typically you would use this to group trials in response to the same
-    stimulus together (playbacks, similar calls) to compute averages over presentations
-
-    Features include:
-    * Collecting the binned spikes of all units over all trials
-    * Computing psth for units over trials
-    * Viewing all spike waveforms from all units
-    * TODO: automatic alignment functionality (template matching, padding, cutting, etc)...
-        Right now ALL SEGMENTS MUST HAVE THE SAME DURATION
-
-    Example:
-    >>> trials_viewer = TrialsViewer([
-    ...     seg for seg in block.segments if seg.annotations["stim_id"] == <stim_id>
-    ... ])
-    >>> trials_viewer.plot_psth(unit=0)
-    >>> plt.show()
-    """
-    def __init__(self, multisegment, offsets=None):
-        self.multisegment = multisegment
-        self.segment_viewers = [SegmentViewer(seg) for seg in self.multisegment.segments]
-
-    def binarized(self):
-        return self.multisegment.binarized()[1]
-
-    def t_arr(self):
-        """Corresponding time domain array for self.binned_spikes and self.psths"""
-        return self.multisegment.binarized()[0]
-
-    def psths(self, mean=True):
-        return self.multisegment.psths(mean=mean)
-
-    def plot_psth(self, unit, ax=None, color="Black", t_start=None, alpha=0.1):
-        if ax is None:
-            ax = plt.gca()
-        psths = self.psths(mean=False)[:, :, unit].T
-
-        if t_start is not None:
-            t_arr = self.t_arr() + t_start
-        else:
-            t_arr = self.t_arr()
-        ax.plot(t_arr, psths, alpha=alpha, color=color)
-        ax.plot(t_arr, np.mean(psths, axis=1), linewidth=2, color=color)
-
-    def waveforms(self, unit=None):
-        wfs = []
-        units = [unit] if unit is not None else self.multisegment.units
-
-        for unit_idx in units:
-            unit_wfs = []
-            for seg in self.multisegment.segments:
-                if len(seg.spiketrains[unit_idx].waveforms):
-                    unit_wfs += list(seg.spiketrains[unit_idx].waveforms)
-            wfs.append(unit_wfs)
-
-        return np.array(wfs)
