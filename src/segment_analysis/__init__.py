@@ -6,14 +6,36 @@ from soundsig.sound import spectrogram, plot_spectrogram
 
 from spikes.utils import bin_spikes
 from spikes.psth import conv, exponential_convolver, gaussian_convolver
+from spikes.plotting import raster
 
 
-class Plotter(object):
+class MultiSegmentPlotter(object):
+    """Plotting functions for MultiSegment class"""
 
     def __init__(self, multi_segment):
         self._segments = multi_segment
 
-    def plot_psth(self, unit, ax=None, color="Black", t_start=None, alpha=0.1, align_to_segment=None, single_segment=None):
+    def plot_psth(self, unit, ax=None, color="Black", alpha=0.1, align_to_segment=None, single_segment=None):
+        """Plot the estimated psth for a particular unit, overlaid on single trial estimates
+
+        Params
+        unit (int): unit index to plot psth for
+        ax (matplotlib.pyplot.Axes): pyplot axes to plot on
+        color (str): matplotlib color for psth line
+        alpha (float, [0.0, 1.0]): opacity to plot single trial traces
+        align_to_segment (neo.core.Segment or int):
+            If not given, will use the MultiSegment's default alignment (aligned at t=0.0)
+            If given, sets time axis to the original time axis of given segment
+            (the index is relative to the segments in MultiSegment, not index of segment in the neo block)
+        single_segment (neo.core.Segment, optional)
+            If provided, will only plot estimated psth for a single trial/segment
+
+        Returns
+        None
+
+        TODO
+        Allow options of using different psth calculations (gaussian, exp, kde, ...)
+        """
         if ax is None:
             ax = plt.gca()
 
@@ -33,15 +55,64 @@ class Plotter(object):
             ax.plot(t_arr, np.mean(psths, axis=1), linewidth=2, color=color)
 
     def plot_spectrogram(self, seg, signal=0, channel=0, ax=None, align_to_segment=None):
+        """Plot the spectrogram of a given segment's analogsignal
+
+        Params
+        seg (neo.core.Segment or int):
+            The segment or index of segment to plot spectrogram of
+            (the index is relative to the segments in MultiSegment, not index of segment in the neo block)
+        signal (int):
+            The index of the analogsignal (in segment.analogsignals) to visualize
+        channel (int):
+            The channel of the analogsignal to visualize
+        ax (matplotlib.pyplot.Axes): pyplot axes to plot on
+        align_to_segment (neo.core.Segment or int):
+            If not given, will use the MultiSegment's default alignment (aligned at t=0.0)
+            If given, sets time axis to the original time axis of given segment
+            (the index is relative to the segments in MultiSegment, not index of segment in the neo block)
+
+        Returns
+        None
+        """
         t_spec, f_spec, spec, _ = self._segments.get_spectrogram(
                 seg, signal=signal, channel=channel, align_to_segment=align_to_segment)
         plot_spectrogram(t_spec, f_spec, spec, colormap="gray_r", ax=ax, colorbar=False)
 
+    def plot_raster(self, unit, ax=None, align_to_segment=None):
+        """Plot the raster of the given unit over all trials in MultiSegment
+
+        Params
+        unit (int): unit index to plot psth for
+        ax (matplotlib.pyplot.Axes): pyplot axes to plot on
+        align_to_segment (neo.core.Segment or int):
+            If not given, will use the MultiSegment's default alignment (aligned at t=0.0)
+            If given, sets time axis to the original time axis of given segment
+            (the index is relative to the segments in MultiSegment, not index of segment in the neo block)
+
+        TODO
+        Make align_to_segment do something useful? Right now is all aligned at 0.0, cant align anywhere else
+        """
+        # TODO: how to align to segment?
+        if ax is None:
+            ax = plt.gca()
+
+        raster.plot(
+            self._segments.spike_times(unit=unit, aligned=True),
+            min_time=self._segments.t_start,
+            max_time=self._segments.t_stop,
+            ax=ax
+        )
+
 
 class MultiSegment(object):
+    """Helper class to run analyses on multiple Segments/trials
+
+    Primary feature is to align trials with segment-specific offsets
+    """
 
     @classmethod
     def _read_annotations(cls, segments):
+        """Helper function to compute which annotation values are shared across all segments"""
         original_annotations = dict(segments[0].annotations)
         for segment in segments:
             for key in segment.annotations:
@@ -52,6 +123,7 @@ class MultiSegment(object):
 
     @property
     def plotter(self):
+        """MultiSegmentPlotter object for this MultiSegment"""
         return Plotter(self)
 
     def __str__(self):
@@ -70,6 +142,22 @@ class MultiSegment(object):
         return (x for x in self.segments)
 
     def __init__(self, segments, offsets=None, t_start=None, t_stop=None):
+        """Instantiate a MultiSegment object with a list of segments
+
+        Params
+        segments (list): list of segments to analyze
+        offsets (list, optional):
+            List of the time in seconds at which you want to set to be 0.0 for each segment
+            (list should be the same length as segments parameter)
+            Offset must be computed relative to segment start time (segment.t_start)
+            For example, defining the stimulus onset time for each segment to be zero.
+        t_start (float):
+            Set default start time relative to alignment point
+            For example, t_start might be -0.5 to view half a second before stimulus onset
+        t_stop (float):
+            Set default end time relative to alignment point
+            For example, t_start might be 2.0 to view the two secondsa after stimulus onset
+        """
         self.segments = segments
 
         self.annotations = MultiSegment._read_annotations(segments)
@@ -86,19 +174,39 @@ class MultiSegment(object):
         self.set_t_stop(self._t_stop)
 
     def index_of(self, segment):
+        """Return the index of a given segment in the MultiSegment
+
+        Params
+        segment (neo.core.Segment)
+
+        Returns
+        idx (int)
+        """
         return list(self.segments).index(segment)
 
     def filter(self, fn):
-        """Will be a helper to narrow down MultiSegment"""
+        """Will be a helper to narrow down MultiSegment, not implemented yet
+       
+        Params
+        filter_fn (function):
+            Function that takes a list of segments, and returns a list of segments,
+            filtered by some condition
+
+        Returns
+        new_multisegment (segment_analysis.MultiSegment):
+            Returns a new instance of MultiSegment with the filtered list of segments
+        """
         pass
 
     def set_t_start(self, t_start=None):
+        """Set a new t_start time"""
         self._t_start = t_start
         self.t_start = t_start if t_start is not None else -np.max(self.offsets)
         if np.min(self.offsets) + self.t_start < 0:
             print("Warning: start of some segments may be padded with zeros.")
 
     def set_t_stop(self, t_stop=None):
+        """Set a new t_stop time"""
         self._t_stop = t_stop
         max_t_stop = np.max(self._durations - self.offsets)
         self.t_stop = t_stop if t_stop is not None else max_t_stop
@@ -106,11 +214,42 @@ class MultiSegment(object):
             print("Warning: ending of some segments may be padded with zeros.")
 
     def set_offsets(self, offsets=None):
-        self.offsets = np.array(offsets) if offsets is not None else np.zeros(len(segments))
+        """Set new offset times for each segment
+
+        Params
+        offsets (list, optional):
+            List of the time in seconds at which you want to set to be 0.0 for each segment
+            Offset must be computed relative to segment start time (segment.t_start)
+            For example, defining the stimulus onset time for each segment to be zero.
+        """
+        if len(offsets) != len(self.segments):
+            raise Exception("offsets must be the same length as segments")
+
+        self.offsets = np.array(offsets) if offsets is not None else np.zeros(len(self.segments))
         self.set_t_start(self._t_start)
         self.set_t_stop(self._t_stop)
 
-    def spike_times(self, aligned=False):
+    def spike_times(self, unit=None, aligned=False):
+        """Return arrays of spike times for a specific unit or all units
+
+        Params
+        unit (int, optional):
+            If provided, return array of spike times for each segment, for this unit.
+            Otherwise, return arrays of spike times for each segment, for all units.
+        aligned (bool):
+            If True, spike times are realigned to 0.0 at the defined offset times.
+            If False, spike times are returned with their original times in the session.
+
+        Returns
+            If unit is not given:
+                spike_times_array (np.ndarray, (n_segments, n_units))
+                    An array with dimensions n_segments, n_units.
+                    The element [i, j] is an array of spike times for trial i and unit j
+            If unit is given:
+                spike_times_array (np.ndarray, (n_segments))
+                    An array with dimensions n_segments.
+                    The element i is an array of spike times for trial i
+        """
         results = []
         for seg, offset in zip(self.segments, self.offsets):
             if aligned:
@@ -118,18 +257,26 @@ class MultiSegment(object):
             else:
                 total_offset = seg.t_start.item()
 
-            subresult = []
-            for spiketrain in seg.spiketrains:
-                subresult.append(spiketrain.as_array() - total_offset)
-            results.append(subresult)
+            if unit is None:
+                subresult = []
+                for spiketrain in seg.spiketrains:
+                    subresult.append(spiketrain.as_array() - total_offset)
+                results.append(np.array(subresult))
+            else:
+                results.append(seg.spiketrains[unit].as_array() - total_offset)
 
-        return results
+        return np.array(results)
 
     # TODO: fix dt for all functions or make it a kwarg for all
     def binarized(self, dt=0.001):
-        """
-        Returns:
-        binarized_array (n_segments, n_units, n_timesteps)
+        """Generate binarized spike data with ms bins
+
+        Returns
+        t_arr (np.ndarray, (n_timesteps)):
+            Time axis for binarized array; ranges from the MultiSegment's t_start and t_stop,
+            Corresponds to 0.0 aligned segments
+        binarized_array (np.ndarray, (n_segments, n_units, n_timesteps)):
+            Binary array, 1 indicates a spike, indicates no spike
         """
         results = []
         for seg_spiketimes in self.spike_times(aligned=True):
@@ -143,7 +290,18 @@ class MultiSegment(object):
         return t_arr, np.vstack(np.array(results)[None])
 
     def t_arr(self, align_to_segment=None):
-        """Return a time bin array 
+        """Return a time bin array for this segment corersponding to binarized data
+
+        Params
+        align_to_segment (neo.core.Segment or int):
+            If not given, will use the MultiSegment's default alignment (aligned at t=0.0)
+            If given, sets time axis to the original time axis of given segment
+            (the index is relative to the segments in MultiSegment, not index of segment in the neo block)
+
+        Returns
+        t_arr (np.ndarray, (n_timesteps)):
+            Time axis for binarized array; ranges from the MultiSegment's t_start and t_stop,
+            Corresponds to 0.0 aligned segments
         """
         if align_to_segment is not None:
             if isinstance(align_to_segment, neo.core.Segment):
@@ -154,9 +312,19 @@ class MultiSegment(object):
             return self.binarized()[0]
 
     def psths(self, mean=True, mode="gaussian"):
-        """Compute psth spike data"""
+        """Estimate psth for spike data over all trials for all units
+       
+        Params
+        mean (bool, default=True):
+            Only return the mean psth over all trials. Otherwise, return the estimated psth for every trial.
+        mode (str):
+            Options: gaussian, exponential
+
+        Returns
+        psths (np.ndarray, (n_segments, n_units, n_timesteps)):
+        """
         if mode == "gaussian":
-            convolved = conv(self.binarized()[1].swapaxes(1, 2), gaussian_convolver, 10.0)
+            convolved = conv(self.binarized()[1].swapaxes(1, 2), gaussian_convolver, 5.0)
         elif mode == "exponential":
             convolved = conv(self.binarized()[1].swapaxes(1, 2), exponential_convolver, 20.0)
         elif mode == "kde":
@@ -168,6 +336,7 @@ class MultiSegment(object):
             return convolved.mean(axis=0)
 
     def waveforms(self, unit=None):
+        """Return waveforms for all units, or a given unit"""
         wfs = []
         units = [unit] if unit is not None else self.units
 
@@ -200,13 +369,17 @@ class MultiSegment(object):
         return t_arr, result, analogsignal.sampling_rate.item()
 
     def get_spectrogram(self, seg_idx, signal=0, channel=0, align_to_segment=False):
+        """Generate a spectrogram of a segments' signal. Can use original segment alignment or align at 0.0"""
         if isinstance(seg_idx, neo.core.Segment):
             seg_idx = self.index_of(seg_idx)
 
         if isinstance(align_to_segment, bool):
             original_times = True
-        elif isinstance(align_to_segment, neo.core.Segment):
-            align_seg_idx = self.index_of(align_to_segment)
+        elif isinstance(align_to_segment, int) or isinstance(align_to_segment, neo.core.Segment):
+            if isinstance(align_to_segment, neo.core.Segment):
+                align_seg_idx = self.index_of(align_to_segment)
+            else:
+                align_seg_idx = align_to_segment
             if align_seg_idx != seg_idx:
                 raise Exception("Cannot align {} to {}".format(
                     self.segments[seg_idx],
