@@ -1,8 +1,13 @@
+import os
+
 import neo.core
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.io import wavfile
 
 from soundsig.sound import spectrogram, plot_spectrogram
+
+import config
 
 from spikes.utils import bin_spikes
 from spikes.psth import conv, exponential_convolver, gaussian_convolver
@@ -15,7 +20,15 @@ class MultiSegmentPlotter(object):
     def __init__(self, multi_segment):
         self._segments = multi_segment
 
-    def plot_psth(self, unit, ax=None, color="Black", alpha=0.1, align_to_segment=None, single_segment=None):
+    def plot_psth(self,
+            unit,
+            ax=None,
+            color="Black",
+            alpha=0.1,
+            align_to_segment=None,
+            single_segment=None,
+            mode="gaussian",
+            convolve_params=(10,)):
         """Plot the estimated psth for a particular unit, overlaid on single trial estimates
 
         Params
@@ -39,7 +52,7 @@ class MultiSegmentPlotter(object):
         if ax is None:
             ax = plt.gca()
 
-        psths = self._segments.psths(mean=False)[:, :, unit].T
+        psths = self._segments.psths(mean=False, mode=mode, convolve_params=convolve_params)[:, :, unit].T
         t_arr = self._segments.t_arr(align_to_segment=align_to_segment)
 
         if single_segment is not None:
@@ -124,7 +137,7 @@ class MultiSegment(object):
     @property
     def plotter(self):
         """MultiSegmentPlotter object for this MultiSegment"""
-        return Plotter(self)
+        return MultiSegmentPlotter(self)
 
     def __str__(self):
         return "MultiSegment with {} Segments, {} Units, t_start={}s, t_stop={}s\n{}".format(
@@ -196,7 +209,7 @@ class MultiSegment(object):
         new_multisegment (segment_analysis.MultiSegment):
             Returns a new instance of MultiSegment with the filtered list of segments
         """
-        pass
+        return MultiSegment(filter(fn, self.segments))
 
     def set_t_start(self, t_start=None):
         """Set a new t_start time"""
@@ -311,7 +324,7 @@ class MultiSegment(object):
         else:
             return self.binarized()[0]
 
-    def psths(self, mean=True, mode="gaussian"):
+    def psths(self, mean=True, mode="gaussian", convolve_params=None):
         """Estimate psth for spike data over all trials for all units
        
         Params
@@ -324,9 +337,13 @@ class MultiSegment(object):
         psths (np.ndarray, (n_segments, n_units, n_timesteps)):
         """
         if mode == "gaussian":
-            convolved = conv(self.binarized()[1].swapaxes(1, 2), gaussian_convolver, 5.0)
+            if convolve_params is None:
+                convolve_params = [10.0]
+            convolved = conv(self.binarized()[1].swapaxes(1, 2), gaussian_convolver, *convolve_params)
         elif mode == "exponential":
-            convolved = conv(self.binarized()[1].swapaxes(1, 2), exponential_convolver, 20.0)
+            if convolve_params is None:
+                convolve_params = [20.0]
+            convolved = conv(self.binarized()[1].swapaxes(1, 2), exponential_convolver, *convolve_params)
         elif mode == "kde":
             raise Exception("Not did this yet")
 
@@ -345,31 +362,100 @@ class MultiSegment(object):
             for seg in self.segments:
                 if len(seg.spiketrains[unit_idx].waveforms):
                     unit_wfs += list(seg.spiketrains[unit_idx].waveforms)
-            wfs.append(unit_wfs)
+            wfs.append(np.array(unit_wfs))
 
         return np.array(wfs)
 
     def get_analogsignal(self, seg_idx, signal=0, channel=None, original_times=False):
-        """
-        Return t_arr, timeseries, sampling_rate for an analogsignal
+        """Return timeseries data from a segment's analogsignals, and the time axis
+
+        Params
+        seg_idx (neo.core.Segment or int):
+            The segment or index of segment to plot spectrogram of
+            (the index is relative to the segments in MultiSegment, not index of segment in the neo block)
+        signal (int):
+            The index of the analogsignal (in segment.analogsignals)
+        channel (int, default=None):
+            The channel of the analogsignal to return, returns all channels if None
+        original_times (bool, default=False)
+            If True, the time array will return times corresponding to their time during the session.
+            If False, the time array will align the defined offset times at 0.0.
+
+        Returns
+        t_arr (np.ndarray, (n_timestpes))
+            Time axis for signal, either in original times in session or
+            realigned so that 0.0 is at the specified time offset
+        data (np.ndarray, (n_timesteps) or (n_timesteps, n_channels))
+            The data of the analogsignal
+        sampling_rate (float)
+            Sampling rate of the signal
         """
         if isinstance(seg_idx, neo.core.Segment):
             seg_idx = self.index_of(seg_idx)
         seg = self.segments[seg_idx]
 
-        analogsignal = seg.analogsignals[signal]
+        if isinstance(signal, basestring):
+            # we are probably looking at a request for playback
+            if signal != "playback":
+                raise Exception("signal must be either int or 'playback'")
+
+            sampling_rate, playback_sound = wavfile.read(
+                os.path.join(
+                    config.DATADIR,
+                    seg.annotations["playback_file"].split("data/")[1]
+                )
+            )
+            analogsignal = np.lib.pad(
+                playback_sound,
+                (
+                    int(sampling_rate * config.PAD_SONG_BEFORE),
+                    int(sampling_rate * config.PAD_SONG_AFTER)
+                ),
+                "constant",
+                constant_values=(0, 0)
+            )
+            result = analogsignal
+        else:
+            analogsignal = seg.analogsignals[signal]
+            sampling_rate = analogsignal.sampling_rate.item()
+            result = analogsignal.as_array()
+
         t_arr = np.linspace(seg.t_start.item(), seg.t_stop.item(), len(analogsignal))
         if not original_times:
             t_arr -= self._starts[seg_idx] + self.offsets[seg_idx]
 
-        result = analogsignal.as_array()
         if channel is not None:
             result = result[:, channel]
 
-        return t_arr, result, analogsignal.sampling_rate.item()
+        return t_arr, result, sampling_rate
 
     def get_spectrogram(self, seg_idx, signal=0, channel=0, align_to_segment=False):
-        """Generate a spectrogram of a segments' signal. Can use original segment alignment or align at 0.0"""
+        """Generate a spectrogram of a segment's signal
+
+        Params
+        seg_idx (neo.core.Segment or int):
+            The segment or index of segment to plot spectrogram of
+            (the index is relative to the segments in MultiSegment, not index of segment in the neo block)
+        signal (int):
+            The index of the analogsignal (in segment.analogsignals)
+        channel (int)
+            The channel of the analogsignal to generate spectrogram from
+        align_to_segment (neo.core.Segment or int):
+            If not given, will use the MultiSegment's default alignment (aligned at t=0.0)
+            If given, sets time axis to the original time axis of given segment
+            (the index is relative to the segments in MultiSegment, not index of segment in the neo block)
+
+        Returns
+        t_spec (np.ndarray, (n_timestpes)):
+            Time axis for spectrogram, either in original times in session or
+            realigned so that 0.0 is at the specified time offset
+        f_spec (np.ndarray, (n_frequencies)):
+            Frequency axis for spectrogram
+        spec (np.ndarray, (n_timesteps, n_frequencies)):
+            Spectrogram data
+        rms (float)
+            Probably is something
+        """
         if isinstance(seg_idx, neo.core.Segment):
             seg_idx = self.index_of(seg_idx)
 
