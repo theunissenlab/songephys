@@ -6,7 +6,9 @@ Plots waveforms for each unit and psths+rasters to playback
 import matplotlib.pyplot as plt
 import numpy as np
 
-from segment_analysis import MultiSegment
+import config
+
+from playbacks_analysis import PlaybacksManager
 
 
 def get_square_dims(n):
@@ -17,6 +19,7 @@ def get_square_dims(n):
         a = int(np.ceil(root))
         b = (n + a) / a
         return a, b
+
 
 def clear_spines(ax):
     for spine in ax.spines.values():
@@ -34,9 +37,9 @@ def plot_waveforms(waveforms, ax=None):
     if ax is None:
         ax = plt.gca()
     xmin = 0
-    xmax = 32 / 25000.0 * 1000
-    ax.plot(np.linspace(0, xmax, 32), waveforms.T, alpha=0.1, color="Gray")
-    ax.plot(np.linspace(0, xmax, 32), np.mean(waveforms, axis=0), color="Blue")
+    xmax = config.WF_SIZE / 25000.0 * 1000
+    ax.plot(np.linspace(0, xmax, config.WF_SIZE), waveforms.T, alpha=0.1, color="Gray")
+    ax.plot(np.linspace(0, xmax, config.WF_SIZE), np.mean(waveforms, axis=0), color="Blue")
     ax.set_xlim(xmin, xmax)
     ax.set_xlabel("t (ms)")
     ax.set_ylabel("mV")
@@ -59,21 +62,21 @@ def plot_all_waveforms(multiseg):
 
     plt.tight_layout()
 
+    return fig, axes
+
 
 def plot_playback_responses(block):
-    playback_files = filter(None, set([seg.annotations.get("playback_file") for seg in block.segments]))
-    main_multiseg = MultiSegment(filter(
-        lambda seg: seg.annotations["sound_type"] == "playback", block.segments
-    ))
+    playbacks_manager = PlaybacksManager(block.segments)
+    playback_multisegs = playbacks_manager.group_playback_responses()
 
-    w, h = get_square_dims(len(playback_files))
+    w, h = get_square_dims(len(playbacks_manager.stim_ids))
 
     figures = []
 
-    for unit_idx in main_multiseg.units:
+    for unit_idx in playbacks_manager.full_multiseg.units:
         fig, axes = plt.subplots(nrows=w, ncols=h, figsize=(6 * w, 3 * h))
-        for i, playback_file in enumerate(playback_files):
-            multiseg = main_multiseg.filter(lambda seg: seg.annotations["playback_file"] == playback_file)
+        for i, stim_id in enumerate(playbacks_manager.stim_ids):
+            multiseg = playback_multisegs[stim_id]
             ax = axes.reshape(-1)[i]
 
             multiseg.plotter.plot_spectrogram(multiseg.segments[0],

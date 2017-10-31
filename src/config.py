@@ -27,6 +27,7 @@ SONG_CLASSIFIER_PARAMS = os.path.join(
 ### Audio segmentation params ###
 #################################
 
+STIM_DIR = "TutFamBos"
 PAD_SONG_BEFORE = 1.0   # Time to pad detected song segments (in seconds)
 PAD_SONG_AFTER = 1.0 
 AUTODETECT_FUSE_DURATION = 0.2

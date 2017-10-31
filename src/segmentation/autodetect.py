@@ -470,7 +470,7 @@ def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.2, shortest_du
     # check for missing offset (sound continues past data file)
     for i in range(len(sound_onsets)):
         if sound_onsets[len(sound_onsets)-i-1] == 1:
-            sound_onsets[len(sound_onsets)] = -1
+            sound_onsets[-1] = -1
             print("Warning, sound appears to continue past file end, "
                   + "last time point being set to an offset")
         if sound_onsets[len(sound_onsets)-i-1] == -1:

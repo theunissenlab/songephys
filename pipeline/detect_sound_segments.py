@@ -68,7 +68,7 @@ class DetectSoundSegments(luigi.Task):
             segment_dicts = live_dicts
         elif len(csv_files) == 1:
             # FIXME dont hardcode stim dir
-            stim_dir = os.path.join(self.session_dir, "stimuli", "TutFamBos")
+            stim_dir = os.path.join(self.session_dir, "stimuli", config.STIM_DIR)
 
             # locate pyoperant file
             pyoperant_file = csv_files[0]

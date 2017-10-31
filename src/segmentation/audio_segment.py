@@ -51,6 +51,8 @@ def generate_stim_dicts(digital_signals, sound_db):
 
     stim_dicts = []
 
+    # FIXME: sometimes there is bad digital_codes data... if that breaks
+    # check digital_codes to make sure they all look normal
     for trial_id, (start_time, metadata) in enumerate(digital_codes):
         start_time = float(start_time) / sample_rate
         trial = metadata.get("trial", trial_id + 1)
