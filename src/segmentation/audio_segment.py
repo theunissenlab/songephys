@@ -1,14 +1,8 @@
 import os
-import sys
 import numpy as np
 import quantities as pq
-try:
-   import cPickle as pickle
-except:
-   import pickle
 
 from neo.core import Segment
-from neo.io import NixIO
 from neosound import sound_manager
 from neosound.sound_store import HDF5Store
 from zeebeez.tdt2neo import stim, import_multielectrode
@@ -31,13 +25,27 @@ def save_stimulus_database(pyoperant_file, stim_dir, db_name):
     return sound_manager.SoundManager(HDF5Store, db_path)
 
 
+def get_vocalizer_relation(annotations):
+    familiarity = annotations.get("source")
+    # TODO: should be able to extract "self" thru this
+    # by checking for bird name == annotations.get("emitter")
+    if familiarity == "tutor":
+        return "tutor"
+    elif annotations.get("source_sex") == "m":
+        return "con_male"
+    elif annotations.get("source_sex") == "f":
+        return "con_female"
+    else:
+        return "unfamiliar"
+
+
 def generate_stim_dicts(digital_signals, sound_db):
     """Generate segment data from digital signal data and sound (stim) database
 
     Args:
         digital_signals (neo.core.Events)
         sound_db (neosound.sound_store.HDF5Store)
-    
+
     Returns:
         list of dicts: List of segment information
             Each element is a dict defining segment start and end,
@@ -61,12 +69,14 @@ def generate_stim_dicts(digital_signals, sound_db):
         metadata = sound_db.get_metadata(stim_id)
         annotations = sound_db.get_annotations(stim_id)
 
+        vocalizer_relation = get_vocalizer_relation(annotations)
+
         stim_dicts.append({
             "name": "playback_{}".format(annotations["emitter"]),
             "description": "Created by segmentation.audio_segment.generate_stim_dicts",
             "sound_type": "playback",
             "vocalization_type": annotations.get("callid", "UV"),
-            "vocalizer": annotations.get("source"),  # need a helper to make this more specific
+            "vocalizer": vocalizer_relation,
             "playback_file": annotations.get("original_filename"),
             "stim_id": stim_id,
             "start_time": start_time.rescale(pq.s),
@@ -213,7 +223,6 @@ def segment(block, segment_dicts):
 
     for trial_id, segment_dict in enumerate(segment_dicts):
         start_time = segment_dict["start_time"]
-        duration = segment_dict["duration"]
 
         new_segment = Segment(
                 name="{}_{}".format(segment_dict["name"], trial_id),  # must be unique!
