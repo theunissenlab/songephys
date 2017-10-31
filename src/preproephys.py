@@ -108,40 +108,50 @@ def high_low_filter(seg, debug = 0):
             # The first points are set to zero since we don't have predictions for those 
             highSignal_clean[nlags:, :] = highSignal[nlags:, :] - predX
                        
-            # Remove sound correlations - needs to be modified to work for 1 either 2 microphone inputs
+            # TODO Remove sound correlations - needs to be modified to work for 1 either 2 microphone inputs
+            n_microphones = soundsig.shape[1]
+
             sound0 = highpass_filter(np.squeeze(soundsig[:,0]), sr, CFH)
             sound0 = sound0 - np.mean(sound0)
             
-            sound1 = highpass_filter(np.squeeze(soundsig[:,1]), sr, CFH)
-            sound1 = sound1 - np.mean(sound1)
+            if n_microphones == 2:
+                sound1 = highpass_filter(np.squeeze(soundsig[:,1]), sr, CFH)
+                sound1 = sound1 - np.mean(sound1)
             
             for ielec in range(nelec):
-                h0, lags, g0, f0 = linear_filter1D(sound0, highSignal_clean[:, ielec], lag=DELAYSOUND, debug = 0)
-                h1, lags, g1, f1 = linear_filter1D(sound1, highSignal_clean[:, ielec], lag=DELAYSOUND, debug = 0)
-                maxg0 = g0.max()
-                maxg1 = g1.max()
-                
-                predSound = np.zeros(sound0.shape)
-                if (maxg0 > maxg1 and maxg0 > COHTHRES):
-                    predSound0 = signal.convolve(sound0, h0, mode = 'same' ) + np.mean(highSignal_clean[:, ielec])
-                    predSound = predSound + predSound0
-                    
-                    h1, lags, g1, f1 = linear_filter1D(sound1, highSignal_clean[:, ielec]-predSound, lag=DELAYSOUND, debug = 0)
+                # TODO (kevin): really lazy way to do 2 microphone implementation; clean this up!!!
+                if n_microphones == 2:
+                    h0, lags, g0, f0 = linear_filter1D(sound0, highSignal_clean[:, ielec], lag=DELAYSOUND, debug = 0)
+                    h1, lags, g1, f1 = linear_filter1D(sound1, highSignal_clean[:, ielec], lag=DELAYSOUND, debug = 0)
+                    maxg0 = g0.max()
                     maxg1 = g1.max()
-                    if( maxg1 > COHTHRES):
-                        predSound1 = signal.convolve(sound1, h1, mode = 'same' ) + np.mean(highSignal_clean[:, ielec])
-                        predSound = predSound + predSound1
-                elif (maxg1 > maxg0 and maxg1 > COHTHRES):
-                        predSound1 = signal.convolve(sound1, h1, mode = 'same' ) + np.mean(highSignal_clean[:, ielec])
-                        predSound = predSound + predSound1
+                    
+                    predSound = np.zeros(sound0.shape)
+                    if (maxg0 > maxg1 and maxg0 > COHTHRES):
+                        predSound0 = signal.convolve(sound0, h0, mode = 'same' ) + np.mean(highSignal_clean[:, ielec])
+                        predSound = predSound + predSound0
                         
-                        h0, lags, g0, f0 = linear_filter1D(sound0, highSignal_clean[:, ielec]-predSound, lag=DELAYSOUND, debug = 0)
-                        maxg0 = g0.max()
-                        if( maxg0 > COHTHRES):
-                            predSound0 = signal.convolve(sound0, h0, mode = 'same' ) + np.mean(highSignal_clean[:, ielec])
-                            predSound = predSound + predSound0
+                        h1, lags, g1, f1 = linear_filter1D(sound1, highSignal_clean[:, ielec]-predSound, lag=DELAYSOUND, debug = 0)
+                        maxg1 = g1.max()
+                        if( maxg1 > COHTHRES):
+                            predSound1 = signal.convolve(sound1, h1, mode = 'same' ) + np.mean(highSignal_clean[:, ielec])
+                            predSound = predSound + predSound1
+                    elif (maxg1 > maxg0 and maxg1 > COHTHRES):
+                            predSound1 = signal.convolve(sound1, h1, mode = 'same' ) + np.mean(highSignal_clean[:, ielec])
+                            predSound = predSound + predSound1
+                            
+                            h0, lags, g0, f0 = linear_filter1D(sound0, highSignal_clean[:, ielec]-predSound, lag=DELAYSOUND, debug = 0)
+                            maxg0 = g0.max()
+                            if( maxg0 > COHTHRES):
+                                predSound0 = signal.convolve(sound0, h0, mode = 'same' ) + np.mean(highSignal_clean[:, ielec])
+                                predSound = predSound + predSound0
+                elif n_microphones == 1:
+                    h0, lags, g0, f0 = linear_filter1D(sound0, highSignal_clean[:, ielec], lag=DELAYSOUND, debug = 0)
+                    maxg0 = g0.max()
+                    predSound = signal.convolve(sound0, h0, mode = 'same' ) + np.mean(highSignal_clean[:, ielec])
                 
                 # Remove prediction from sound response
+                # TODO (kevin): We should keep a record of the prediction that we are removing
                 highSignal_clean[:, ielec] = highSignal_clean[:, ielec] - predSound
                 
                 # Plot the original signal, the two modelled sources of noise and the clean signal
@@ -207,6 +217,7 @@ def high_low_filter(seg, debug = 0):
             seg.analogsignals.remove(sig)
             seg.create_relationship(force=True)
     return
+
 
 # Fixing the channels from one for the array to one per electrode - to be done BERFORE adding units
 def fix_chIndex(block):
