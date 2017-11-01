@@ -47,6 +47,7 @@ WF_START = 8  # these are values for the 25kHz sampled data
 WF_STOP = 40
 WF_SIZE = WF_STOP - WF_START
 WF_SLICE = slice(WF_START, WF_STOP)
+ELEC_SAMPLE_RATE = 30000.0
 
 
 #################

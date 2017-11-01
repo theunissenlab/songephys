@@ -37,7 +37,7 @@ def plot_waveforms(waveforms, ax=None):
     if ax is None:
         ax = plt.gca()
     xmin = 0
-    xmax = config.WF_SIZE / 25000.0 * 1000
+    xmax = config.WF_SIZE / config.ELEC_SAMPLE_RATE * 1000
     ax.plot(np.linspace(0, xmax, config.WF_SIZE), waveforms.T, alpha=0.1, color="Gray")
     ax.plot(np.linspace(0, xmax, config.WF_SIZE), np.mean(waveforms, axis=0), color="Blue")
     ax.set_xlim(xmin, xmax)
@@ -92,7 +92,7 @@ def plot_playback_responses(block):
             clear_spines(ax)
             
             ax = ax.twinx()
-            multiseg.plotter.plot_psth(unit_idx, ax=ax, color="Red", alpha=0.1, mode="gaussian", convolve_params=(4,))
+            multiseg.plotter.plot_psth(unit_idx, ax=ax, color="Red", alpha=0.0, mode="gaussian", convolve_params=(10,))
 
             ax.set_xlim(0.0, 3.0)
             ax.set_ylim(-0.25, 0.25)
