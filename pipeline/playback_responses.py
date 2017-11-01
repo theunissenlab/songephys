@@ -46,9 +46,10 @@ class PlotUnitWaveforms(luigi.Task):
 class PlotPlaybackResponses(luigi.Task):
 
     session_dir = luigi.Parameter()
+    gaussian_width = luigi.IntParameter()
 
     def output(self):
-        responses_dir = os.path.join(self.session_dir, "unit_responses", "playbacks")
+        responses_dir = os.path.join(self.session_dir, "unit_responses", "playbacks-{}".format(self.gaussian_width))
         return luigi.LocalTarget(responses_dir)
 
     def requires(self):
@@ -59,7 +60,7 @@ class PlotPlaybackResponses(luigi.Task):
             block = pickle.load(input_file)
         block.create_relationship(force=True, append=True, recursive=True)
 
-        figures = unit_summary.plot_playback_responses(block)
+        figures = unit_summary.plot_playback_responses(block, width=self.gaussian_width)
 
         if not os.path.exists(self.output().path):
             os.makedirs(self.output().path)

@@ -65,7 +65,7 @@ def plot_all_waveforms(multiseg):
     return fig, axes
 
 
-def plot_playback_responses(block):
+def plot_playback_responses(block, width=5):
     playbacks_manager = PlaybacksManager(block.segments)
     playback_multisegs = playbacks_manager.group_playback_responses()
 
@@ -92,10 +92,10 @@ def plot_playback_responses(block):
             clear_spines(ax)
             
             ax = ax.twinx()
-            multiseg.plotter.plot_psth(unit_idx, ax=ax, color="Red", alpha=0.0, mode="gaussian", convolve_params=(10,))
+            multiseg.plotter.plot_psth(unit_idx, ax=ax, color="Red", alpha=0.0, mode="gaussian", convolve_params=(width,))
 
             ax.set_xlim(0.0, 3.0)
-            ax.set_ylim(-0.25, 0.25)
+            ax.set_ylim(-0.20, 0.20)
             ax.text(0.2, 0.15, "{vocalizer}\n{vocalization_type}".format(**multiseg.annotations))
             ax.set_xticks([])
             ax.set_yticks([])
