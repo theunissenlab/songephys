@@ -66,14 +66,19 @@ class WindowedTimeWarp(object):
                 return output_array
             
             def _transform_timestamp(timestamp, seg_idx, index, transformations, warp_params):
-                timestamp_index = int(np.floor(timestamp * self.fs))
+                timestamp_in_samples = timestamp * self.fs
+                timestamp_index = int(np.floor(timestamp_in_samples))
                 shift_from_slice, shift_to, transform_from_slice = transformations[seg_idx]
-                if timestamp_index < index:
+                if timestamp_in_samples < index:
                     return timestamp
-                elif index <= timestamp_index <= shift_from_slice.start:
-                    # FIXME: should interpolate between timestamp_index - index and timestamp_index - index + 1
-                    return (index + warp_params[seg_idx, timestamp_index - index]) / self.fs
-                elif shift_from_slice.start < timestamp_index:
+                elif index <= timestamp_index < shift_from_slice.start - 1:
+                    frac_over = timestamp_in_samples - timestamp_index
+                    interpolated_index = (
+                            (1.0 - frac_over) * warp_params[seg_idx, timestamp_index - index] + 
+                            frac_over * warp_params[seg_idx, timestamp_index - index + 1]
+                    )
+                    return interpolated_index / self.fs
+                elif shift_from_slice.start <= timestamp_index:
                     return timestamp + ((shift_to - shift_from_slice.start) / self.fs)
                 
             warp_params = model.params["warp"]
