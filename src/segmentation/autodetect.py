@@ -101,7 +101,7 @@ def getSyllableFeatures(soundIn, fs = 30000):
     soundIn = soundIn - np.mean(soundIn,axis=0) # correct for DC offsets if they exist.
     #print 'Processing sound'
     maxAmp = np.asarray(np.abs(soundIn).max())      
-    myBioSound = BioSound(soundWave=np.squeeze(np.asarray(soundIn).astype(float))/maxAmp, fs, calltype = "")
+    myBioSound = BioSound(soundWave=np.squeeze(np.asarray(soundIn).astype(float))/maxAmp, fs=fs, calltype = "")
                  
     # Create BioSound Object and store some values
     myBioSound.spectroCalc(spec_sample_rate=100)
