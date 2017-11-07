@@ -84,8 +84,31 @@ def find_syllables(audio_stream_in, amp_thresh = '', fs=25000, fuse_duration=0.1
             
     return syllables
 
-
-def getSyllableFeatures(soundIn, fs = 30000): 
+def findSyllables(audio_stream_in, fs=30000, fuse_duration=0.01, shortest_duration=0.01, test_mode=False, amp_thresh=None, normalize_sound=True, normalize_thresh=None, lowpass = 2000, highpass = 5000):
+    """ 
+        Use amplitude thresholds for identifying syllable times in a song.        
+        Essentially a helper function for using findVocalPeriods.
+    
+        fuse_duration -         Gaps shorter than this will be fused into single syllables
+        shortest_duration -     Syllables shosrter than this will be ignored
+        test_mode -             Plots a bunch of things for helping determine ideal parameter values- in work
+        amp_thresh -            The amplitude threshold that you're going to be changing the most to get this all to work right
+        normalize_sound -       Divides the sound by the mean amplitude to normalize it, recommended to be True
+        normalize_thresh -      When normalize_sound=True all values below normalize_thresh first get set to 0- keeps the noise floor from being amplified.
+        lowpass_thresh and 
+        highpass_thresh -       It can be surprisingly useful to only search over a very limited bandwidth. Don't be afraid to try 6kHz to 9kHz or something
+    """
+    amp_thresh = .3
+    normalize_thresh = 0.0005
+    lowpass = 6000
+    highpass = 9000
+    fuse_duration = 0.01
+    shortest_duration = 0.01
+    normalize_sound = True
+    
+    
+    
+def get_syllable_features(soundIn, fs = 30000): 
     """ An easy interface for computing many sound features from bioSound
         Takes a raw sound file and a sampling rate and returns a dict:
             syllable_features = {"fund": fund, 
