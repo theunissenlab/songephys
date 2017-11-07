@@ -85,7 +85,18 @@ def find_syllables(audio_stream_in, amp_thresh = '', fs=25000, fuse_duration=0.1
     return syllables
 
 
-def getSyllableFeatures(soundIn, fs = 30000, plotme = False): # FET CHANGES!!!!!!!!, minFund = 500, maxFund = 3000):
+def getSyllableFeatures(soundIn, fs = 30000): 
+    """ An easy interface for computing many sound features from bioSound
+        Takes a raw sound file and a sampling rate and returns a dict:
+            syllable_features = {"fund": fund, 
+                       "cvfund": cvfund, "F1": meanF1, "F2": meanF2, "F3" : meanF3,
+                       "sal": np.float(myBioSound.sal), "rms": np.float(myBioSound.rms), 
+                       "meanS": np.float(myBioSound.meanspect), "stdS": np.float(myBioSound.stdspect), 
+                       "q1": np.float(myBioSound.q1), "q2": np.float(myBioSound.q2), "q3": np.float(myBioSound.q3),
+                       "timestd": np.float(myBioSound.stdtime), "skewspect":np.float(myBioSound.skewspect),
+                       "kurtosisspect": np.float(myBioSound.kurtosisspect), "entropyspect": np.float(myBioSound.entropyspect)}
+        
+    """
     ## Returns biosound properties from a chunk of sound.
     soundIn = soundIn - np.mean(soundIn,axis=0) # correct for DC offsets if they exist.
     #print 'Processing sound'
