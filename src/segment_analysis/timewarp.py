@@ -77,7 +77,7 @@ class WindowedTimeWarp(object):
                             (1.0 - frac_over) * warp_params[seg_idx, timestamp_index - index] + 
                             frac_over * warp_params[seg_idx, timestamp_index - index + 1]
                     )
-                    return interpolated_index / self.fs
+                    return (index + interpolated_index) / self.fs
                 elif shift_from_slice.start <= timestamp_index:
                     return timestamp + ((shift_to - shift_from_slice.start) / self.fs)
                 
