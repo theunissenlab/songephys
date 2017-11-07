@@ -3,6 +3,7 @@ import os
 import neo.core
 import numpy as np
 import matplotlib.pyplot as plt
+import quantities as pq
 from scipy.io import wavfile
 
 from soundsig.sound import spectrogram, plot_spectrogram
@@ -512,24 +513,31 @@ class MultiSegment(object):
         updated_multiseg (segment_analysis.MultiSegment)
             Updated multiseg where each segment corresponds to one of the intervals specified
         """
-        if len(interval_array) != self.segments:
+        if len(interval_array) != len(self.segments):
             raise Exception("interval_array must be the same length as MultiSegment.segments")
 
         new_segments = []
         for seg_idx, (intervals, segment) in enumerate(zip(interval_array, self.segments)):
             for syllable_idx, (start_time, end_time) in enumerate(intervals):
+                start_time = segment.t_start.item() + start_time
+                end_time = segment.t_start.item() + end_time
+
+                if start_time < segment.t_start.item() or end_time > segment.t_stop.item():
+                    print("Warning: you passed an interval that extends outside the segment time boundaries. Skipping it.")
+                    continue
+
                 segment_params = dict(**segment.annotations)
-                segment_params["name"] = "{}_Syllable_{}".format(segment_params["name"], syllable_idx)
+                segment_params["name"] = "{}_Syllable_{}".format(segment.name, syllable_idx)
                 segment_params["syllable_category"] = None
                 new_segment = neo.core.Segment(**segment_params)
 
-                sliced_signal = self.segments.analogsignals[0].time_slice(
-                        start_time,
-                        end_time
+                sliced_signal = segment.analogsignals[0].time_slice(
+                        start_time * pq.s,
+                        end_time * pq.s
                 )
                 new_segment.analogsignals.append(sliced_signal)
 
-                for st in self.segments.spiketrains:
+                for st in segment.spiketrains:
                     sliced_st = st.time_slice(start_time, end_time)
                     new_segment.spiketrains.append(sliced_st)
                 new_segments.append(new_segment)
