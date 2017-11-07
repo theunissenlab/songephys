@@ -195,6 +195,12 @@ class MultiSegment(object):
         Returns
         idx (int)
         """
+        if list(self.segments).count(segment) > 1:
+            raise Exception("Multiple instances of segment found in MultiSegment. Cannot "
+                    "access by object. Pass an index instead")
+        elif list(self.segments).count(segment) == 0:
+            raise Exception("Segment not found in MultiSegment")
+
         return list(self.segments).index(segment)
 
     def filter(self, fn):
@@ -274,7 +280,7 @@ class MultiSegment(object):
                 subresult = []
                 for spiketrain in seg.spiketrains:
                     subresult.append(spiketrain.as_array() - total_offset)
-                results.append(np.array(subresult))
+                results.append(subresult)
             else:
                 results.append(seg.spiketrains[unit].as_array() - total_offset)
 
@@ -429,7 +435,7 @@ class MultiSegment(object):
 
         return t_arr, result, sampling_rate
 
-    def get_spectrogram(self, seg_idx, signal=0, channel=0, align_to_segment=False):
+    def get_spectrogram(self, seg_idx, signal=0, channel=0, align_to_segment=None):
         """Generate a spectrogram of a segment's signal
 
         Params
@@ -459,7 +465,7 @@ class MultiSegment(object):
         if isinstance(seg_idx, neo.core.Segment):
             seg_idx = self.index_of(seg_idx)
 
-        if isinstance(align_to_segment, bool):
+        if align_to_segment is True:
             original_times = True
         elif isinstance(align_to_segment, int) or isinstance(align_to_segment, neo.core.Segment):
             if isinstance(align_to_segment, neo.core.Segment):
@@ -491,3 +497,42 @@ class MultiSegment(object):
             t_spec += self._starts[seg_idx]
 
         return t_spec, f_spec, spec, rms
+
+    def recut_segments(self, interval_array):
+        """Recut segments using given time intervals
+
+        Params
+        interval_array (list)
+            List should be the same length as segments parameter.
+            Each sublist contains tuples of (start_time, end_time) for each segment.
+            The start_time and end_time must be computed relative to the segment's t=0.0s,
+                IGNORING ANY OFFSETS
+
+        Returns
+        updated_multiseg (segment_analysis.MultiSegment)
+            Updated multiseg where each segment corresponds to one of the intervals specified
+        """
+        if len(interval_array) != self.segments:
+            raise Exception("interval_array must be the same length as MultiSegment.segments")
+
+        new_segments = []
+        for seg_idx, (intervals, segment) in enumerate(zip(interval_array, self.segments)):
+            for syllable_idx, (start_time, end_time) in enumerate(intervals):
+                segment_params = dict(**segment.annotations)
+                segment_params["name"] = "{}_Syllable_{}".format(segment_params["name"], syllable_idx)
+                segment_params["syllable_category"] = None
+                new_segment = neo.core.Segment(**segment_params)
+
+                sliced_signal = self.segments.analogsignals[0].time_slice(
+                        start_time,
+                        end_time
+                )
+                new_segment.analogsignals.append(sliced_signal)
+
+                for st in self.segments.spiketrains:
+                    sliced_st = st.time_slice(start_time, end_time)
+                    new_segment.spiketrains.append(sliced_st)
+                new_segments.append(new_segment)
+
+        return MultiSegment(new_segments)
+
