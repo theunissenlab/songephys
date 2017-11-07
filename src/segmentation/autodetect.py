@@ -85,6 +85,48 @@ def find_syllables(audio_stream_in, amp_thresh = '', fs=25000, fuse_duration=0.1
     return syllables
 
 
+def getSyllableFeatures(soundIn, fs = 30000, plotme = False): # FET CHANGES!!!!!!!!, minFund = 500, maxFund = 3000):
+    ## Returns biosound properties from a chunk of sound.
+    soundIn = soundIn - np.mean(soundIn,axis=0) # correct for DC offsets if they exist.
+    #print 'Processing sound'
+    maxAmp = np.asarray(np.abs(soundIn).max())      
+    myBioSound = BioSound(soundWave=np.squeeze(np.asarray(soundIn).astype(float))/maxAmp, fs, calltype = "")
+                 
+    # Create BioSound Object and store some values
+    myBioSound.spectroCalc(spec_sample_rate=100)
+    myBioSound.rms = myBioSound.sound.std()     # The rms  
+    # Calculate amplitude enveloppe
+    myBioSound.ampenv()  
+    # Calculate the power spectrum
+    myBioSound.spectrum(f_high=10000)
+    # Calculate fundamental and related values
+    myBioSound.fundest(maxFund = 3000, minFund = 500, lowFc = 50, highFc = 6000, minSaliency = 0.5)   
+
+    meanF1 = np.mean(myBioSound.F1[~np.isnan(myBioSound.F1)])
+    meanF2 = np.mean(myBioSound.F2[~np.isnan(myBioSound.F2)])
+    meanF3 = np.mean(myBioSound.F3[~np.isnan(myBioSound.F3)])
+
+    if myBioSound.fund is not None:
+        if myBioSound.fund.size == 0:
+            fund = None
+            cvfund = None
+        else:
+            fund = np.float(myBioSound.fund)
+            cvfund = np.float(myBioSound.cvfund)
+    else:
+        fund = None 
+        cvfund = None   
+    
+    syllable_features = {"fund": fund, 
+                       "cvfund": cvfund, "F1": meanF1, "F2": meanF2, "F3" : meanF3,
+                       "sal": np.float(myBioSound.sal), "rms": np.float(myBioSound.rms), 
+                       "meanS": np.float(myBioSound.meanspect), "stdS": np.float(myBioSound.stdspect), 
+                       "q1": np.float(myBioSound.q1), "q2": np.float(myBioSound.q2), "q3": np.float(myBioSound.q3),
+                       "timestd": np.float(myBioSound.stdtime), "skewspect":np.float(myBioSound.skewspect),
+                       "kurtosisspect": np.float(myBioSound.kurtosisspect), "entropyspect": np.float(myBioSound.entropyspect)}
+
+    return syllable_features
+
 def getBioSoundProperties(soundIn, plotme = False): # FET CHANGES!!!!!!!!, minFund = 500, maxFund = 3000):
     ## Returns biosoudn properties from a chunk of sound.
     soundIn = soundIn - np.mean(soundIn,axis=0) # correct for DC offsets if they exist.
@@ -415,7 +457,7 @@ def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=700
     return pca_df, spectro_list, big_df #spectrogram list, for plotting spectrograms
 
 
-def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.2, shortest_duration=0.6, verbose=False):
+def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.2, shortest_duration=0.6, verbose=False, amp_thresh=None, normalize_sound=False, normalize_thresh=0.006, lowpass = 2000, highpass = 5000):
     """
     Given an audio stream, attempts to detect all segments of noise that might be bird calls of
     some sort.
@@ -438,17 +480,27 @@ def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.2, shortest_du
         Each tuple represents a (low_index:high_index) interval in the original array.
     """
     audio_stream = np.squeeze(audio_stream_in)
+
     # First we try to find the amplitude envelope. We only care about vocal sounds,
     # so we high-pass filter higher than normal.
     streams_filtered_env = np.zeros(np.shape(audio_stream))
-    streams_filtered_env = highpass_filter(audio_stream, fs, 2000)
-    streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env, fs, 5000)) # Rectify and lowpass filter
+    streams_filtered_env = highpass_filter(audio_stream, fs, highpass)
+    streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env, fs, lowpass)) # Rectify and lowpass filter
     streams_filtered_env = lowpass_filter(streams_filtered_env, fs, 100) # We essentially have an amplitude trace now
+    # normalize amplitude to near 1 in case this matters... make really low values just equal zero first to fix stretching
+    if normalize_sound:
+        if normalize_thresh == 0:
+            n, bins = np.histogram([a for a in streams_filtered_env if a > 0], bins=100)
+            normalize_thresh = bins[np.argmax(n)+1]
+        #print("setting values below {} to 0.".format(normalize_thresh))
+        low_vals = np.where(streams_filtered_env < normalize_thresh)
+        streams_filtered_env[low_vals] = 0
+        streams_filtered_env = (1/np.mean(streams_filtered_env)) * streams_filtered_env
 
     # Simply threshold against the mean of the signal. This works surprisingly well.
     # If you think about it, all of the noises that get made during a session drag
-    # the mean to be slightly above background noise.
-    amp_thresh = np.mean(streams_filtered_env)
+    # the mean to be slightly above background noise.   
+    amp_thresh = np.mean(streams_filtered_env) if amp_thresh is None else amp_thresh
     # sound onsets: 1 is an onset, -1 is an offset
     vd_crosses = np.zeros(len(streams_filtered_env))
     for i in xrange(len(streams_filtered_env)):
@@ -481,7 +533,8 @@ def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.2, shortest_du
     offsets = np.where(sound_onsets == -1)[0]
     n_fused = 0
     if len(onsets) > 1:
-        print "len onsets > 1"
+        onset_length = len(onsets)
+        print("number of vocal periods = {}".format(onset_length))
         last_onset = onsets[1]
         last_offset = offsets[0]
         assert last_offset < last_onset
