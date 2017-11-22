@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 import numpy as np
 
 from neo.core import SpikeTrain, Unit, Segment, Block, ChannelIndex
@@ -53,7 +55,7 @@ def write_neo(old_block, new_spike_times, new_spike_waveforms):
 
         old_unsorted_unit = old_channel_index.units[0]
 
-        print "Creating {} units for electrode {}".format(len(spike_times_list[0]), electrode_idx)
+        print("Creating {} units for electrode {}".format(len(spike_times_list[0]), electrode_idx))
 
         for new_unit_idx in range(len(spike_times_list[0])):
             new_unit = Unit(name="e{}u{}".format(electrode_idx, new_unit_idx))

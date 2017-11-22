@@ -6,6 +6,7 @@ Created on Thu Jun 15 15:45:48 2017
 Preprocessing routines to clean up ephys signal and perform first spike thresholding
 @author: frederictheunissen
 """
+from __future__ import division, print_function
 
 # Depencies
 # Needs these packages,functions
@@ -43,7 +44,7 @@ def high_low_filter(seg, debug = 0):
     # First check is this has already been done.  If so do nothing.
     for sig in seg.analogsignals:
         if sig.name.endswith('LFP'):
-            print 'Warning: segment already has filtered signals'
+            print('Warning: segment already has filtered signals')
             return
         
     # Get the signal that has the microphone. We use this to clean up the spikes.
@@ -59,7 +60,7 @@ def high_low_filter(seg, debug = 0):
     for sig in siglist:  
         if sig.name.startswith('Amplifier'):
             
-            print 'Processing', sig.name
+            print('Processing', sig.name)
             
             # Genererate low-pass and high-pass
             sr = sig.sampling_rate
@@ -224,7 +225,7 @@ def fix_chIndex(block):
     """ Takes the channel index named Amplifier and makes into a channel Index per electrode called Amp 1, Amp 2, etc"""
     
     if len(block.channel_indexes) == 0:
-        print "Block has no channels. Nothing to fix?"
+        print("Block has no channels. Nothing to fix?")
         return
     
     # finds channel called Amplifier
@@ -233,7 +234,7 @@ def fix_chIndex(block):
             break
             
     if chIndex.name != 'Amplifier':
-        print "Block does not have a channel called Amplifer. Nothing to fix?"
+        print("Block does not have a channel called Amplifer. Nothing to fix?")
         return
     
     nelec = len(chIndex.index)
@@ -272,7 +273,7 @@ def extract_spikes(block):
             continue;
         st_list = []
         ie = np.int(chIndex.index[0])    # Assume a single index
-        print ie
+        print(ie)
         for sig in chIndex.analogsignals:
             if sig.name.endswith('HPC'):       
                 # Get the threshold
@@ -338,23 +339,23 @@ def unit_report(block):
     ntot = 0
     for chIndex in block.channel_indexes: 
         nunits = len(chIndex.units)
-        print 'Channel', chIndex.name, 'has', nunits, 'units.'
+        print('Channel', chIndex.name, 'has', nunits, 'units.')
         ntot += nunits
-    print 'Total number of units:', ntot 
+    print('Total number of units:', ntot)
 
 
     for chIndex in block.channel_indexes: 
         nunits = len(chIndex.units)
         for unit in chIndex.units:
-            print unit.name, ':', unit.size['spiketrains'], 'spiketrains'
+            print(unit.name, ':', unit.size['spiketrains'], 'spiketrains')
             totspikes = 0;
             for st in unit.spiketrains:
                 if totspikes == 0:
-                    print st.segment    # Debugging...
+                    print(st.segment)    # Debugging...
                 totspikes += st.size                
                 if st.size != 0:
                     wavelen = st.waveforms.shape[1]
-            print '\t Total Spikes (in all segments):', totspikes
+            print('\t Total Spikes (in all segments):', totspikes)
  
     # Make Plots of snippets
     for chIndex in block.channel_indexes: 

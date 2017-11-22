@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 import cPickle as pickle
 from soundsig.signal import lowpass_filter, highpass_filter
 import matplotlib.mlab as mlab
@@ -227,16 +229,16 @@ def reduce_dimensions_pca(df, fs, pca_model="", pca_columns="", zscore_columns="
         zscore_columns = df.columns[range(16) + [-3]]
         print("columns to be zscored: ", zscore_columns)
     else:
-        print "Warning changing the default columns might still be buggy..."
+        print("Warning changing the default columns might still be buggy...")
         
     if pca_columns == "":
         pca_columns = df.columns[range(17,len(df.columns)-5)+[-3]] #avoid last few, too
         print("PCA columns are: %s"%pca_columns)
     else:
-        print "Warning changing the default columns is probably buggy..."    
+        print("Warning changing the default columns is probably buggy..."    )
     
     if pca_model == "":
-        print "No PCA model (pkl file) passed for determining pca dimensionality reduction, attempting to use hard-coded one"
+        print("No PCA model (pkl file) passed for determining pca dimensionality reduction, attempting to use hard-coded one")
         pca_model = '/auto/tdrive/billewood/intan data/LbY6074/LbY6074__161215_145633_PCA.pkl'
         print("Using pca model at {}".format(pca_model))
     
@@ -315,7 +317,7 @@ def classify_vocalizations_random_forest(data_df, classifier_dataset = "", fs=25
     elif type(classifier_dataset) == pandas.DataFrame:
         classifier_df = classifier_dataset
     else:
-        print"classifier_dataset not recognized"
+        print("classifier_dataset not recognized")
 
 
 #    last_feature = min(classifier_df.shape[0], data_df.shape[0])        
@@ -369,7 +371,7 @@ def align_spectrograms(spectro_list, freq_bins = [], t_before = 30, t_after = 30
         shifted_spect[:, pre_pad:pre_pad + (end_time-start_time)] = spect[freq_bins[0]:freq_bins[1],start_time:end_time]
         shifted_spect_array.append(shifted_spect)
 
-    print 'returning shifted spectogram array'    
+    print('returning shifted spectogram array'    )
     return shifted_spect_array
 
 def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=7000, num_pcs_to_save=50, spect_pca_filename = "/auto/tdrive/billewood/intan data/LbY6074/spect_pca_combined.pkl", return_big_df=0, pca_model="", lowpass_thresh=4800, tutor_mic=0):
@@ -394,13 +396,13 @@ def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=700
     spectro_list = list() # contains the spectrograms for plotting later
     
     # make a pandas DataFrame with biousound properties of all syllables/vocalizations
-    print "Calculating biosound qualities and populating a database, this may take a while."
+    print("Calculating biosound qualities and populating a database, this may take a while.")
     annotated_pts, pt_diffs, std_idx = separate_song_sources(audio_streams, points, fs, tutor_mic)
 
     for i, pt in enumerate(points):
         #print "points: ", points
         if i == 0:
-            print "Working on sound ", i+1, " out of ", len(points), ". "
+            print("Working on sound ", i+1, " out of ", len(points), ". ")
         elif np.mod(i,40) == 0:
             print('..',i)
         else: sys.stdout.write('..'+str(i))
@@ -418,7 +420,7 @@ def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=700
             fpsd = fpsd[(fpsd >= minfreq) & (fpsd <= maxfreq)]
             freqvars.append(freqvar[(f_freqvar >= minfreq) & (f_freqvar <= maxfreq)])
             f_freqvar = f_freqvar[(f_freqvar >= minfreq) & (f_freqvar <= maxfreq)]
-    print "Finished most calculations, populating pandas database."    
+    print("Finished most calculations, populating pandas database."    )
 
     # This section is ugly because I'm making a column for each entry instead of putting
     # arrays in cells. Makes classification more straightforward later.    
@@ -444,7 +446,7 @@ def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=700
     ampenvs = np.array([xi[0:maxl] for xi in ampenvs]) # cut long arrays
     ampenvs = np.array([np.pad(xi,[0,(maxl-len(xi))],"constant") for xi in ampenvs]) # pad short arrays
     ampenvs = np.array([decimate(xi,5) for xi in ampenvs]) #downsample ampenvs to 200 Hz
-    print "Adding amplitude envelope values"
+    print("Adding amplitude envelope values")
     for i in range(ampenvs.shape[1]): # add a column for every time bin of the amplitue envelope
         name = 'AMPENV t=%d' %i
         df[name] = ampenvs[:,i]
@@ -465,8 +467,8 @@ def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=700
         name = 'spectro pca #%d' %i
         df[name] = pca_array[:,i]
       
-    print "Checking for NANS and replacing with column averages"
-    print "dataframe shape: ", df.shape    
+    print("Checking for NANS and replacing with column averages")
+    print("dataframe shape: ", df.shape)
     
     # check it all for NANs and replace with column averages
     df = df.fillna(df.mean())
@@ -529,7 +531,7 @@ def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.2, shortest_du
         #print("setting values below {} to 0.".format(normalize_thresh))
         low_vals = np.where(streams_filtered_env < normalize_thresh)
         streams_filtered_env[low_vals] = 0
-        streams_filtered_env = (1/np.mean(streams_filtered_env)) * streams_filtered_env
+        streams_filtered_env = (1.0/np.mean(streams_filtered_env)) * streams_filtered_env
 
     # Simply threshold against the mean of the signal. This works surprisingly well.
     # If you think about it, all of the noises that get made during a session drag
