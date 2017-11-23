@@ -4,18 +4,20 @@ import os
 import shutil
 
 import luigi
+import pandas as pd
 from neo.io import NixIO
 
 import config
 
 from rhd2nix import Rhd2Nix
+from setup import CombineTrialMetadata
 from segmentation.audio_segment import (
     segment,
     generate_stim_dicts,
     generate_live_vocalization_dicts,
     generate_vocal_periods_dicts,
     merge_segments,
-    save_stimulus_database
+    load_stimulus_database
 )
 
 from utils import session_basename
@@ -27,7 +29,7 @@ class DetectSoundSegments(luigi.Task):
     session_dir = luigi.Parameter()
 
     def requires(self):
-        return Rhd2Nix(self.session_dir)
+        return [Rhd2Nix(self.session_dir), CombineTrialMetadata(self.session_dir)]
 
     def output(self):
         segmentation_dir = os.path.join(self.session_dir, "segmentation")
@@ -35,12 +37,9 @@ class DetectSoundSegments(luigi.Task):
         return luigi.LocalTarget(os.path.join(segmentation_dir, output_filename))
 
     def run(self):
-        nix = NixIO(self.input().path)
+        nix = NixIO(self.input()[0].path)
         block = nix.read_block()
         nix.close()
-
-        input_directory = os.path.join(self.session_dir, "raw")
-        csv_files = glob.glob(os.path.join(input_directory, "*.csv"))
 
         sound = block.segments[0].analogsignals[1]  # FIXME: the analogsignal index doesnt seem reliable
         sound_arr = sound.as_array()[:, 0]
@@ -56,30 +55,24 @@ class DetectSoundSegments(luigi.Task):
             if config.MIN_SEGMENT_LENGTH <= seg_dict["duration"].item() <= config.MAX_SEGMENT_LENGTH
         ]
         print len(live_dicts)
-        if len(live_dicts) > 500:
-            raise Exception("Too many vocalization periods found ({}). Filter more out or make the code better.".format(len(live_dicts)))
+        # if len(live_dicts) > 500:
+            # raise Exception("Too many vocalization periods found ({}). Filter more out or make the code better.".format(len(live_dicts)))
 
         print "Identified {} vocalization periods".format(len(live_dicts))
         del sound_arr
 
-        if len(csv_files) == 0:
-            print "No pyoperant file found"
-            # then there are no playbacks
+        playbacks_csv = pd.read_csv(self.input()[1][1].path)
+
+        if len(playbacks_csv) == 0:
+            print "No pyoperant file found (no playbacks)"
             segment_dicts = live_dicts
-        elif len(csv_files) == 1:
-            # FIXME dont hardcode stim dir
-            stim_dir = os.path.join(self.session_dir, "stimuli", config.STIM_DIR)
-
-            # locate pyoperant file
-            pyoperant_file = csv_files[0]
-
-            # FIXME: stimulus database location must be an output of this task!
-            sm = save_stimulus_database(pyoperant_file,
-                    stim_dir,
-                    "{}_db".format(session_basename(self.session_dir)))
+        else:
+            playbacks_db = load_stimulus_database(self.input()[1][0].path)
             digital_signals = block.segments[0].events[0]
 
-            playback_dicts = generate_stim_dicts(digital_signals, sm.database)
+            # TODO: validate playbacks csv and digital signals here
+
+            playback_dicts = generate_stim_dicts(digital_signals, playbacks_db.database)
             print "Identified {} playback periods".format(len(playback_dicts))
 
             segment_dicts = merge_segments(playback_dicts, live_dicts)
@@ -88,9 +81,6 @@ class DetectSoundSegments(luigi.Task):
                     len(playback_dicts),
                     len(segment_dicts) - len(playback_dicts)
             )
-        else:
-            # to handle multiple, will need to modify generate_stim_dicts??
-            raise Exception("The code is not equipped for more than one playback file yet")
 
         new_block = segment(block, segment_dicts)
 
