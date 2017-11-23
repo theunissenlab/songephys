@@ -10,6 +10,10 @@ import config
 
 drive = GoogleDrive(get_auth())
 
+gdrive_root_dir = drive.ListFile({
+    "q": "title = 'Intan Ephys Data'"
+}).GetList()[0]
+
 
 def download_file(gdrive_file, download_to_path):
     """Download a file from google drive
@@ -21,16 +25,30 @@ def download_file(gdrive_file, download_to_path):
     gdrive_file.GetContentFile(download_to_path)
 
 
-def search_for_file(search_term):
-    """Get the file matching the given name"""
+def download_folder(gdrive_folder, download_to_path):
+    if not os.path.exists(download_to_path):
+        os.makedirs(download_to_path)
+
+    for f in gdrive_listdir(gdrive_folder):
+        download_file(f, os.path.join(download_to_path, f["title"]))
+
+
+def gdrive_look_in(dir, filename):
     file_list = drive.ListFile({
-        "q": "title = '{}'".format(search_term)
+        "q": "title = '{}' and '{}' in parents and trashed = false".format(filename, dir["id"])
+    }).GetList()
+    if not len(file_list):
+        raise Exception("{}/{} not found".format(dir["title"], filename))
+    return file_list[0]
+
+
+def gdrive_listdir(dir):
+    return drive.ListFile({
+        "q": "'{}' in parents and trashed = false".format(dir["id"])
     }).GetList()
 
-    return file_list
 
-
-def download_session(session_id, pyoperant_files=(,), stimulus_dir=None):
+def download_session(session_id, pyoperant_files=tuple()):
     """Download a recording session data into the proper location
 
     Creates directories in this structure if they don't exist yet
@@ -42,43 +60,59 @@ def download_session(session_id, pyoperant_files=(,), stimulus_dir=None):
     pyoperant_files (list of str):
         Each element is a name of a pyoperant file (e.g. "GreYel3594M_trialdata_20170912164335.csv")
     """
+    if session_id.endswith(".rhd"):
+        session_id = os.path.splitext(session_id)[0]
+
     bird_name = session_id.split("_")[0]
 
     bird_dir = os.path.join(config.DATADIR, "birds", bird_name)
     session_dir = os.path.join(bird_dir, session_id)
     raw_dir = os.path.join(session_dir, "raw")
+    stimuli_dir = os.path.join(session_dir, "stimuli")
+
+    gdrive_bird_dir = gdrive_look_in(gdrive_root_dir, bird_name)
+    gdrive_rhd_dir = gdrive_look_in(gdrive_bird_dir, "RHD")
+    try:
+        rhd_file = gdrive_look_in(gdrive_rhd_dir, "{}.rhd".format(session_id))
+    except:
+        raise Exception("Rhd file not found")
 
     if not os.path.exists(raw_dir):
         os.makedirs(raw_dir)
+    if not os.path.exists(stimuli_dir):
+        os.makedirs(stimuli_dir)
 
-    rhd_file = search_for_file("{}.rhd".format(session_id))
-
-    if not len(rhd_file):
-        raise Exception("Rhd file not found")
-    elif os.path.exists(os.path.join(raw_dir, "{}.rhd".format(session_id))):
+    if os.path.exists(os.path.join(raw_dir, "{}.rhd".format(session_id))):
         print("Warning, rhd file already downloaded. Skipping...")
     else:
         rhd_file = rhd_file[0]
         print("Downloading {} to {}".format(rhd_file["title"], raw_dir))
         download_file(rhd_file, os.path.join(raw_dir, rhd_file["title"]))
 
+    csv_string = ""
+    gdrive_pyoperant_dir = gdrive_look_in(gdrive_bird_dir, "pyoperant")
     for pyoperant_file in pyoperant_files:
         if not pyoperant_file.endswith(".csv"):
             pyoperant_file = "{}.csv".format(pyoperant_file)
 
-        csv_file = search_for_file(pyoperant_file)
-        if not len(csv_file):
+        try:
+            csv_file = gdrive_look_in(gdrive_pyoperant_dir, pyoperant_file)
+        except:
             print("Warning: file {} not found, skipping...".format(csv_file))
             continue
 
-        csv_file = csv_file[0]
         print("Downloading {} to {}".format(csv_file["title"], raw_dir))
         download_file(csv_file, os.path.join(raw_dir, csv_file["title"]))
+        with open(os.path.join(raw_dir, csv_file["title"]), "rb") as csvfile:
+            csv_string += csvfile.read()
 
     # We can load the csvs and check which stimulus directories to download
-    if not stimulus_dir:
-        pass
-    else:
-        pass
-        # TODO: download the stimulus data (wav file)
-
+    if pyoperant_files:
+        gdrive_stimuli_dir = gdrive_look_in(gdrive_bird_dir, "stimuli")
+        stimuli_folders = gdrive_listdir(gdrive_stimuli_dir)
+        for stimuli_folder in stimuli_folders:
+            # TODO (check if this is needed)
+            if stimuli_folder["title"] in csv_string:
+                download_to = os.path.join(stimuli_dir, stimuli_folder["title"])
+                print("Downloading {} to {}".format(stimuli_folder["title"], download_to))
+                download_folder(stimuli_folder, download_to)
