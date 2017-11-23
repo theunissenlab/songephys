@@ -39,12 +39,12 @@ def get_vocalizer_relation(annotations):
         return "unfamiliar"
 
 
-def generate_stim_dicts(digital_signals, sound_db):
+def generate_stim_dicts(digital_signals, sound_dbs):
     """Generate segment data from digital signal data and sound (stim) database
 
     Args:
         digital_signals (neo.core.Events)
-        sound_db (neosound.sound_store.HDF5Store)
+        sound_dbs (list of neosound.sound_store.HDF5Store)
 
     Returns:
         list of dicts: List of segment information
@@ -59,12 +59,19 @@ def generate_stim_dicts(digital_signals, sound_db):
 
     stim_dicts = []
 
+    sound_dbs = iter(sound_dbs)
+    sound_db = sound_dbs.next()
+
     # FIXME: sometimes there is bad digital_codes data... if that breaks
     # check digital_codes to make sure they all look normal
     for trial_id, (start_time, metadata) in enumerate(digital_codes):
         start_time = float(start_time) / sample_rate
         trial = metadata.get("trial", trial_id + 1)
 
+        # check sound_db if this is the last one in the csv...
+        # if it is, sound_db = sound_dbs.next()
+        # can we VALIDATE the digital code start time with the
+        # data in sounddb or the csv?
         stim_id = sound_db.filter_ids(index=trial)[0]
         duration = sound_db.get_annotations(stim_id)["duration"]
 
