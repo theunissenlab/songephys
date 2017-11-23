@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import pandas as pd
 import quantities as pq
 
 from neo.core import Segment
@@ -12,17 +13,77 @@ import autodetect
 import config
 
 
-def save_stimulus_database(pyoperant_file, stim_dir, db_name):
-    csv_reader = stim.StimCSVReader()
+def read_stimulus_database(pyoperant_file, stim_dir):
+    """Read trial metadata from csv.
+    
+    Params
+    pyoperant_file (str): path to csv
+    stim_dir (str): path to local directory where wav files can be found
 
-    # Read all of the metadata and trial data
+    Returns
+    csv_reader (zeebeez.tdt2neo.stim.StimCSVReader)
+        stim csv reader object with reference to a pandas DataFrame
+        with trial data (csv_reader.stim_data)
+    """
+    csv_reader = stim.StimCSVReader()
     csv_reader.read(pyoperant_file, root_dir=stim_dir)
 
-    # Write sounds to a neosound database
-    db_path = os.path.join(stim_dir, db_name)
+    return csv_reader
+
+
+def save_stimulus_database(pyoperant_file, db_path):
+    """Save database from csv to neosound database
+
+    Params
+    pyoperant_file (str): path to csv
+    db_path (str): path to store HDF5 neosound db
+
+    sound_manager (neosound.sound_manager.SoundManager)
+        Sound manager object with reference to HDF5 database,
+        which can query stimulus info by id
+    """
+    csv_reader = read_stimulus_database(pyoperant_file, None)
     csv_reader.write(db_path)
 
     return sound_manager.SoundManager(HDF5Store, db_path)
+
+
+def load_stimulus_database(db_path):
+    """Load neosound database from file
+
+    Params
+    db_path (str): path where neosound db is stored
+
+    sound_manager (neosound.sound_manager.SoundManager)
+        Sound manager object with reference to HDF5 database,
+        which can query stimulus info by id
+    """
+    return sound_manager.SoundManager(HDF5Store, db_path)
+
+
+def combine_stim_csvs(pyoperant_files, stim_dirs):
+    """Combine multipe pyoperant csvs into one
+    
+    Combines the csvs, sort them by time, reindexes index column (trial numbers)
+
+    Params
+    pyoperant_file (list of str):
+        list of pyoperant csvs to combine
+    stim_dirs (list of str):
+        list of paths to directories containing wavs for each pyoperant csv
+        e.g. paths to TutFamBos
+    """
+    csv_readers = [
+        read_stimulus_database(filename, stim_dir)
+        for filename, stim_dir in zip(pyoperant_files, stim_dirs)
+    ]
+
+    new_csv = pd.concat([reader.stim_data for reader in csv_readers])
+    new_csv = new_csv.sort_values("time")
+    new_csv.index = np.arange(len(new_csv))
+    new_csv["index"] = np.arange(len(new_csv)) + 1
+
+    return new_csv
 
 
 def get_vocalizer_relation(annotations):
@@ -53,26 +114,25 @@ def generate_stim_dicts(digital_signals, sound_dbs):
             See docstring for audio_segment.segment() for required fields
     """
     sample_rate = digital_signals.annotations["sampling_rate"]
-    on_times = np.round(digital_signals.times * sample_rate).astype("int")
+    on_times = np.array(np.round(digital_signals.times * sample_rate)).astype("int")
 
     digital_codes = import_multielectrode.convert_digital_to_metadata(on_times)
 
     stim_dicts = []
 
-    sound_dbs = iter(sound_dbs)
-    sound_db = sound_dbs.next()
+    # Use the trial only as a validaiton
+    current_trial = None
+    for _, (start_time, metadata) in enumerate(digital_codes):
+        if current_trial is None:
+            current_trial = metadata.get("trial")
+        else:
+            current_trial += 1
 
-    # FIXME: sometimes there is bad digital_codes data... if that breaks
-    # check digital_codes to make sure they all look normal
-    for trial_id, (start_time, metadata) in enumerate(digital_codes):
         start_time = float(start_time) / sample_rate
-        trial = metadata.get("trial", trial_id + 1)
 
-        # check sound_db if this is the last one in the csv...
-        # if it is, sound_db = sound_dbs.next()
         # can we VALIDATE the digital code start time with the
         # data in sounddb or the csv?
-        stim_id = sound_db.filter_ids(index=trial)[0]
+        stim_id = sound_db.filter_ids(index=current_trial)[0]
         duration = sound_db.get_annotations(stim_id)["duration"]
 
         metadata = sound_db.get_metadata(stim_id)

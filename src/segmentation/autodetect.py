@@ -584,7 +584,7 @@ def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.2, shortest_du
                     n_fused += 1
                 last_offset = i
     if verbose:
-        print "num fused: " + str(n_fused)
+        print("num fused: " + str(n_fused))
 
     # convert to a list of just onsets and offsets
     sound_onset = np.where(sound_onsets == 1)[0]
@@ -711,7 +711,7 @@ def separate_song_sources(audio_streams, points, fs=25000, tutor_mic=0):
     -------
     A dictionary with two lists of points, of keys 'student' and 'tutor'.
     """
-    print "...Filtering Arrays to get Amp Envelope for calculating vocalizer"
+    print("...Filtering Arrays to get Amp Envelope for calculating vocalizer")
     streams_filtered_env = np.zeros(np.shape(audio_streams))
     streams_filtered_env[:, 0] = highpass_filter(np.squeeze(audio_streams[:, 0]), fs, 2000)
     streams_filtered_env[:, 1] = highpass_filter(np.squeeze(audio_streams[:, 1]), fs, 2000)
