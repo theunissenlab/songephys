@@ -1,3 +1,6 @@
+from __future__ import print_function
+
+import cPickle as pickle
 import os
 
 import glob
@@ -13,6 +16,8 @@ from segmentation.audio_segment import load_stimulus_database, save_stimulus_dat
 class DownloadSession(luigi.Task):
     
     session_name = luigi.Parameter()
+    pyoperants = luigi.ListParameter()
+    notes = luigi.Parameter(default=None)
 
     def output(self):
         bird_name = self.session_name.split("_")[0]
@@ -26,10 +31,29 @@ class DownloadSession(luigi.Task):
         return luigi.LocalTarget(output_directory)
 
     def run(self):
-        # TODO: lookup the correct pyoperant files to read
         download.download_session(
             self.session_name,
-            [])
+            self.pyoperants)
+        if self.notes:
+            with open(os.path.join(self.output().path, "NOTES"), "a+") as notefile:
+                notefile.write(notes)
+
+
+class DownloadSessions(luigi.Task):
+
+    file_summary = luigi.Parameter()
+
+    def requires(self):
+        with open(self.file_summary, "rb") as picklefile:
+            self.sessions = pickle.load(picklefile)
+
+        return [
+            DownloadSession(session, pyoperants, notes=notes)
+            for session, pyoperants, notes in self.sessions
+        ]
+
+    def run(self):
+        pass
 
 
 class CombineTrialMetadata(luigi.Task):
@@ -71,14 +95,13 @@ class CombineTrialMetadata(luigi.Task):
         possible_stim_dirs = [os.path.basename(f) for f in glob.glob(os.path.join(stimuli_directory, "*"))]
 
         for csv_file in csv_files:
-            print "Looking for stim dir for {}".format(csv_file)
+            print("Looking for stim dir for {}".format(csv_file))
             stimulus_names = pd.read_csv(csv_file)["stimulus_name"]
             
             stim_dir_used = None
             for stim_dir in possible_stim_dirs:
-                print "Trying {}".format(stim_dir)
                 if any([(stim_dir in x) for x in stimulus_names]):
-                    print "located"
+                    print("Matched {}".format(stim_dir))
                     stim_dir_used = os.path.join(stimuli_directory, stim_dir)
                     break
 
@@ -91,7 +114,7 @@ class CombineTrialMetadata(luigi.Task):
         new_csv = combine_stim_csvs(csv_files, stim_dirs)
         new_csv.to_csv(self.output()[1].path)
 
-        print self.output()[0].path
+        print("Saving stim database {}".format(self.output()[0].path))
         save_stimulus_database(
                 self.output()[1].path,
                 self.output()[0].path)

@@ -1,5 +1,6 @@
 from __future__ import print_function
 import os
+import time
 
 from pydrive.drive import GoogleDrive
 
@@ -22,6 +23,7 @@ def download_file(gdrive_file, download_to_path):
     gdrive_file (pydrive file): file to download
     download_to_path (str): location on local filesystem to download data
     """
+    time.sleep(0.1)
     gdrive_file.GetContentFile(download_to_path)
 
 
@@ -34,6 +36,7 @@ def download_folder(gdrive_folder, download_to_path):
 
 
 def gdrive_look_in(dir, filename):
+    time.sleep(0.1)
     file_list = drive.ListFile({
         "q": "title = '{}' and '{}' in parents and trashed = false".format(filename, dir["id"])
     }).GetList()
@@ -43,6 +46,7 @@ def gdrive_look_in(dir, filename):
 
 
 def gdrive_listdir(dir):
+    time.sleep(0.1)
     return drive.ListFile({
         "q": "'{}' in parents and trashed = false".format(dir["id"])
     }).GetList()
@@ -83,9 +87,8 @@ def download_session(session_id, pyoperant_files=tuple()):
         os.makedirs(stimuli_dir)
 
     if os.path.exists(os.path.join(raw_dir, "{}.rhd".format(session_id))):
-        print("Warning, rhd file already downloaded. Skipping...")
+        print("Warning, {} already downloaded. Not downloading...".format(rhd_file["title"]))
     else:
-        rhd_file = rhd_file[0]
         print("Downloading {} to {}".format(rhd_file["title"], raw_dir))
         download_file(rhd_file, os.path.join(raw_dir, rhd_file["title"]))
 

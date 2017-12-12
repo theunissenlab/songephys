@@ -11,6 +11,14 @@ if not PROJECT_ROOT:
 DATADIR = os.path.join(PROJECT_ROOT, "data")
 
 
+#################
+### filtering ###
+#################
+
+USE_TENSORFLOW = False
+HIGHPASS_CUTOFF = 300.0
+
+
 ####################
 ### model params ###
 ####################
@@ -40,7 +48,7 @@ MAX_SEGMENT_LENGTH = 6.0
 ### spike sorting params ###
 ############################
 
-Z_THRESHOLD = 2.0       # number of standard deviations to threshold initial spike detection
+Z_THRESHOLD = 3.0       # number of standard deviations to threshold initial spike detection
 WF_START = 10           # start index to slice waveforms at
 WF_STOP = 50            # stop index to slice waveforms at
 WF_START = 8  # these are values for the 25kHz sampled data

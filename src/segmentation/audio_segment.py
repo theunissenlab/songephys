@@ -100,7 +100,25 @@ def get_vocalizer_relation(annotations):
         return "unfamiliar"
 
 
-def generate_stim_dicts(digital_signals, sound_dbs):
+def validate_digital_codes(digital_signals, trials_csv):
+    """Validate that the extracted digital codes are consistent with data in csvs
+
+    for now just check that the times between trials is consistent
+    """
+    sample_rate = digital_signals.annotations["sampling_rate"]
+    on_times = np.array(np.round(digital_signals.times * sample_rate)).astype("int")
+    digital_codes = import_multielectrode.convert_digital_to_metadata(on_times)
+
+    code_diffs = np.diff([start_time for (start_time, _) in digital_codes])
+    csv_diffs = [t.total_seconds() for t in np.diff(trials_csv["time"])]
+
+    if len(code_diffs) != len(csv_diffs):
+        raise Exception("Different number of digital codes and csv trials")
+
+    return code_diffs - csv_diffs
+
+
+def generate_stim_dicts(digital_signals, sound_db):
     """Generate segment data from digital signal data and sound (stim) database
 
     Args:

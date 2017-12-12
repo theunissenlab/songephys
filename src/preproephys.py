@@ -92,7 +92,7 @@ def high_low_filter(seg, debug = 0):
             paramsDEL = resultsVAR.params[:,:]
             
             nelec = paramsDEL.shape[1]   # This is the number of electrodes also equal to sig.shape[1]
-            nlags = (paramsDEL.shape[0]-1)/nelec  # This is also equal to DELAYS 
+            nlags = (paramsDEL.shape[0]-1)//nelec  # This is also equal to DELAYS 
             for i in range(nelec):
                 for j in range(nlags):
                     paramsDEL[j*nelec+1+i, i] = 0;

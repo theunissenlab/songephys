@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 import cPickle as pickle
 import glob
 import os
@@ -17,7 +19,8 @@ from segmentation.audio_segment import (
     generate_live_vocalization_dicts,
     generate_vocal_periods_dicts,
     merge_segments,
-    load_stimulus_database
+    load_stimulus_database,
+    validate_digital_codes
 )
 
 from utils import session_basename
@@ -49,38 +52,37 @@ class DetectSoundSegments(luigi.Task):
         # live_dicts = generate_live_vocalization_dicts(df)
         # FIXME: my memory is getting super screwed by this... im going to have to cut down on them for now
         live_dicts = generate_vocal_periods_dicts(sound_arr, sampling_rate)
-        print len(live_dicts)
+        print("found {} live vocalizations".format(len(live_dicts)))
         live_dicts = [
             seg_dict for seg_dict in live_dicts
             if config.MIN_SEGMENT_LENGTH <= seg_dict["duration"].item() <= config.MAX_SEGMENT_LENGTH
         ]
-        print len(live_dicts)
-        # if len(live_dicts) > 500:
-            # raise Exception("Too many vocalization periods found ({}). Filter more out or make the code better.".format(len(live_dicts)))
-
-        print "Identified {} vocalization periods".format(len(live_dicts))
+        print("{} between {} and {}".format(len(live_dicts), config.MIN_SEGMENT_LENGTH, config.MAX_SEGMENT_LENGTH))
         del sound_arr
 
         playbacks_csv = pd.read_csv(self.input()[1][1].path)
 
         if len(playbacks_csv) == 0:
-            print "No pyoperant file found (no playbacks)"
+            print("No pyoperant file found (no playbacks)")
             segment_dicts = live_dicts
         else:
             playbacks_db = load_stimulus_database(self.input()[1][0].path)
             digital_signals = block.segments[0].events[0]
 
             # TODO: validate playbacks csv and digital signals here
+            timing_offsets = validate_digital_codes(digital_signals, playbacks_csv)
+            print(timing_offests)
+            print("Largest error found: {}s".format(np.max(timing_offsets)))
 
             playback_dicts = generate_stim_dicts(digital_signals, playbacks_db.database)
-            print "Identified {} playback periods".format(len(playback_dicts))
+            print("Identified {} playback periods".format(len(playback_dicts)))
 
             segment_dicts = merge_segments(playback_dicts, live_dicts)
-            print "Creating {} segments, ({} playback, {} live)".format(
+            print("Creating {} segments, ({} playback, {} live)".format(
                     len(segment_dicts),
                     len(playback_dicts),
                     len(segment_dicts) - len(playback_dicts)
-            )
+            ))
 
         new_block = segment(block, segment_dicts)
 
