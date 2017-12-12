@@ -16,7 +16,7 @@ from segmentation.audio_segment import load_stimulus_database, save_stimulus_dat
 class DownloadSession(luigi.Task):
     
     session_name = luigi.Parameter()
-    pyoperants = luigi.ListParameter()
+    pyoperants = luigi.ListParameter(default=[])
     notes = luigi.Parameter(default=None)
 
     def output(self):
@@ -85,7 +85,7 @@ class CombineTrialMetadata(luigi.Task):
         if not len(csv_files):
             # TODO: im just creating empty files here if nothing
             pd.DataFrame([]).to_csv(self.output()[1].path)
-            with open(output()[0].path, "a"):
+            with open(self.output()[0].path, "a"):
                 pass
             return
 

@@ -1,11 +1,13 @@
 from __future__ import print_function
 
 import cPickle as pickle
+import datetime
 import glob
 import os
 import shutil
 
 import luigi
+import numpy as np
 import pandas as pd
 from neo.io import NixIO
 
@@ -61,6 +63,9 @@ class DetectSoundSegments(luigi.Task):
         del sound_arr
 
         playbacks_csv = pd.read_csv(self.input()[1][1].path)
+        playbacks_csv["time"] = playbacks_csv["time"].apply(
+                lambda time_str: datetime.datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S.%f"))
+
 
         if len(playbacks_csv) == 0:
             print("No pyoperant file found (no playbacks)")
@@ -71,7 +76,7 @@ class DetectSoundSegments(luigi.Task):
 
             # TODO: validate playbacks csv and digital signals here
             timing_offsets = validate_digital_codes(digital_signals, playbacks_csv)
-            print(timing_offests)
+            print(timing_offsets)
             print("Largest error found: {}s".format(np.max(timing_offsets)))
 
             playback_dicts = generate_stim_dicts(digital_signals, playbacks_db.database)
@@ -88,20 +93,3 @@ class DetectSoundSegments(luigi.Task):
 
         with open(self.output().path, "wb") as output_file:
             pickle.dump(new_block, output_file)
-
-
-class ValidateSongs(luigi.Task):
-    """Placeholder task for manual validation of songs"""
-
-    session_dir = luigi.Parameter()
-
-    def output(self):
-        segmentation_dir = os.path.join(self.session_dir, "segmentation")
-        output_filename = "{}-validated.pkl".format(session_basename(self.session_dir))
-        return luigi.LocalTarget(os.path.join(segmentation_dir, output_filename))
-
-    def requires(self):
-        return DetectSoundSegments(self.session_dir)
-
-    def run(self):
-        shutil.copy(self.input().path, self.output().path)

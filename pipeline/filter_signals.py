@@ -3,7 +3,7 @@ import os
 
 import luigi
 
-from detect_sound_segments import ValidateSongs
+from detect_sound_segments import DetectSoundSegments
 from preproephys import high_low_filter
 
 from utils import session_basename
@@ -15,7 +15,7 @@ class FilterElectrodeSignals(luigi.Task):
     session_dir = luigi.Parameter()
 
     def requires(self):
-        return ValidateSongs(self.session_dir)
+        return DetectSoundSegments(self.session_dir)
 
     def output(self):
         segmentation_dir = os.path.join(self.session_dir, "segmentation")
