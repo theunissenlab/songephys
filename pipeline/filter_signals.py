@@ -4,13 +4,13 @@ import os
 import luigi
 
 from detect_sound_segments import DetectSoundSegments
-from preproephys import high_low_filter
+# from preproephys import high_low_filter
+from filtering.filters import filter_segment
 
 from utils import session_basename
 
 
 class FilterElectrodeSignals(luigi.Task):
-    """huhh"""
 
     session_dir = luigi.Parameter()
 
@@ -28,7 +28,7 @@ class FilterElectrodeSignals(luigi.Task):
         block.create_relationship(force=True, append=True, recursive=True)
 
         for seg in block.segments:
-            high_low_filter(seg)
+            filter_segment(seg)
 
         with open(self.output().path, "wb") as output_file:
             pickle.dump(block, output_file)

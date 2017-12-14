@@ -11,6 +11,7 @@ from sklearn.manifold import TSNE
 from spikes.write_neo import write_neo
 
 from spikes.sorting.preprocess import collect_waveforms, sort_spikes_on_unit
+from spikes.sorting.merging import isosplit_cluster
 from spikes_vis.runsort import create_server
 import webbrowser
 
@@ -75,14 +76,16 @@ class CollectWaveforms(luigi.Task):
                 if channel_index.name == "Amp Elec {}".format(i)
             ).next()
 
-            waveforms = collect_waveforms(
+            waveforms, times = collect_waveforms(
                     unit.spiketrains,
                     force_single_peak=False
-            )[0][:, config.WF_SLICE]
+            )
+            waveforms = waveforms[:, config.WF_SLICE]
 
             # remove extremely large peaks
-            waveforms = waveforms[np.max(np.abs(waveforms), axis=1) < 300]
-            np.save(output.path, waveforms)
+            # FIXME: remove this thing?
+            waveforms = waveforms[np.max(np.abs(waveforms), axis=1) < 800]
+            np.save(output.path, {"waveforms": waveforms, "times": times})
 
 
 class ComputeSpikeTSNE(luigi.Task):
@@ -103,7 +106,7 @@ class ComputeSpikeTSNE(luigi.Task):
         return CollectWaveforms(self.session_dir)
 
     def run(self):
-        waveforms = np.load(self.input()[self.electrode].path)[()]
+        waveforms = np.load(self.input()[self.electrode].path)[()]["waveforms"]
         tsne = TSNE(n_components=2)
         xy = tsne.fit_transform(waveforms[:10000])
 
@@ -141,12 +144,91 @@ class RunManualClustering(luigi.Task):
         return [ComputeSpikeTSNE(self.session_dir, self.electrode), CollectWaveforms(self.session_dir)]
 
     def run(self):
-
         in_tsne, in_waveforms = self.input()
 
         app = create_server(in_waveforms[self.electrode].path, in_tsne.path, self.output().path)
         webbrowser.open_new("http://0.0.0.0:{}/".format(8500 + self.electrode))
         app.run(host="0.0.0.0", port=8500 + self.electrode, debug=False)
+
+
+class RunAutomatedClustering(luigi.Task):
+
+    session_dir = luigi.Parameter()
+
+    def output(self):
+        sorting_dir = os.path.join(self.session_dir, "spikes")
+        for elec_id in range(16):
+            yield luigi.LocalTarget(os.path.join(
+                sorting_dir,
+                "autoclustered-e{}.npy".format(electrode)
+            ))
+            
+    def requires(self):
+        return CollectWaveforms(self.session_dir)
+
+    def run(self):
+        for elec_id, (input_file, output_file) in enumerate(zip(self.input(), self.output())):
+            waveforms = np.load(input_file.path)[()]["waveforms"]
+            labels = isosplit_cluster(waveforms, threshold=1.0, k_initial=30)
+            np.save(output_file.path, labels)
+
+
+class WriteAutoSorted(luigi.Task):
+
+    session_dir = luigi.Parameter()
+
+    def output(self):
+        sorting_dir = os.path.join(self.session_dir, "spikes")
+        output_file = "{}-sorted-auto.pkl".format(session_basename(self.session_dir))
+        return luigi.LocalTarget(os.path.join(sorting_dir, output_file))
+
+    def requires(self):
+        yield ExtractSpikes(self.session_dir)
+        yield CollectWaveforms(self.session_dir)
+        yield RunAutomatedClustering(self.session_dir)
+
+    def run(self):
+        with open(self.input()[0].path, "rb") as input_file:
+            block = pickle.load(input_file)
+        block.create_relationship(force=True, append=True, recursive=True)
+
+        results = []
+        for elec_id, (wf_data, labels) in enumerate(zip(self.input()[1], self.input()[2])):
+            unit = (
+                channel_index.units[0]
+                for channel_index in block.channel_indexes
+                if channel_index.name == "Amp Elec {}".format(elec_id)
+            ).next()
+
+            wf_data = np.load(wf_data)[()]
+            waveforms = wf_data["waveforms"]
+            times = wf_data["times"]
+            labels = np.load(label)[()]
+
+            sorted_units = np.unique(labels)
+
+            # need to iterate over spiketrains (i.e. segments) and identify the sorted 
+            # units on each one
+            for seg_idx, st in enumerate(unit.spiketrains):
+                new_wfs = []
+                new_times = []
+
+                is_within_segment = (times <= t_start) & (times < st.t_stop)
+                for unit_label in sorted_units:
+                    is_unit_label = labels == unit_label
+
+                    new_wfs.append(waveforms[is_within_segment & is_unit_label])
+                    new_times.append(times[is_within_segment & is_unit_label])
+
+                results.append((new_times, new_wfss))
+
+        results = zip(*results)
+
+        new_block = write_neo(block, *results)
+        new_block.create_relationship(force=True, append=True, recursive=True)
+
+        with open(self.output().path, "wb") as output_file:
+            pickle.dump(new_block, output_file)
 
 
 class WriteSorted(luigi.Task):
