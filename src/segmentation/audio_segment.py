@@ -7,10 +7,54 @@ from neo.core import Segment
 from neosound import sound_manager
 from neosound.sound_store import HDF5Store
 from zeebeez.tdt2neo import stim, import_multielectrode
+from zeebeez.tdt2neo.import_multielectrode import binary_converter
 
 
 import autodetect
 import config
+
+
+def convert_digital_to_metadata(on_times, code_length=384, bits_per_char=8):
+    """Detect periods of digital codes and decode stimulus metadata
+
+    Copied from zeebeez because of a problem sometimes where the digital code starts
+    with "on" state instead of "off" state
+    """
+    # There is a certain bug where the pulses start in the on state
+    # and the first pulse is missed.
+    gaps = np.hstack([np.array(np.inf), np.diff(on_times)])
+    starts = on_times[gaps > code_length]
+    # If starts[0] is 0, then we probably have that bug.
+    # Instead, start on the first time that we see a "off"
+    if starts[0] == 0:
+        starts[0] = int(np.argmax(np.diff(on_times) > 1.0))
+
+    # TODO: automatically detect bad cases and correct them...
+    # TODO: kevin, i forgot what that TODO means
+    codes = list()
+    for ii, start in enumerate(starts):
+        metadata = dict()
+        signal = np.zeros(code_length, dtype=np.int8)
+        on_bits = on_times[((on_times - start) > 0) & ((on_times - start) < code_length)] - start - 1
+        signal[on_bits] = 1
+        code = binary_converter(signal, bits_per_char)
+        metadata["code"] = code
+        metadata["object"] = code[:4]
+        metadata["action"] = code[4:8]
+        try:
+            metadata["repetition"] = int(code[8:12])
+        except ValueError:
+            print("Repetition is not an integer! Setting to 0.")
+            metadata["repetition"] = 0
+        try:
+            metadata["trial"] = int(code[12:16])
+        except ValueError:
+            print("Trial is not an integer! Setting to 0.")
+            metadata["trial"] = 0
+        metadata["md5"] = code[16:]
+        codes.append((start, metadata))
+
+    return codes
 
 
 def read_stimulus_database(pyoperant_file, stim_dir):
@@ -88,8 +132,6 @@ def combine_stim_csvs(pyoperant_files, stim_dirs):
 
 def get_vocalizer_relation(annotations):
     familiarity = annotations.get("source")
-    # TODO: should be able to extract "self" thru this
-    # by checking for bird name == annotations.get("emitter")
     if familiarity == "tutor":
         return "tutor"
     elif annotations.get("source_sex") == "m":
@@ -110,7 +152,7 @@ def validate_digital_codes(digital_signals, trials_csv):
     digital_codes = import_multielectrode.convert_digital_to_metadata(on_times)
 
     code_diffs = np.diff([start_time for (start_time, _) in digital_codes])
-    csv_diffs = [t.total_seconds() for t in np.diff(trials_csv["time"])]
+    csv_diffs = [t.item() for t in np.diff(trials_csv["time"])]
 
     if len(code_diffs) != len(csv_diffs):
         raise Exception("Different number of digital codes and csv trials")
@@ -185,10 +227,17 @@ def generate_vocal_periods_dicts(audio, sampling_rate):
         shortest_duration=config.AUTODETECT_SHORTEST_DURATION
     )
 
+    total_duration = len(audio) / sampling_rate
+
     seg_dicts = []
     for start_time, stop_time in vocal_periods:
         start_time = float(start_time) / sampling_rate
         stop_time = float(stop_time) / sampling_rate
+
+        if stop_time > total_duration:
+            print("Warning: segment from {} to {} extends beyond {}".format(start_time, stop_time, total_duration))
+            continue
+
         seg_dicts.append({
             "name": "live_unknown",
             "description": "Created by segmentation.audio_segment.generate_vocal_periods_dicts",
@@ -326,9 +375,12 @@ def segment(block, segment_dicts):
         )
 
         for signal in main_segment.analogsignals:
+            end_time = start_time + segment_dict["duration"] + config.PAD_SONG_AFTER * pq.s
+            if end_time > signal.t_stop:
+                end_time = None
             sliced_signal = signal.time_slice(
                 start_time - config.PAD_SONG_BEFORE * pq.s,
-                start_time + segment_dict["duration"] + config.PAD_SONG_AFTER * pq.s
+                end_time
             )
             for channel_index in block.channel_indexes:
                 # TODO: preserve the channel number (e.g. 8 instead of 0)
