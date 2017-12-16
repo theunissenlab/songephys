@@ -8,7 +8,7 @@ import theano.tensor as T
 from util import float_x
 
 
-# How do we organize this code
+# Regression on own channel but exclude nearby points
 
 def compute_lags(data, n_lags):
     """Compute time-lagged data
@@ -110,7 +110,7 @@ def remove_indices(mat, axes=(0,)):
     roll_amounts = mat.shape[axes[0]]
 
     return theano.scan(
-        fn=lambda idx, mat: remove_index(idx, mat, axes=axes),
+        fn=lambda idx, mat: remove_index(idx, mat, along_axes=axes),
         sequences=T.arange(roll_amounts),
         non_sequences=[mat]
     )[0]
@@ -132,7 +132,7 @@ def xcorr_updated(xcorr):
         n_elec,
         (n_elec - 1) * n_lags,
         n_elec
-    ))[:, T.arange(n_elec)]
+    ))[T.arange(n_elec), :, T.arange(n_elec)]
     
 
 def compute_weights(autocorr, xcorr):
@@ -151,11 +151,11 @@ def compute_input_by_electrode(input_data):
     )
 
 
-def compute_predictor(data_lagged, weights):
+def compute_predictor(data, weights):
     return theano.scan(
         fn=lambda x, weights: x.dot(weights),
         sequences=[
-            compute_input_by_electrode(data_lagged),
+            data,
             weights
         ]
     )[0]
@@ -164,41 +164,36 @@ def compute_predictor(data_lagged, weights):
 def generate_blocks(data, block_width):
     """Chunk into blocks along axis 0"""
     return theano.scan(
-        lambda block_start, data: data[start:start + block_width],
-        sequences=T.arange(0, datums.shape[0] - block_width, block_width),
+        lambda block_start, data: data[block_start:block_start + block_width],
+        sequences=T.arange(0, data.shape[0] - block_width, block_width),
         non_sequences=[data]
     )[0]
 
 
-def predict(data, n_lags):
-    XX = timelagged_autocorr(data, n_lags)
-    XY = timelagged_xcorr(data, n_lags)
+def predict(data, target, n_lags):
+    XX = timelagged_autocorr(data)
+    XY = timelagged_xcorr(data, target)
     XX_by_elec = autocorr_updated(XX)    
     XY_by_elec = xcorr_updated(XY)
 
     input_data = compute_input_by_electrode(data)
     weights = compute_weights(XX_by_elec, XY_by_elec)
-
-    return compute_predictor(input_data, weights)
+    return compute_predictor(input_data, weights).T
 
 
 def filter_data_by_blocks(full_input_data, n_lags, block_width):
-    blocked_input = generate_blocks(full_input_data, block_width)
+    full_data_lagged = compute_lags(full_input_data, n_lags)[valid_slice(n_lags)]
+    full_target = full_input_data[target_slice(n_lags)]
 
-    in_data = theano.scan(
-        lambda block: block[target_slice(n_lags)],
-        sequences=blocked_input
-    )[0]
-
-    def process_block(data, n_lags):
-        return compute_lags(data, n_lags)[valid_slice(n_lags)]
+    blocked_data_lagged = generate_blocks(full_data_lagged, block_width)
+    blocked_target = generate_blocks(full_target, block_width)
 
     predicted_data = theano.scan(
-        lambda block: predict(process_block(block), n_lags)
-        sequences=blocked_input
+        lambda data, target: predict(data, target, n_lags),
+        sequences=[blocked_data_lagged, blocked_target]
     )[0]
 
-    return in_data, predicted_data
+    return blocked_target, predicted_data
 
 
 
