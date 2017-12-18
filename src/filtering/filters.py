@@ -11,6 +11,7 @@ Preform vector (auto)regression to remove correlations within and across electro
 ...     self_buffer=5)
 
 """
+from __future__ import print_function
 
 import numpy as np
 import quantities as pq
@@ -21,8 +22,28 @@ from neo.core import AnalogSignal, SpikeTrain, Unit, ChannelIndex
 from soundsig.signal import lowpass_filter, highpass_filter
 
 from timeseries import TimeSeriesRegression, PredictTimeseries
+from filtering.timeseries_2_electric_boogaloo import *
 
 import config
+
+
+class ThineFilterer(object):
+    def __init__(self, block_width):
+        X = T.fmatrix("input_batch")
+        n_lags = T.iscalar("n_lags")
+        original_signal, predicted_signal = filter_data_by_blocks(X, n_lags, block_width)
+
+        self._predict = theano.function([X, n_lags], [original_signal, predicted_signal])
+
+    def filter(self, signal, n_lags):
+        new_signal = np.zeros_like(signal)
+
+        original, predicted = self._predict(float_x(signal), n_lags)
+        new_signal[target_slice(n_lags)] = original - predicted
+        return new_signal
+
+
+filterer = ThineFilterer(block_width=800)
 
 
 def filter_segment(seg):
@@ -40,7 +61,24 @@ def filter_segment(seg):
     ).next()
 
     # Generate high pass
-    signal_highpass_clean = clean_signal(elec_signal)
+    sig_highpass = highpass_filter(
+            elec_signal.T,
+            elec_signal.sampling_rate,
+            config.HIGHPASS_CUTOFF * pq.Hz).T
+
+    signal_highpass_clean = filterer.filter(
+            sig_highpass,
+            n_lags=9)
+
+    '''
+    signal_highpass_clean = clean_signal(elec_signal,
+            n_lags=4,
+            causal=False,
+            downsample=1,
+            self_buffer=5,
+            window_size=800,
+            update_slice=slice(10, 790))
+    '''
 
     new_analogsignal = AnalogSignal(
            signal_highpass_clean,
@@ -66,12 +104,12 @@ def filter_segment(seg):
     seg.create_relationship(force=True)
 
 
-def clean_signal(signal):
+def clean_signal(signal, **kwargs):
     sig_highpass = highpass_filter(
             signal.T,
             signal.sampling_rate,
             config.HIGHPASS_CUTOFF * pq.Hz).T
-    return vector_autoregression(sig_highpass)
+    return vector_autoregression_windowed(sig_highpass, **kwargs)
 
 
 def vector_autoregression(signal, **kwargs):
@@ -95,6 +133,8 @@ def vector_autoregression_windowed(signal, window_size=1000, update_slice=slice(
     step = update_slice.stop - update_slice.start
 
     for window_start in range(0, signal.shape[0], step):
+        print("Filtered {}/{} samples".format(window_start, signal.shape[0]), end="\r")
+
         subsignal = signal[window_start:window_start + window_size]
 
         model.fit(subsignal)

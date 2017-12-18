@@ -38,12 +38,18 @@ def collect_waveforms(spiketrains, threshold=0, force_single_peak=False):
 
             # this lets us apply a secondary threshold
             # FIXME: it seems like there are some cases where spiketrain.waveforms is 2D?
-            midpoints = spiketrain.waveforms[:, config.WF_SLICE, 0][:, wf_peak_idx]
+            if spiketrain.waveforms.ndim == 3:
+                midpoints = spiketrain.waveforms[:, config.WF_SLICE, 0][:, wf_peak_idx]
+            else:
+                midpoints = spiketrain.waveforms[:, config.WF_SLICE][:, wf_peak_idx]
 
             waveforms += list(spiketrain.waveforms[(midpoints < threshold) & (mins)])
             times += list(spiketrain.times[(midpoints < threshold) & (mins)])
 
-    return np.array(waveforms)[:, :, 0] if len(waveforms) else np.array(waveforms), np.array(times)
+    if spiketrain.waveforms.ndim == 3:
+        return np.array(waveforms)[:, :, 0] if len(waveforms) else np.array(waveforms), np.array(times)
+    else:
+        return np.array(waveforms) if len(waveforms) else np.array(waveforms), np.array(times)
 
 
 def sort_spikes_on_unit(unsorted_unit, threshold, model, unit_clusters):

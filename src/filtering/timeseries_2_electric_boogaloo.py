@@ -162,12 +162,20 @@ def compute_predictor(data, weights):
 
 
 def generate_blocks(data, block_width):
-    """Chunk into blocks along axis 0"""
-    return theano.scan(
+    """Chunk into blocks along axis 0
+    
+    Because the last block won't be the same size, return it sepearately
+    """
+    result =  theano.scan(
         lambda block_start, data: data[block_start:block_start + block_width],
         sequences=T.arange(0, data.shape[0] - block_width, block_width),
+        # +1 so that we get the whole thing when it fits just perfectly
         non_sequences=[data]
     )[0]
+
+    last_start = T.cast(T.floor((data.shape[0] - 1) / block_width) * block_width, "int64")
+    leftover = data[last_start:]
+    return result, leftover
 
 
 def predict(data, target, n_lags):
@@ -185,15 +193,20 @@ def filter_data_by_blocks(full_input_data, n_lags, block_width):
     full_data_lagged = compute_lags(full_input_data, n_lags)[valid_slice(n_lags)]
     full_target = full_input_data[target_slice(n_lags)]
 
-    blocked_data_lagged = generate_blocks(full_data_lagged, block_width)
-    blocked_target = generate_blocks(full_target, block_width)
+    blocked_data_lagged, leftover_data = generate_blocks(full_data_lagged, block_width)
+    blocked_target, leftover_target = generate_blocks(full_target, block_width)
 
     predicted_data = theano.scan(
         lambda data, target: predict(data, target, n_lags),
         sequences=[blocked_data_lagged, blocked_target]
     )[0]
+    leftover_predicted = predict(leftover_data, leftover_target, n_lags)
 
-    return blocked_target, predicted_data
+    n_blocks, _, n_elec = blocked_target.shape
+    final_target = T.concatenate([blocked_target.reshape((n_blocks * block_width, n_elec)), leftover_target])
+    final_predicted = T.concatenate([predicted_data.reshape((n_blocks * block_width, n_elec)), leftover_predicted])
+
+    return final_target, final_predicted
 
 
 

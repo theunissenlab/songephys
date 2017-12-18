@@ -254,84 +254,106 @@ def fix_chIndex(block):
     block.channel_indexes.remove(chIndex)
     block.create_relationship(force=True, append = False, recursive=False)  # Just do one level so that signals are not linked to channels.
     
+
+def extract_spikes_from_signal(signal, threshold_std=4, limit_std=None, spike_width=20):
+    """Extract negative-going spikes from signal
+   
+    Exclude any spikes with peaks greater than limit_std as noise
+    """
+    threshold = - threshold_std * np.std(signal)
+
+    spike_indices = []
+    spike_waveforms = []
+    mask = np.where(signal < threshold)[0]
+    edges = np.where(np.diff(mask) > 1)[0]
+
+    start_ind = 0
+    for end_ind in edges:
+        spike_ind = np.argmin(signal[mask[start_ind]:mask[end_ind]+1])
+        spike_ind = mask[start_ind] + np.int(spike_ind)
+        if limit_std and signal[spike_ind] < limit_std * threshold:
+            pass
+        elif spike_ind - spike_width < 0:
+            # don't include spikes that are too close to the beginning
+            pass
+        elif spike_ind + spike_width > len(signal):
+            # don't include spikes that are too close to the end
+            pass
+        else:
+            spike_indices.append(spike_ind)
+        start_ind = end_ind + 1
+
+    spike_indices = np.array(spike_indices).astype(np.int)
+
+    for spike_idx in spike_indices:
+        spike_wf = signal[spike_idx - spike_width:spike_idx + spike_width]
+        spike_waveforms.append(spike_wf)
+    spike_waveforms = np.array([np.array(x) for x in spike_waveforms])
+
+    return spike_indices, spike_waveforms
+
+
 def extract_spikes(block):
     """ Generates Units based on threshold crossing of the analog signals that end with HPC (High Pass Clean). 
-    A single Unit data structure (that contains multi units) is generated for each electrode."""
 
-    # Parameters
-    SPIKEWIDTH = 1*pq.ms    # Sets the number of data points to be saved in the spike snippet - on each side from peak
-    NSTD = config.Z_THRESHOLD              # The level of the threshold in rms
-
+    A single Unit data structure (that contains multi units) is generated for each electrode.
+    """
     # Following neo's phylosophy we look through the analogsignals from the channel index since we want to get spikes
     # across segments. We assume one channel per electrode.
 
-
-# Units are unique to electrodes in our data
-    for chIndex in block.channel_indexes: 
+    # Units are unique to electrodes in our data
+    for channel_index in block.channel_indexes: 
         # If channel index is not an electrode continue
-        if not chIndex.name.startswith('Amp Elec'):
+        if not channel_index.name.startswith('Amp Elec'):
             continue;
-        st_list = []
-        ie = np.int(chIndex.index[0])    # Assume a single index
-        print(ie)
-        for sig in chIndex.analogsignals:
-            if sig.name.endswith('HPC'):       
-                # Get the threshold
-                th = NSTD*np.std(sig.magnitude[:,ie]) 
-                
-                # Get the spike width in number of points
-                spikewd = (sig.sampling_rate*SPIKEWIDTH)
-                spikewd = spikewd.rescale('dimensionless')
-                si = np.int(spikewd)
-                   
-                # Make a mask where signal is below this value
-                spike_mask = np.where(sig.magnitude[:,ie] < -th)[0]
-                spike_mask_edge = np.diff(spike_mask)
-                ind_edge = np.where(spike_mask_edge >1)[0]
 
-                # Find minimum value and index of spike within intervals below threshold
-                startSpIndInd=0
-                spikeIndex = []
-                for endSpIndInd in ind_edge:
-                    startSpInd = spike_mask[startSpIndInd] # First point crossing the threshold
-                    endSpInd = spike_mask[endSpIndInd]     # Last point crossing the threshold
-                    spikeVal = np.min(sig.magnitude[startSpInd:endSpInd+1, ie])
-                    spikeIndOff = np.where(sig.magnitude[startSpInd:endSpInd+1, ie] == spikeVal)[0]
-                    #print 'Spike between', startSpInd, 'and', endSpInd,':', np.min(sig.magnitude[startSpInd:endSpInd+1, ie]), 'found at', startSpInd + spikeIndOff
-                    spike_idx = startSpInd + np.int(spikeIndOff)
-                    if spike_idx - si <0:
-                        continue # this spike is too close to the beginning of the segment
-                    if spike_idx + si > sig.shape[0]:
-                        break # this spike is too close to the end of the segment.
-                    spikeIndex.append(spike_idx)
-                    startSpIndInd = endSpIndInd+1
+        new_spiketrains = []
+        elec_id = np.int(channel_index.index[0])    # Assume a single index
+        print("Extracting spikes from channel {}.".format(elec_id))
 
-                # create a spike train
-                spikeTimes = sig.times[spikeIndex]
-                seg = sig.segment
-                st = SpikeTrain(spikeTimes, t_start=sig.t_start, t_stop=sig.t_stop, name= seg.name+'_MU_%d'%ie)
-                st.segment = seg
-                seg.spiketrains.append(st)
-                seg.create_relationship(force=True, append=False, recursive=False)
+        # HPC signals are clean electrode signals
+        for sig in filter(lambda s: s.name.endswith("HPC"), channel_index.analogsignals):
+            sig_magnitude = sig.magnitude[:, elec_id]
 
-                # remember the spike waveforms
-                wf_list = []
-                for spike_idx in spikeIndex:
-                    wf_list.append(sig[spike_idx-si:spike_idx+si, ie])
-                
-                st.waveforms = np.array(wf_list)
-                st_list.append(st)
+            # Get the threshold
+            # Get the spike width in number of points
+            spikewd = (sig.sampling_rate * 1 * pq.ms)
+            spikewd = spikewd.rescale('dimensionless')
+            spikewd = np.int(spikewd)
+
+            spike_indices, spike_waveforms = extract_spikes_from_signal(
+                    sig_magnitude,
+                    threshold_std=config.Z_THRESHOLD,
+                    limit_std=30,
+                    spike_width=spikewd
+            )
+
+            spike_times = sig.times[spike_indices]
+            seg = sig.segment
+
+            new_spiketrain = SpikeTrain(
+                    spike_times, 
+                    t_start=sig.t_start, 
+                    t_stop=sig.t_stop, 
+                    name="{}_MU_{}".format(seg.name, elec_id)
+            )
+            new_spiketrain.segment = seg
+            seg.spiketrains.append(new_spiketrain)
+            seg.create_relationship(force=True, append=False, recursive=False)
+            new_spiketrain.waveforms = spike_waveforms
+            new_spiketrains.append(new_spiketrain)
         
         # We got all the spike trains for an unsorted unit
-        u = Unit(name='MU %d'%ie)
-        u.spiketrains = st_list
-        u.create_relationship(force=True, append=False, recursive=False)
-        chIndex.units.append(u)
-        u.channel_index = chIndex
+        new_unit = Unit(name="MU {}".format(elec_id))
+        new_unit.spiketrains = new_spiketrains
+        new_unit.create_relationship(force=True, append=False, recursive=False)
+        channel_index.units.append(new_unit)
+        new_unit.channel_index = channel_index
         
         # Doing the links for all the children does not work as it restores the sig-->channel_index link that we don't have
-        # chIndex.create_relationship(force=True, append=False, recursive=False)
+        # channel_index.create_relationship(force=True, append=False, recursive=False)
         
+
 def unit_report(block):
     """ Makes a little report and plot of snippets for all the units in the block """
     

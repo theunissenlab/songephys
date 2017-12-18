@@ -1,5 +1,6 @@
 import cPickle as pickle
 import os
+import time
 
 import luigi
 
@@ -8,6 +9,15 @@ from detect_sound_segments import DetectSoundSegments
 from filtering.filters import filter_segment
 
 from utils import session_basename
+
+
+def estimate_time_remaining(started_at, fraction_complete):
+    time_elapsed = time.time() - started_at
+    if fraction_complete:
+        est_total_time = time_elapsed / fraction_complete
+    else:
+        est_total_time = 1000000000.0
+    return time_elapsed, est_total_time - time_elapsed
 
 
 class FilterElectrodeSignals(luigi.Task):
@@ -27,7 +37,10 @@ class FilterElectrodeSignals(luigi.Task):
             block = pickle.load(inputfile)
         block.create_relationship(force=True, append=True, recursive=True)
 
-        for seg in block.segments:
+        start = time.time()        
+        for i, seg in enumerate(block.segments):
+            elapsed, remaining = estimate_time_remaining(start, float(i) / len(block.segments))
+            print "Filtering Segment {}/{} in {:.0f} min... Est. remaining: {:.0f} min".format(i, len(block.segments), elapsed / 60.0, remaining / 60.0)
             filter_segment(seg)
 
         with open(self.output().path, "wb") as output_file:

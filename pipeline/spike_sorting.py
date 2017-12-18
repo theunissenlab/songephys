@@ -84,7 +84,8 @@ class CollectWaveforms(luigi.Task):
 
             # remove extremely large peaks
             # FIXME: remove this thing?
-            waveforms = waveforms[np.max(np.abs(waveforms), axis=1) < 800]
+            # waveforms = waveforms[np.max(np.abs(waveforms), axis=1) < 800]
+            # waveforms = waveforms[np.max(np.abs(waveforms), axis=1) < 800]
             np.save(output.path, {"waveforms": waveforms, "times": times})
 
 
@@ -160,14 +161,14 @@ class RunAutomatedClustering(luigi.Task):
         for elec_id in range(16):
             yield luigi.LocalTarget(os.path.join(
                 sorting_dir,
-                "autoclustered-e{}.npy".format(electrode)
+                "autoclustered-e{}.npy".format(elec_id)
             ))
             
     def requires(self):
         return CollectWaveforms(self.session_dir)
 
     def run(self):
-        for elec_id, (input_file, output_file) in enumerate(zip(self.input(), self.output())):
+        for input_file, output_file in zip(self.input(), self.output()):
             waveforms = np.load(input_file.path)[()]["waveforms"]
             labels = isosplit_cluster(waveforms, threshold=1.0, k_initial=30)
             np.save(output_file.path, labels)
@@ -192,18 +193,22 @@ class WriteAutoSorted(luigi.Task):
             block = pickle.load(input_file)
         block.create_relationship(force=True, append=True, recursive=True)
 
-        results = []
+        new_spike_times = []
+        new_waveforms = []
         for elec_id, (wf_data, labels) in enumerate(zip(self.input()[1], self.input()[2])):
+            new_spike_times.append([])
+            new_waveforms.append([])
+
             unit = (
                 channel_index.units[0]
                 for channel_index in block.channel_indexes
                 if channel_index.name == "Amp Elec {}".format(elec_id)
             ).next()
 
-            wf_data = np.load(wf_data)[()]
+            wf_data = np.load(wf_data.path)[()]
             waveforms = wf_data["waveforms"]
             times = wf_data["times"]
-            labels = np.load(label)[()]
+            labels = np.load(labels.path)[()]
 
             sorted_units = np.unique(labels)
 
@@ -213,18 +218,17 @@ class WriteAutoSorted(luigi.Task):
                 new_wfs = []
                 new_times = []
 
-                is_within_segment = (times <= t_start) & (times < st.t_stop)
+                is_within_segment = (times >= st.t_start) & (times < st.t_stop)
                 for unit_label in sorted_units:
                     is_unit_label = labels == unit_label
 
                     new_wfs.append(waveforms[is_within_segment & is_unit_label])
                     new_times.append(times[is_within_segment & is_unit_label])
 
-                results.append((new_times, new_wfss))
+                new_spike_times[elec_id].append(new_times)
+                new_waveforms[elec_id].append(new_wfs)
 
-        results = zip(*results)
-
-        new_block = write_neo(block, *results)
+        new_block = write_neo(block, new_spike_times, new_waveforms)
         new_block.create_relationship(force=True, append=True, recursive=True)
 
         with open(self.output().path, "wb") as output_file:
@@ -257,8 +261,6 @@ class WriteSorted(luigi.Task):
                 for channel_index in block.channel_indexes
                 if channel_index.name == "Amp Elec {}".format(elec_id)
             ).next()
-
-            print unit
         
             data = np.load(self.input()[elec_id + 1].path)[()]
             new_times, new_wfs = sort_spikes_on_unit(unit, -50, data["model"], data["units"])
