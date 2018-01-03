@@ -5,7 +5,16 @@ from sklearn.lda import LDA
 
 def _reassign(Clusterer, labels, data, i, j):
     selector = (labels == i) | (labels == j)
-    new_labels = Clusterer(n_clusters=2).fit(data[selector, None]).predict(data[:, None])
+    if data.ndim == 1:
+        data_in = data[selector, None]
+        data = data[:, None]
+    else:
+        data_in = data[selector]
+
+    if Clusterer is KMeans:
+        new_labels = Clusterer(n_clusters=2).fit(data_in).predict(data)
+    else:
+        new_labels = Clusterer(n_components=2).fit(data_in, labels[selector]).predict(data)
     labels[selector & (new_labels == 0)] = i
     labels[selector & (new_labels == 1)] = j
     return labels
@@ -13,7 +22,8 @@ def _reassign(Clusterer, labels, data, i, j):
 
 reassign_fns = {
         "gmm": lambda labels, data, i, j: _reassign(GaussianMixture, labels, data, i, j),
-        "kmeans": lambda labels, data, i, j: _reassign(KMeans, labels, data, i, j)
+        "kmeans": lambda labels, data, i, j: _reassign(KMeans, labels, data, i, j),
+        "lda": lambda labels, data, i, j: _reassign(LDA, labels, data, i, j)
 }
 
 

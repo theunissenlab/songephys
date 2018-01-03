@@ -12,7 +12,8 @@ from merging import cluster_fns, merge, reassign_fns, Projector
 from isosplit import IsoSplit, Merger, Tracker, compute_means
 
 
-def sort(
+# TODO: let you use tsne as features?
+def sort_debugger(
         waveforms,
         feature_transform=None,
         data_filter=None,
@@ -37,17 +38,19 @@ def sort(
 
     initial_cluster_fn = cluster_fns[initial_cluster_type]
     clusters = initial_cluster_fn(data, n=initial_cluster_count)
+    final_labels = np.ones_like(clusters) * -1  # The official labels
 
+    # REMOVING "bad" initial clusters here. will put those data points back in with label -1 at end
     # apply cluster filter here... keep track of which points we arent sorting
-    tokeep = np.ones_like(clusters)
+    keep = np.ones_like(clusters)
     for clust, count in zip(*np.unique(clusters, return_counts=True)):
-	if count < len(data) // 100:
-	    tokeep[clusters == clust] = 0
-    tokeep = tokeep.astype(bool)
+	if count < len(data) // 1000:
+	    keep[clusters == clust] = 0
+    keep = keep.astype(bool)
 
-    waveforms = waveforms[tokeep]
-    data = data[tokeep]
-    clusters = clusters[tokeep]
+    # waveforms = waveforms[keep]
+    data = data[keep]
+    clusters = clusters[keep]
 
     tracker = Tracker(np.unique(clusters))
     iso = IsoSplit(scale=4.0)
@@ -72,6 +75,7 @@ def sort(
         k, _optimal_cut, _bins, _unimodal_fit, _actual = iso.isocut(projected_data)
 
         if debug is True:
+            final_labels[keep] = clusters
             yield dict(
                 i=i,
                 j=j,
@@ -83,7 +87,7 @@ def sort(
                 proj=proj,
                 data_1=data[clusters == i],
                 data_2=data[clusters == j],
-                clusters=clusters,
+                clusters=final_labels,
                 waveforms=waveforms,
             )
 
@@ -100,7 +104,7 @@ def sort(
             else:
                 clusters = reassign_fn(clusters, data, i, j)
 
-            tracker.touch(j)
+            tracker.touch(i)
             tracker.touch(j)
             tracker.check([i, j])
         else:
@@ -108,7 +112,6 @@ def sort(
         
         new_cluster_count = len(np.unique(clusters))
 
-        print new_cluster_count, last_cluster_count, iters_on_same_cluster_count
         if new_cluster_count == last_cluster_count:
             if iters_on_same_cluster_count > new_cluster_count ** 2:
                 break
@@ -120,5 +123,13 @@ def sort(
 
     # TODO: if we filter anything out, we need to include it either as a cluster or include those
     # indices in the return
-    yield clusters, waveforms
+    final_labels[keep] = clusters
+    yield final_labels, waveforms
 
+
+def sort(*args, **kwargs):
+    kwargs["debug"] = False
+    for subresult in sort_debugger(*args, **kwargs):
+        pass
+
+    return subresult

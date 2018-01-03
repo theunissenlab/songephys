@@ -63,19 +63,21 @@ def ks_modified(a, b, pivot):
 class IsoSplit(object):
     """IsoSplit algorithm from MountainSort"""
 
-    def __init__(self):
-        self.scale = 1.0
+    def __init__(self, scale=1.0):
+        self.scale = scale
 
     def isocut(self, X):
         X.sort()
 
         n_samples = len(X)
-        n_bins = int(np.ceil(np.sqrt(n_samples / 2.0) * self.scale))
+
+        n_bins = int(min(np.ceil(np.sqrt(n_samples / 2.0) * self.scale), np.sqrt(3 + n_samples) - 1))
 
         intervals = np.min([
             np.arange(1, n_bins + 1),
             np.arange(n_bins, 0, -1)
         ], axis=0).astype(np.float)
+
         intervals *= np.float(n_samples - 1) / np.sum(intervals)
 
         idx = np.zeros(len(intervals) + 1)
@@ -93,6 +95,8 @@ class IsoSplit(object):
         weighted_fit = isotonic_fit * point_spacing
 
         peak = np.argmax(isotonic_fit)
+
+        # the critical range is where we think the optimal cut might be
         ks_best, crit_range = ks_modified(bin_spacing, weighted_fit, peak)
 
         residual = residual[crit_range]
@@ -103,9 +107,10 @@ class IsoSplit(object):
         cutpoint = np.argmin(fit_residual) + crit_range.start
         cutpoint_x = np.mean(x_sub[cutpoint:cutpoint + 2])
 
-        return ks_best, cutpoint_x, isotonic_fit, density
+        return ks_best, cutpoint_x, x_sub[:-1] + point_spacing / 2, isotonic_fit, density
 
     def fit_isotonic(self, x, weights, N=None):
+        """Fit a monotonically increasing or decreasing function"""
         if N is None:
             N = len(weights)
         
@@ -156,6 +161,8 @@ class IsoSplit(object):
         return fit, mse
 
     def fit_isotonic_up_down(self, x, weights):
+        """Best unimodal fit by optimally fitting an increasing and decreasing function
+        """
 	N = len(weights)
 
 	x_rev = x[::-1]
@@ -254,7 +261,7 @@ def isosplit_cluster(X, k_initial=20, threshold=1.0):
             proj.project(X[labels == j])
         ])
 
-	k, _, a, b = iso.isocut(x)
+	k, cutpoint, a, b = iso.isocut(x)
 
 	if k < threshold:
 	    labels = merge(labels, i, j)
