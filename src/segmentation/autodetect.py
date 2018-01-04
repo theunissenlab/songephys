@@ -17,10 +17,10 @@ from scipy.signal import decimate
 import sys
 
 
-def find_syllables(audio_stream_in, amp_thresh = '', fs=25000, fuse_duration=0.1,  syll_dur = 20.0, sil_dur = 5.0, verbose=False):
+def find_syllables_old(audio_stream_in, amp_thresh = '', fs=25000, fuse_duration=0.1,  syll_dur = 20.0, sil_dur = 5.0, verbose=False):
  
     """
-    This function is not yet very functional (Bill, 9/2017)
+    This function is not yet very functional (Bill, 9/2017)- in fact as you can see it's "Old"
     For segmenting into syllables.
     You should pass amp_thresh, which should come from find_vocal_periods
     The idea of this function is that instead of just a threshold based amplitude sorting into v
@@ -86,8 +86,9 @@ def find_syllables(audio_stream_in, amp_thresh = '', fs=25000, fuse_duration=0.1
             
     return syllables
 
-def findSyllables(audio_stream_in, fs=30000, fuse_duration=0.01, shortest_duration=0.01, test_mode=False, amp_thresh=None, normalize_sound=True, normalize_thresh=None, lowpass = 2000, highpass = 5000):
+def find_syllables(audio_stream_in, fs=30000, fuse_duration=0.01, shortest_duration=0.01, test_mode=False, amp_thresh=None, normalize_sound=True, normalize_thresh=None, lowpass = 2000, highpass = 5000, analog_signals = None):
     """ 
+TODO        The basic premise is sound and taken from a noteboook but I haven't finished making it work for both one signal and many. many is useful for histograms (analog_signals)= Bill
         Use amplitude thresholds for identifying syllable times in a song.        
         Essentially a helper function for using findVocalPeriods.
     
@@ -99,19 +100,53 @@ def findSyllables(audio_stream_in, fs=30000, fuse_duration=0.01, shortest_durati
         normalize_thresh -      When normalize_sound=True all values below normalize_thresh first get set to 0- keeps the noise floor from being amplified.
         lowpass_thresh and 
         highpass_thresh -       It can be surprisingly useful to only search over a very limited bandwidth. Don't be afraid to try 6kHz to 9kHz or something
+        analog_signals -        Send a series of signals if you want your histograms to look any good
+
     """
-    amp_thresh = .3
-    normalize_thresh = 0.0005
-    lowpass = 6000
-    highpass = 9000
-    fuse_duration = 0.01
-    shortest_duration = 0.01
-    normalize_sound = True
+    if test_mode:
+        # try lowpass filtering it to throw away "noise" in fast frequency correlations
+        if analog_signals:
+            
+            plt.figure()
+            plt.plot(amp_env[0])
+            plt.title("Raw Smoothed Amplitude Envelope- one of many")
+            plt.show()
+        else:
+            signal = np.copy(audio_stream_in)        
+            signal = highpass_filter(signal, fs, highpass)
+            signal = np.abs(lowpass_filter(signal, fs, lowpass))
+            amp_env = lowpass_filter(signal, fs, 100)
+            plt.figure()
+            plt.plot(amp_env)
+            plt.title("Raw Smoothed Amplitude Envelope")
+            plt.show()
+            
+            # normalize amplitude to near 1 in case this matters... make really low values just equal zero first to fix stretching        
+            low_vals = np.where(amp_env<normalize_thresh)
+            amp_env[low_vals] = 0
+            amp_env = (1/np.mean(amp_env)) * amp_env
+            plt.figure()
+            plt.plot(amp_env)
+            plt.title("normalized amplitude envelope")
+    
+            # for figuring out amp_thresh, or enter it in hardcoded on next cell
+            a = analogsignals[0]
+            plt.figure()
+            plt.hist([a for a in analogsignals[0] if a > 0], bins=100)
+            n, bins = np.histogram([a for a in analogsignals[0] if a > 0], bins=100)
+            amp_thresh = bins[np.argmax(n)+2] 
+            print("Amplitude threshold is: {}".format(amp_thresh))
+    
+    syll_times, _ = find_vocal_periods(audio_stream_in,fs,fuse_duration,shortest_duration,amp_thresh,normalize_sound,normalize_thresh,lowpass,highpass)
+
+    return syll_times
     
     
     
 def get_syllable_features(soundIn, fs = 30000): 
-    """ An easy interface for computing many sound features from bioSound
+    """ 
+        An easy interface for computing many sound features from bioSound
+TODO    Short syllables trigger a warning in Biosound spectroCalc because it can't bandpass them. 
         Takes a raw sound file and a sampling rate and returns a dict:
             syllable_features = {"fund": fund, 
                        "cvfund": cvfund, "F1": meanF1, "F2": meanF2, "F3" : meanF3,
