@@ -232,6 +232,7 @@ class Merger(object):
 
     def __init__(self, labels, initial_threshold, final_threshold, mode="linear"):
         self.n_initial = len(np.unique(labels))
+        self.n_initial = 3 if self.n_initial <= 3 else self.n_initial
         self.update(self.n_initial)
         self._map = self._generate_linear_map(initial_threshold, final_threshold)
 

@@ -36,7 +36,7 @@ class DownloadSession(luigi.Task):
             self.pyoperants)
         if self.notes:
             with open(os.path.join(self.output().path, "NOTES"), "a+") as notefile:
-                notefile.write(notes)
+                notefile.write(self.notes)
 
 
 class DownloadSessions(luigi.Task):

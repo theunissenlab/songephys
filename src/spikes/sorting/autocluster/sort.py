@@ -26,6 +26,9 @@ def sort_debugger(
         merge_final_threshold=0.1,
         reassign_mode="kmeans",
         reassign_dims=1,
+        max_peak_size=None,
+        min_peak_size=None,
+        peak_idx=None,
         debug=False,
     ):
     """
@@ -37,14 +40,36 @@ def sort_debugger(
     data = feature_transform(waveforms) if feature_transform else waveforms
 
     initial_cluster_fn = cluster_fns[initial_cluster_type]
-    clusters = initial_cluster_fn(data, n=initial_cluster_count)
+
+    keep = np.ones(len(data))
+    if max_peak_size:
+        if not peak_idx:
+            peak_idx = data.shape[1] / 2
+        peaks = data[:, peak_idx]
+        keep[np.abs(peaks) > max_peak_size] = 0
+
+    if min_peak_size:
+        if not peak_idx:
+            peak_idx = data.shape[1] / 2
+        peaks = data[:, peak_idx]
+        keep[np.abs(peaks) < min_peak_size] = 0
+
+    import time
+    start = time.time()
+    print data.shape
+    print initial_cluster_count
+    if len(data) >= initial_cluster_count:
+        clusters = initial_cluster_fn(data, n=initial_cluster_count)
+    else:
+        clusters = -1 * np.ones(len(data))
+    print "clustered in {:.2f}s".format(time.time() - start)
     final_labels = np.ones_like(clusters) * -1  # The official labels
 
     # REMOVING "bad" initial clusters here. will put those data points back in with label -1 at end
     # apply cluster filter here... keep track of which points we arent sorting
     keep = np.ones_like(clusters)
     for clust, count in zip(*np.unique(clusters, return_counts=True)):
-	if count < len(data) // 1000:
+        if count < 10:
 	    keep[clusters == clust] = 0
     keep = keep.astype(bool)
 

@@ -2,7 +2,9 @@ import cPickle as pickle
 import os
 
 import numpy as np
+import scipy.stats
 import luigi
+import matplotlib.pyplot as plt
 
 from filter_signals import FilterElectrodeSignals
 from preproephys import fix_chIndex, extract_spikes
@@ -13,6 +15,11 @@ from spikes.write_neo import write_neo
 from spikes.sorting.preprocess import collect_waveforms, sort_spikes_on_unit
 from spikes.sorting.merging import isosplit_cluster
 from spikes_vis.runsort import create_server
+from spikes.sorting.autocluster.process_block import time_slices, process_votes, relabel_across_time, gen_figures
+from spikes.sorting.autocluster import sort
+from spikes.sorting.metrics import cluster_snr, interspike_interval, firing_rate, consistency, isolation
+import spikes.sorting.cluster_linking as clust
+
 import webbrowser
 
 import config
@@ -93,7 +100,7 @@ class ComputeSpikeTSNE(luigi.Task):
 
     session_dir = luigi.Parameter()
     electrode = luigi.parameter.NumericalParameter(
-        var_type=int, min_value=0, max_value=15)
+        var_type=int, min_value=0, max_value=16)
 
     def output(self):
         sorting_dir = os.path.join(self.session_dir, "spikes")
@@ -114,6 +121,179 @@ class ComputeSpikeTSNE(luigi.Task):
         np.save(self.output().path, xy)
 
 
+class ClusterOverTime(luigi.Task):
+
+    session_dir = luigi.Parameter()
+    step_size = luigi.IntParameter()
+    iters = luigi.IntParameter(default=3)
+
+    def output(self):
+        clusters_dir = os.path.join(self.session_dir, "cluster_linking")
+        for elec_id in range(16):
+            yield luigi.LocalTarget(os.path.join(
+                clusters_dir,
+                "proposed_clusters-e{}.npy".format(elec_id)
+            ))
+            
+    def requires(self):
+        return CollectWaveforms(self.session_dir)
+
+    def run(self):
+        for elec_id, (input_file, output_file) in enumerate(zip(self.input(), self.output())):
+            if not os.path.exists(os.path.dirname(output_file.path)):
+                os.makedirs(os.path.dirname(output_file.path))
+            data = np.load(input_file.path)[()]
+            print "sorting {}".format(input_file.path)
+
+            time_ranges, data_blocks = time_slices(data)
+
+            # Run sorting a few times on each time range
+            labels_blocks = []
+            for time_range, data_block in zip(time_ranges, data_blocks):
+                cluster_results = []
+                for _ in range(3):  # how many times to run the clustering
+                    if not len(data_block["waveforms"]):
+                        cluster_results.append([])
+                        continue
+                    labels, data = sort.sort(data_block["waveforms"][:, 10:32],
+                            initial_cluster_type="kmeans",
+                            initial_cluster_count=20,
+                            ordered=False,
+                            merge_mode="linear",
+                            reassign_mode="kmeans",
+                            merge_initial_threshold=0.8,
+                            merge_final_threshold=0.3,
+                            max_peak_size=500,
+                            min_peak_size=40,
+                            peak_idx=10,
+                            reassign_dims=1)
+                    cluster_results.append(labels)
+                labels_blocks.append(cluster_results)
+                print "Just sorted one block"
+
+            # Compute the mode of each block and try to find consistent labeling across time
+            best_labels = []
+            for labels_block in labels_blocks:
+                best_labels.append(scipy.stats.mode(process_votes(labels_block)).mode.flatten())
+            best_labels = relabel_across_time(time_ranges, data_blocks, best_labels, threshold=0.6)
+
+            metric_blocks = []
+            for _, data_block, labels, labels_block in zip(
+                    time_ranges, data_blocks, best_labels, labels_blocks):
+                metric = {}
+
+                if not len(labels):
+                    metric_blocks.append({})
+                    continue
+                
+                if elec_id in [6, 13]:
+                    isolation_metric = isolation(data_block["waveforms"], labels, k=6)
+                isolation_metric = {}
+
+                for l in np.unique(labels):
+                    metric[l] = {
+                        "snr": cluster_snr(data_block["waveforms"][labels == l]),
+                        "isi": interspike_interval(data_block["times"][labels == l], range=(0, 0.02), bins=50),
+                        "fr": firing_rate(data_block["times"][labels == l]),
+                        "consistency": consistency(np.array(labels_block)[:, labels == l]),
+                        "isolation": isolation_metric.get(l, 0.0)
+                    }
+
+                metric_blocks.append(metric)
+
+            result = {
+                "time_ranges": time_ranges,
+                "data": data_blocks,
+                "labels": best_labels,
+                "metrics": metric_blocks
+            }
+
+            np.save(output_file.path, result)
+
+
+class GenerateClusterLinkingFigures(luigi.Task):
+
+    session_dir = luigi.Parameter()
+
+    def output(self):
+        clusters_dir = os.path.join(self.session_dir, "cluster_linking")
+
+        for elec_id in range(16):
+            yield luigi.LocalTarget(os.path.join(
+                clusters_dir,
+                "images_{}".format(elec_id),
+                "cluster_info.npy"
+            ))
+            
+    def requires(self):
+        return ClusterOverTime(self.session_dir, step_size=600)
+
+    def run(self):
+        for input_file, output_file in zip(self.input(), self.output()):
+            output_dir = os.path.dirname(output_file.path)
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+
+            print "Generating figures from {} to {}".format(input_file.path, output_dir)
+            data = np.load(input_file.path)[()]
+
+            link_dirname = "images"  # this is for the 
+
+            figure_locations = []
+            for time_range, data_block, labels, metrics in zip(
+                    data["time_ranges"], data["data"], data["labels"], data["metrics"]):
+                time_dir = "{}_{}".format(*time_range)
+                if not os.path.exists(os.path.join(output_dir, time_dir)):
+                    os.makedirs(os.path.join(output_dir, time_dir))
+
+                fig_dict = {}
+                if not len(labels):
+                    figure_locations.append(fig_dict)
+                    continue
+
+                figs = gen_figures(time_range, data_block, labels, metrics)
+
+                base_scatter = os.path.join(time_dir, "scatter.png")
+                fig_dict["scatter"] = os.path.join(link_dirname, base_scatter)
+                figs[0].savefig(os.path.join(output_dir, base_scatter), format="png")
+                plt.close(figs[0])
+
+                for label, fig in zip(sorted(np.unique(labels)), figs[1:]):
+                    base_waveforms = os.path.join(time_dir, "waveforms_{}.png".format(label))
+                    fig_dict[label] = os.path.join(link_dirname, base_waveforms)
+                    fig.savefig(os.path.join(output_dir, base_waveforms), format="png")
+                    plt.close(fig)
+
+                figure_locations.append(fig_dict)
+            data.update({
+                "figures": figure_locations
+            })
+
+            np.save(output_file.path, data)
+
+
+class RunManualClusterLinking(luigi.Task):
+
+    session_dir = luigi.Parameter()
+    electrode = luigi.parameter.NumericalParameter(
+        var_type=int, min_value=0, max_value=16)
+
+    def output(self):
+        clusters_dir = os.path.join(self.session_dir, "cluster_linking")
+        return luigi.LocalTarget(os.path.join(
+            clusters_dir,
+            "cluster_result-e{}.npy".format(self.electrode)
+        ))
+            
+    def requires(self):
+        return GenerateClusterLinkingFigures(self.session_dir)
+
+    def run(self):
+        app = clust.create_server(list(self.input())[self.electrode].path)
+        webbrowser.open_new("http://0.0.0.0:{}/".format(8400 + self.electrode))
+        app.run(host="0.0.0.0", port=8400 + self.electrode, debug=False)
+
+
 class JustRunAllTSNEs(luigi.Task):
 
     session_dir = luigi.Parameter()
@@ -132,7 +312,7 @@ class RunManualClustering(luigi.Task):
 
     session_dir = luigi.Parameter()
     electrode = luigi.parameter.NumericalParameter(
-        var_type=int, min_value=0, max_value=15)
+        var_type=int, min_value=0, max_value=16)
 
     def output(self):
         sorting_dir = os.path.join(self.session_dir, "spikes")
@@ -153,6 +333,37 @@ class RunManualClustering(luigi.Task):
 
 
 class RunAutomatedClustering(luigi.Task):
+
+    session_dir = luigi.Parameter()
+
+    def output(self):
+        sorting_dir = os.path.join(self.session_dir, "spikes")
+        for elec_id in range(16):
+            yield luigi.LocalTarget(os.path.join(
+                sorting_dir,
+                "autoclustered-e{}.npy".format(elec_id)
+            ))
+            
+    def requires(self):
+        return CollectWaveforms(self.session_dir)
+
+    def run(self):
+        for input_file, output_file in zip(self.input(), self.output()):
+            waveforms = np.load(input_file.path)[()]["waveforms"]
+            labels = isosplit_cluster(waveforms, threshold=1.0, k_initial=30)
+            np.save(output_file.path, labels)
+
+
+class TestAutomatedClustering(luigi.Task):
+    """Try various settings of the autoclustering parameters to see which look the best...
+
+    Things to try:
+    feature space (regular waveform)
+    initial cluster count (25)
+    initial cluster method (kmeans vs gmm)
+    merge thresholds (0.6 to 0.1) (0.8 to 0.1) (0.6 to 0.2) (0.8 to 0.2)
+    reassignment mode (kmeans vs gmm)
+    """
 
     session_dir = luigi.Parameter()
 

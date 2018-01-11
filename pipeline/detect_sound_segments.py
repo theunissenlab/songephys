@@ -63,8 +63,11 @@ class DetectSoundSegments(luigi.Task):
         del sound_arr
 
         playbacks_csv = pd.read_csv(self.input()[1][1].path)
-        playbacks_csv["time"] = playbacks_csv["time"].apply(
-                lambda time_str: datetime.datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S.%f"))
+
+        # FIXME: not sure if this will alwyas work
+        if "time" in playbacks_csv:
+            playbacks_csv["time"] = playbacks_csv["time"].apply(
+                    lambda time_str: datetime.datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S.%f"))
 
 
         if len(playbacks_csv) == 0:

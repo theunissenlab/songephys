@@ -32,7 +32,7 @@ def collect_waveforms(spiketrains, threshold=0, force_single_peak=False):
             wf_peak_idx = (spiketrain.waveforms.shape[1] // 2) - config.WF_START
             if force_single_peak:
                 # array that selects waveforms whose peak value is at the array center
-                mins = np.argmin(spiketrain.waveforms[:, config.WF_SLICE, 0], axis=1) == wf_peak_idx
+                mins = np.argmin(spiketrain.waveforms[:, config.WF_SLICE], axis=1) == wf_peak_idx
             else:
                 mins = np.ones(len(spiketrain.waveforms)).astype(bool)
 

@@ -19,7 +19,7 @@ def cluster_snr(waveforms):
 
 
 def interspike_interval(times, range=(0.0, 0.01), bins=10):
-    return np.histogram(np.diff(times), range=range, bins=bins)
+    return np.histogram(np.diff(times), range=range, bins=bins, normed=True)
 
 
 def firing_rate(times):
@@ -66,7 +66,7 @@ def isolation(waveforms, labels, k=10):
     unique_labels = np.unique(labels)
     overlaps = np.zeros((len(unique_labels), len(unique_labels)))
 
-    knn = NearestNeighbors(n_neighbors=k, algorithm='ball_tree').fit(waveforms)
+    knn = NearestNeighbors(n_neighbors=k, algorithm='ball_tree', n_jobs=8).fit(waveforms)
     _, neighbors = knn.kneighbors(waveforms)
 
     for i, A in enumerate(unique_labels):
