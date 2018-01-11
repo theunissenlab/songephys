@@ -1,0 +1,65 @@
+<html lang-"en">
+<head>
+    <!-- Meta -->
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta charset="utf-8">
+
+    <!-- <link href="static/css/bootstrap-3.3.7-dist/css/bootstrap.min.css" rel="stylesheet"> -->
+    <link href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0-beta.3/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="static/css/style.css">
+</head>
+<body>
+
+    {% raw %}
+    <div ng-app="ClusterLinking">
+
+        <!-- Main Template-->
+        <script type="text/ng-template" id="home.html">
+					<div>Link Clusters</div>
+          <div class="row">
+            <div class="col-md-11">
+              <div ng-repeat="timeBlock in timeBlocks" class="row">
+                <div class="col col-md-12">
+                  {{  timeBlock.t_start }}
+                </div>
+                <div class="col col-md-2">
+                  <img class="square" ng-src="{{ timeBlock.scatter }}"></img>
+                </div>
+                <div class="col col-md-10">
+                  <div class="row">
+                    <img ng-repeat="(clusterId, cluster) in timeBlock.clusters" ng-class="{active: !!cluster.active, inactive: !!cluster.selected}" class="card-box" ng-src="{{ cluster.waveforms }}" ng-click="toggle(timeBlock, cluster, clusterId)">{{cluster}}</img>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="col-md-1">
+              <button ng-click="submit()">Save All Clusters</button>
+              <button style="padding: 10px; margin: 10px;" ng-click="save_new_cluster()">Link Cluster</button>
+
+              <div ng-repeat="unit in newUnits">
+                <div ng-repeat="(key, cluster) in unit.pieces">
+                  <img class="small" ng-src="{{ cluster.waveforms }}"></img>
+                  <p>{{ key }}</p>
+                </div>
+                <button ng-click="ungroup_cluster(unit.id)">clear</button>
+              </div>
+            </div>
+          </div>
+        </script>
+
+        <ng-view></ng-view>
+    {% endraw %}
+    </div>
+
+    <script
+      src="https://code.jquery.com/jquery-3.2.1.js"
+      integrity="sha256-DZAnKJ/6XZ9si04Hgrsxu/8s717jcIzLy3oi35EouyE="
+      crossorigin="anonymous"></script>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/angular.js/1.6.1/angular.js"></script>
+    <script type="text/javascript" src="https://cdnjs.cloudflare.com/ajax/libs/angular.js/1.6.1/angular-route.js"></script>
+    <script type="text/javascript" src="static/js/app.js"></script>
+
+</body>
+
+</html>
+

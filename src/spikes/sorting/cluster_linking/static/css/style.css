@@ -1,0 +1,26 @@
+.small {
+  height: 60px;
+  width: 80px;
+}
+
+.square {
+  height: 180px;
+  width: 180px;
+}
+
+.card-box {
+  height: 200px;
+  padding: 10px;
+  cursor: pointer;
+}
+
+.active {
+  border-width: 3px;
+  border-color: green;
+  border-style: solid;
+}
+
+.inactive {
+  background-color: gray;
+}
+
