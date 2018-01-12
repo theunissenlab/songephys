@@ -17,21 +17,22 @@ def format_data(time_ranges, data_blocked, labels, metric_blocks, figure_locatio
             "t_start": t[0],
             "t_stop": t[1],
             "scatter": figs.get("scatter"),
-            "clusters": dict(
-                (str(c), {
+            "clusters": [
+                {
+                    "label": str(c),
                     "waveforms": figs[c],
                     "selected": False,
                     "active": False
-                })
-                for c in sorted(np.unique(l))
-            )
+                }
+                for c in sorted(np.unique(l))],
+            "labels": map(str, sorted(np.unique(l)))
         }
 
         entries.append(entry)
     return entries
 
 
-def create_server(data_info_file):
+def create_server(data_info_file, output_file):
     app = Flask(__name__, static_folder="static", template_folder="templates")
     app.config["TEMPLATE_AUTO_RELOAD"] = True
     @app.after_request
@@ -82,8 +83,13 @@ def create_server(data_info_file):
     @app.route('/submit', methods=["POST"])
     def save():
         data = request.get_json(silent=True)
-        print data
-        pass
+        for unit in data.units:
+            for time_block_idx, cluster_ids in enumerate(unit):
+                cluster_ids = map(int, cluster_ids)
+
+
+        np.save(output_file, {"units": data})
+        return jsonify({"result": "success"})
 
     return app
 
