@@ -24,6 +24,7 @@ from segmentation.audio_segment import (
     load_stimulus_database,
     validate_digital_codes
 )
+from segmentation.autodetect import separate_song_sources
 
 from utils import session_basename
 
@@ -51,8 +52,9 @@ class DetectSoundSegments(luigi.Task):
         sampling_rate = sound.sampling_rate.item()
 
         # TODO: will at some point want live dicts to be categorized/labeled
-        # live_dicts = generate_live_vocalization_dicts(df)
-        # FIXME: my memory is getting super screwed by this... im going to have to cut down on them for now
+        # by vocalization type
+        # FIXME: my memory is getting super screwed by this... right now im saving myself
+        # by limiting to a range of times, but should improve this somehow
         live_dicts = generate_vocal_periods_dicts(sound_arr, sampling_rate)
         print("found {} live vocalizations".format(len(live_dicts)))
         live_dicts = [
@@ -78,9 +80,10 @@ class DetectSoundSegments(luigi.Task):
             digital_signals = block.segments[0].events[0]
 
             # TODO: validate playbacks csv and digital signals here
+            # TODO (kevin): wait, did i just do that already
             timing_offsets = validate_digital_codes(digital_signals, playbacks_csv)
-            print(timing_offsets)
-            print("Largest error found: {}s".format(np.max(timing_offsets)))
+            print(digital_signals)
+            print(len(digital_signals))
 
             playback_dicts = generate_stim_dicts(digital_signals, playbacks_db.database)
             print("Identified {} playback periods".format(len(playback_dicts)))
@@ -91,6 +94,17 @@ class DetectSoundSegments(luigi.Task):
                     len(playback_dicts),
                     len(segment_dicts) - len(playback_dicts)
             ))
+
+            '''
+            print("Guessing vocalizers for each segment")
+            sig = block.segments[0].analogsignals[0]  # Get board adc
+            to_idx = lambda x: sig.time_index(x["start_time"]), sig.time_index(x["start_time"] + x["duration"])
+            segment_indexes = map(to_idx, segment_dicts)
+            pupil_indexes = set(separate_song_sources(sig, segment_indexes)[2])
+
+            for seg_idx, seg_dict in enumerate(segment_dicts):
+                seg_dict["vocalizer"] = "pupil" if seg_idx in pupil_indexes else "tutor"
+            '''
 
         new_block = segment(block, segment_dicts)
 

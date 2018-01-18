@@ -1,33 +1,25 @@
 """
-Preform vector (auto)regression to remove correlations within and across electrodes
+Perform vector (auto)regression to remove correlations within and across electrodes
 
->>> filtered_sig = vector_autoregression_windowed(
-...     signal_highpassed,
-...     window_size=1000,
-...     update_slice=slice(100, 900),
-...     n_lags=4,
-...     causal=False,
-...     downsample=1,
-...     self_buffer=5)
+>>> filter_segment(segment)
 
 """
 from __future__ import print_function
 
 import numpy as np
 import quantities as pq
-import scipy.stats
+import theano
+import theano.tensor as T
+from neo.core import AnalogSignal
 
-from neo.core import AnalogSignal, SpikeTrain, Unit, ChannelIndex
-
-from soundsig.signal import lowpass_filter, highpass_filter
-
-from timeseries import TimeSeriesRegression, PredictTimeseries
-from filtering.timeseries_2_electric_boogaloo import *
+from soundsig.signal import highpass_filter
 
 import config
+from timeseries import filter_data_by_blocks, target_slice
+from util import float_x
 
 
-class ThineFilterer(object):
+class Filterer(object):
     def __init__(self, block_width):
         X = T.fmatrix("input_batch")
         n_lags = T.iscalar("n_lags")
@@ -43,17 +35,17 @@ class ThineFilterer(object):
         return new_signal
 
 
-filterer = ThineFilterer(block_width=800)
+filterer = Filterer(block_width=800)
 
 
 def filter_segment(seg):
     block = seg.block 
 
     # Get the signal that has the microphone. We use this to clean up the spikes. Maybe.
-    sound_signal = (
-        sig for sig in seg.analogsignals
-        if sig.name.startswith("Board ADC")
-    ).next()
+    # sound_signal = (
+    #     sig for sig in seg.analogsignals
+    #     if sig.name.startswith("Board ADC")
+    # ).next()
 
     elec_signal = (
         sig for sig in seg.analogsignals
@@ -70,16 +62,6 @@ def filter_segment(seg):
             sig_highpass,
             n_lags=9)
 
-    '''
-    signal_highpass_clean = clean_signal(elec_signal,
-            n_lags=4,
-            causal=False,
-            downsample=1,
-            self_buffer=5,
-            window_size=800,
-            update_slice=slice(10, 790))
-    '''
-
     new_analogsignal = AnalogSignal(
            signal_highpass_clean,
            name="{}_HPC".format(elec_signal.name),
@@ -92,7 +74,7 @@ def filter_segment(seg):
     new_analogsignal.segment = seg
 
     seg.analogsignals.append(new_analogsignal)
-    
+
     # Clean up the old signal and add the new ones
     for channel_index in block.channel_indexes:
         if channel_index.name == "Amplifier":
@@ -103,49 +85,3 @@ def filter_segment(seg):
     seg.analogsignals.remove(elec_signal)
     seg.create_relationship(force=True)
 
-
-def clean_signal(signal, **kwargs):
-    sig_highpass = highpass_filter(
-            signal.T,
-            signal.sampling_rate,
-            config.HIGHPASS_CUTOFF * pq.Hz).T
-    return vector_autoregression_windowed(sig_highpass, **kwargs)
-
-
-def vector_autoregression(signal, **kwargs):
-    """Remove correlations between electrodes"""
-    new_signal = np.zeros_like(signal)
-
-    full_model = PredictTimeseries(**kwargs)
-    full_model.fit(signal)
-
-    _, residual = full_model.predict(signal)
-
-    new_signal[full_model._valid_slice(signal)] = residual
-
-    return new_signal
-
-
-def vector_autoregression_windowed(signal, window_size=1000, update_slice=slice(100, 900), **kwargs):
-    new_signal = np.zeros_like(signal)
-    model = PredictTimeseries(**kwargs)
-
-    step = update_slice.stop - update_slice.start
-
-    for window_start in range(0, signal.shape[0], step):
-        print("Filtered {}/{} samples".format(window_start, signal.shape[0]), end="\r")
-
-        subsignal = signal[window_start:window_start + window_size]
-
-        model.fit(subsignal)
-
-        filtered = np.zeros_like(subsignal)
-        filtered[model._valid_slice(filtered)] = model.predict(subsignal)[1]
-
-        if subsignal.shape[0] < window_size:
-            filtered = filtered[update_slice.start:]
-            new_signal[window_start:][update_slice.start:update_slice.start + filtered.shape[0]] = filtered
-        else:
-            new_signal[window_start:window_start + window_size][update_slice] = filtered[update_slice]
-
-    return new_signal

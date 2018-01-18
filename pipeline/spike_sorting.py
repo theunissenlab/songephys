@@ -157,14 +157,14 @@ class ClusterOverTime(luigi.Task):
                         continue
                     labels, data = sort.sort(data_block["waveforms"][:, 10:32],
                             initial_cluster_type="kmeans",
-                            initial_cluster_count=20,
+                            initial_cluster_count=30,
                             ordered=False,
                             merge_mode="linear",
                             reassign_mode="kmeans",
-                            merge_initial_threshold=0.8,
+                            merge_initial_threshold=1.0,
                             merge_final_threshold=0.3,
-                            max_peak_size=500,
-                            min_peak_size=40,
+                            max_peak_size=300,
+                            min_peak_size=30,
                             peak_idx=10,
                             reassign_dims=1)
                     cluster_results.append(labels)
@@ -188,7 +188,8 @@ class ClusterOverTime(luigi.Task):
                 
                 if elec_id in [6, 13]:
                     isolation_metric = isolation(data_block["waveforms"], labels, k=6)
-                isolation_metric = {}
+                else:
+                    isolation_metric = {}
 
                 for l in np.unique(labels):
                     metric[l] = {
@@ -282,16 +283,86 @@ class RunManualClusterLinking(luigi.Task):
         clusters_dir = os.path.join(self.session_dir, "cluster_linking")
         return luigi.LocalTarget(os.path.join(
             clusters_dir,
-            "cluster_result-e{}.npy".format(self.electrode)
+            "linked_clusters-e{}.npy".format(self.electrode)
         ))
             
     def requires(self):
         return GenerateClusterLinkingFigures(self.session_dir)
 
     def run(self):
-        app = clust.create_server(list(self.input())[self.electrode].path)
-        webbrowser.open_new("http://0.0.0.0:{}/".format(8400 + self.electrode))
-        app.run(host="0.0.0.0", port=8400 + self.electrode, debug=False)
+        app = clust.create_server(list(self.input())[self.electrode].path, self.output().path)
+        port = int("1{}{:02d}".format(self.session_dir.split("_")[-1][:2], self.electrode))
+        webbrowser.open_new("http://0.0.0.0:{}/".format(port))
+        app.run(host="0.0.0.0", port=port, debug=False)
+
+
+class WriteSemiAutoSorted(luigi.Task):
+
+    session_dir = luigi.Parameter()
+
+    def output(self):
+        sorting_dir = os.path.join(self.session_dir, "spikes")
+        output_file = "{}-sorted-result.pkl".format(session_basename(self.session_dir))
+        return luigi.LocalTarget(os.path.join(sorting_dir, output_file))
+
+    def requires(self):
+        yield ExtractSpikes(self.session_dir)
+        for elec_idx in range(16):
+            yield RunManualClusterLinking(self.session_dir, elec_idx)
+
+    def run(self):
+        with open(self.input()[0].path, "rb") as input_file:
+            block = pickle.load(input_file)
+        block.create_relationship(force=True, append=True, recursive=True)
+
+        new_spike_times = []
+        new_waveforms = []
+        for elec_id, clustered in enumerate(self.input()[1:]):
+            sorted_units_on_elec = np.load(clustered.path)[()]
+
+            new_spike_times.append([])
+            new_waveforms.append([])
+
+            unit = (
+                channel_index.units[0]
+                for channel_index in block.channel_indexes
+                if channel_index.name == "Amp Elec {}".format(elec_id)
+            ).next()
+
+            # need to iterate over spiketrains (i.e. segments) and identify the sorted 
+            # units on each one
+            for sorted_unit in sorted_units_on_elec:
+                waveforms = sorted_unit["waveforms"]
+                times = sorted_unit["times"]
+
+                new_wfs = []
+                new_times = []
+
+                for seg_idx, st in enumerate(unit.spiketrains):
+                    is_within_segment = (times >= st.t_start) & (times < st.t_stop)
+                    new_wfs.append(waveforms[is_within_segment])
+                    new_times.append(times[is_within_segment])
+
+                new_spike_times[elec_id].append(np.array(new_times))
+                new_waveforms[elec_id].append(np.array(new_wfs))
+
+        for elec_id, spike_times in enumerate(new_spike_times):
+            new_spike_times[elec_id] = zip(*spike_times)
+
+        for elec_id, waveforms in enumerate(new_waveforms):
+            new_waveforms[elec_id] = zip(*waveforms)
+    
+        for elec_id in range(16):
+            print("shapes")
+            print(len(new_spike_times[elec_id]))
+            print(new_spike_times[elec_id])
+
+
+        new_block = write_neo(block, new_spike_times, new_waveforms)
+        new_block.create_relationship(force=True, append=True, recursive=True)
+
+        with open(self.output().path, "wb") as output_file:
+            pickle.dump(new_block, output_file)
 
 
 class JustRunAllTSNEs(luigi.Task):

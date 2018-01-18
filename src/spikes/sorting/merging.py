@@ -3,7 +3,8 @@ Python implementation of the isosplit cluster merging algorithm for spike sortin
 
 http://github.com/flatironinstitute/mountainsort
 
-Does not do reassignment of multi-modal cluster pairs
+Does not do reassignment of multi-modal cluster pairs yet...
+because the split point often really bad
 
 Use like this:
 
@@ -30,7 +31,9 @@ def ks_modified(a, b, pivot):
     """Modified Kolomogorov-Smirnov test from MountainSort
 
     Looks near the edges of the distribution for areas that
-    locally deviate from unimodality
+    locally deviate from unimodality??
+
+    Seems overly sensitive to edge scenarios
     """
     a_left = a[:pivot + 1]
     b_left = b[:pivot + 1]
@@ -48,6 +51,7 @@ def ks_modified(a, b, pivot):
 
     a_right = a[pivot + 1:][::-1]
     b_right = b[pivot + 1:][::-1]
+
 
     if len(a_right):
         for div in np.arange(1, np.floor(np.log2(len(a_right))) - 1):
@@ -239,6 +243,10 @@ class Projector(object):
         return np.dot(X, self.v)
 
 
+def reassign(labels, i, j, cutpoint):
+    return labels 
+
+
 def isosplit_cluster(X, k_initial=20, threshold=1.0):
     kmeans = KMeans(n_clusters=k_initial)
     labels = kmeans.fit_predict(X)
@@ -269,6 +277,8 @@ def isosplit_cluster(X, k_initial=20, threshold=1.0):
 	    tracker.remove(j)
 	    tracker.check([i, j])
 	else:
+            # reassign based on best cut
+            # FIXME. need to fix the best cut location
 	    tracker.check([i, j])
 
     return labels
