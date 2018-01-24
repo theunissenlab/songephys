@@ -21,7 +21,8 @@ angular.module('controllers', [])
   '$location',
   '$http',
   '$scope',
-  function($location, $http, $scope) {
+  '$window',
+  function($location, $http, $scope, $window) {
       $scope.TOSUBMIT = [];
 
       $http.get(
@@ -98,6 +99,10 @@ angular.module('controllers', [])
                   units: $scope.TOSUBMIT
               }),
               headers: {'Content-Type': 'application/json'}
+          }).then(function() {
+              $http.get('/shutdown').then(function() {
+                  $window.close()
+              });
           });
       };
 

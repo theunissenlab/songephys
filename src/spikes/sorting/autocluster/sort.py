@@ -54,15 +54,10 @@ def sort_debugger(
         peaks = data[:, peak_idx]
         keep[np.abs(peaks) < min_peak_size] = 0
 
-    import time
-    start = time.time()
-    print data.shape
-    print initial_cluster_count
     if len(data) >= initial_cluster_count:
         clusters = initial_cluster_fn(data, n=initial_cluster_count)
     else:
         clusters = -1 * np.ones(len(data))
-    print "clustered in {:.2f}s".format(time.time() - start)
     final_labels = np.ones_like(clusters) * -1  # The official labels
 
     # REMOVING "bad" initial clusters here. will put those data points back in with label -1 at end

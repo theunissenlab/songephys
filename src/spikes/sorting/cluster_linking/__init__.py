@@ -82,14 +82,38 @@ def create_server(data_info_file, output_file):
 
     @app.route('/submit', methods=["POST"])
     def save():
-        data = request.get_json(silent=True)
-        for unit in data.units:
+        save_data = request.get_json(silent=True)
+
+        result = []
+
+        for unit_idx, unit in enumerate(save_data["units"]):
+            unit_times = None
+            unit_wfs = None
             for time_block_idx, cluster_ids in enumerate(unit):
                 cluster_ids = map(int, cluster_ids)
+                print cluster_ids
 
+                dat = data["data"][time_block_idx]
+                lab = data["labels"][time_block_idx]
 
-        np.save(output_file, {"units": data})
-        return jsonify({"result": "success"})
+                for cluster_id in cluster_ids:
+                    if unit_wfs is None:
+                        if dat["waveforms"][lab == cluster_id].shape[0] > 1:
+                            unit_wfs = dat["waveforms"][lab == cluster_id]
+                            unit_times = dat["times"][lab == cluster_id]
+                    else:
+                        unit_wfs = np.concatenate([unit_wfs, dat["waveforms"][lab == cluster_id]], axis=0)
+                        unit_times = np.concatenate([unit_times, dat["times"][lab == cluster_id]], axis=0)
+
+            sorter = np.argsort(unit_times)
+            unit_times = unit_times[sorter]
+            unit_wfs = unit_wfs[sorter]
+            
+            result.append({"times": unit_times, "waveforms": unit_wfs})
+
+        np.save(output_file, result)
+
+        return jsonify({"sucesss": True})
 
     return app
 
