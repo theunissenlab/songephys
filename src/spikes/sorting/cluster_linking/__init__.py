@@ -91,19 +91,27 @@ def create_server(data_info_file, output_file):
             unit_wfs = None
             for time_block_idx, cluster_ids in enumerate(unit):
                 cluster_ids = map(int, cluster_ids)
-                print cluster_ids
 
                 dat = data["data"][time_block_idx]
                 lab = data["labels"][time_block_idx]
 
+                # don't double count any spikes
+                if time_block_idx != 0:
+                    filter_times = (
+                        dat["times"] >= data["time_ranges"][time_block_idx - 1][1]
+                    )
+                else:
+                    filter_times = np.ones_like(dat["times"]).astype(bool)
+                lab = lab[filter_times]
+
                 for cluster_id in cluster_ids:
                     if unit_wfs is None:
-                        if dat["waveforms"][lab == cluster_id].shape[0] > 1:
-                            unit_wfs = dat["waveforms"][lab == cluster_id]
-                            unit_times = dat["times"][lab == cluster_id]
+                        if dat["waveforms"][filter_times][lab == cluster_id].shape[0] > 1:
+                            unit_wfs = dat["waveforms"][filter_times][lab == cluster_id]
+                            unit_times = dat["times"][filter_times][lab == cluster_id]
                     else:
-                        unit_wfs = np.concatenate([unit_wfs, dat["waveforms"][lab == cluster_id]], axis=0)
-                        unit_times = np.concatenate([unit_times, dat["times"][lab == cluster_id]], axis=0)
+                        unit_wfs = np.concatenate([unit_wfs, dat["waveforms"][filter_times][lab == cluster_id]], axis=0)
+                        unit_times = np.concatenate([unit_times, dat["times"][filter_times][lab == cluster_id]], axis=0)
 
             sorter = np.argsort(unit_times)
             unit_times = unit_times[sorter]

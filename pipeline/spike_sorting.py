@@ -14,7 +14,7 @@ from spikes.write_neo import write_neo
 
 from spikes.sorting.preprocess import collect_waveforms, sort_spikes_on_unit
 from spikes.sorting.merging import isosplit_cluster
-from spikes_vis.runsort import create_server
+# from spikes_vis.runsort import create_server
 from spikes.sorting.autocluster.process_block import time_slices, process_votes, relabel_across_time, gen_figures
 from spikes.sorting.autocluster import sort
 from spikes.sorting.metrics import cluster_snr, interspike_interval, firing_rate, consistency, isolation
@@ -302,7 +302,7 @@ class WriteSemiAutoSorted(luigi.Task):
 
     def output(self):
         sorting_dir = os.path.join(self.session_dir, "spikes")
-        output_file = "{}-sorted-result.pkl".format(session_basename(self.session_dir))
+        output_file = "{}-sorted.pkl".format(session_basename(self.session_dir))
         return luigi.LocalTarget(os.path.join(sorting_dir, output_file))
 
     def requires(self):

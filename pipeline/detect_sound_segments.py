@@ -16,6 +16,7 @@ import config
 from rhd2nix import Rhd2Nix
 from setup import CombineTrialMetadata
 from segmentation.audio_segment import (
+    consolidate_segments,
     segment,
     generate_stim_dicts,
     generate_live_vocalization_dicts,
@@ -40,7 +41,11 @@ class DetectSoundSegments(luigi.Task):
     def output(self):
         segmentation_dir = os.path.join(self.session_dir, "segmentation")
         output_filename = "{}-segmented.pkl".format(session_basename(self.session_dir))
-        return luigi.LocalTarget(os.path.join(segmentation_dir, output_filename))
+        segment_data_file = "{}-segments.npy".format(session_basename(self.session_dir))
+        return [
+            luigi.LocalTarget(os.path.join(segmentation_dir, output_filename)),
+            luigi.LocalTarget(os.path.join(segmentation_dir, segment_data_file))
+        ]
 
     def run(self):
         nix = NixIO(self.input()[0].path)
@@ -51,10 +56,7 @@ class DetectSoundSegments(luigi.Task):
         sound_arr = sound.as_array()[:, 0]
         sampling_rate = sound.sampling_rate.item()
 
-        # TODO: will at some point want live dicts to be categorized/labeled
-        # by vocalization type
         # FIXME: my memory is getting super screwed by this... right now im saving myself
-        # by limiting to a range of times, but should improve this somehow
         live_dicts = generate_vocal_periods_dicts(sound_arr, sampling_rate)
         print("found {} live vocalizations".format(len(live_dicts)))
         live_dicts = [
@@ -71,7 +73,6 @@ class DetectSoundSegments(luigi.Task):
             playbacks_csv["time"] = playbacks_csv["time"].apply(
                     lambda time_str: datetime.datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S.%f"))
 
-
         if len(playbacks_csv) == 0:
             print("No pyoperant file found (no playbacks)")
             segment_dicts = live_dicts
@@ -79,34 +80,35 @@ class DetectSoundSegments(luigi.Task):
             playbacks_db = load_stimulus_database(self.input()[1][0].path)
             digital_signals = block.segments[0].events[0]
 
-            # TODO: validate playbacks csv and digital signals here
-            # TODO (kevin): wait, did i just do that already
-            timing_offsets = validate_digital_codes(digital_signals, playbacks_csv)
-            print(digital_signals)
-            print(len(digital_signals))
+            # the timing_offsets should be all close to zero
+            # timing_offsets = validate_digital_codes(digital_signals, playbacks_csv)
 
             playback_dicts = generate_stim_dicts(digital_signals, playbacks_db.database)
             print("Identified {} playback periods".format(len(playback_dicts)))
 
             segment_dicts = merge_segments(playback_dicts, live_dicts)
-            print("Creating {} segments, ({} playback, {} live)".format(
+            # TODO (kevin): Save segment_dicts to a file...
+
+            create_segments = consolidate_segments(segment_dicts)
+
+            print("Identified {} segments, ({} playback, {} live)".format(
                     len(segment_dicts),
                     len(playback_dicts),
                     len(segment_dicts) - len(playback_dicts)
             ))
 
-            '''
-            print("Guessing vocalizers for each segment")
-            sig = block.segments[0].analogsignals[0]  # Get board adc
-            to_idx = lambda x: sig.time_index(x["start_time"]), sig.time_index(x["start_time"] + x["duration"])
-            segment_indexes = map(to_idx, segment_dicts)
-            pupil_indexes = set(separate_song_sources(sig, segment_indexes)[2])
+            print("Creating {} segments without overlap".format(len(create_segments)))
 
-            for seg_idx, seg_dict in enumerate(segment_dicts):
-                seg_dict["vocalizer"] = "pupil" if seg_idx in pupil_indexes else "tutor"
-            '''
+        new_block = segment(block, create_segments)
 
-        new_block = segment(block, segment_dicts)
+        np.save(
+            self.output()[1].path,
+            {
+                "live": live_dicts,
+                "playback": playback_dicts,
+                "consolidated": create_segments
+            }
+        )
 
-        with open(self.output().path, "wb") as output_file:
+        with open(self.output()[0].path, "wb") as output_file:
             pickle.dump(new_block, output_file)

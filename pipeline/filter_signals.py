@@ -33,7 +33,7 @@ class FilterElectrodeSignals(luigi.Task):
         return luigi.LocalTarget(os.path.join(segmentation_dir, output_filename))
 
     def run(self):
-        with open(self.input().path, "rb") as inputfile:
+        with open(self.input()[0].path, "rb") as inputfile:
             block = pickle.load(inputfile)
         block.create_relationship(force=True, append=True, recursive=True)
 
