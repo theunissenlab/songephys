@@ -20,6 +20,7 @@ from segmentation.audio_segment import (
     segment,
     generate_stim_dicts,
     generate_live_vocalization_dicts,
+    generate_all_segment_dicts,
     generate_vocal_periods_dicts,
     merge_segments,
     load_stimulus_database,
@@ -34,6 +35,7 @@ class DetectSoundSegments(luigi.Task):
     """Segment data based on audio where songs are detected"""
 
     session_dir = luigi.Parameter()
+    full = luigi.BoolParameter(default=False)
 
     def requires(self):
         return [Rhd2Nix(self.session_dir), CombineTrialMetadata(self.session_dir)]
@@ -75,6 +77,7 @@ class DetectSoundSegments(luigi.Task):
 
         if len(playbacks_csv) == 0:
             print("No pyoperant file found (no playbacks)")
+            playback_dicts = []
             segment_dicts = live_dicts
         else:
             playbacks_db = load_stimulus_database(self.input()[1][0].path)
@@ -89,7 +92,6 @@ class DetectSoundSegments(luigi.Task):
             segment_dicts = merge_segments(playback_dicts, live_dicts)
             # TODO (kevin): Save segment_dicts to a file...
 
-            create_segments = consolidate_segments(segment_dicts)
 
             print("Identified {} segments, ({} playback, {} live)".format(
                     len(segment_dicts),
@@ -97,8 +99,11 @@ class DetectSoundSegments(luigi.Task):
                     len(segment_dicts) - len(playback_dicts)
             ))
 
-            print("Creating {} segments without overlap".format(len(create_segments)))
-
+        if self.full:
+            create_segments = generate_all_segment_dicts(block, t_width=5.0)
+        else:
+            create_segments = consolidate_segments(segment_dicts)
+        print("Creating {} segments without overlap".format(len(create_segments)))
         new_block = segment(block, create_segments)
 
         np.save(

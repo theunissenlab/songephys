@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import quantities as pq
 
-from neo.core import Segment
+from neo.core import AnalogSignal, SpikeTrain, Segment
 from neosound import sound_manager
 from neosound.sound_store import HDF5Store
 from zeebeez.tdt2neo import stim, import_multielectrode
@@ -298,6 +298,93 @@ def generate_live_vocalization_dicts(df):
     return seg_dicts
 
 
+def generate_all_segment_dicts(block, t_width=10.0):
+    """Segment the whole block into segments that cover the whole thing.
+
+    Can remerge them later but need to do this for processing for now.
+    """
+    main_segment = block.segments[0]
+
+    seg_dicts = []
+    start_times = np.arange(main_segment.t_start.item(), main_segment.t_stop.item(), t_width)
+    for i, start_time in enumerate(start_times):
+        seg_dicts.append({
+            "name": "segment_{}".format(i),
+            "description": "Created by segmentation.audio_segment.generate_all_segment_dicts",
+            "sound_type": None,
+            "vocalization_type": None,
+            "vocalizer": None,
+            "playback_file": None,
+            "start_time": start_time * pq.s,
+            "duration": t_width * pq.s
+        })
+
+    return seg_dicts
+
+
+def one_long_segment(block):
+    """Return a block to its original one-segment state"""
+    # merge analogsignals
+    # merge spiketrains
+
+    new_segment = Segment(
+            name="all_encompassingly",
+            description="the whole data",
+            index=0,
+            times=block.segments[0].t_start
+    )
+
+    sigs = [seg.analogsignals[0] for seg in block.segments]
+    new_analogsignal = AnalogSignal(
+            np.concatenate([s.as_array() for s in sigs]) * sigs[0].units,
+            name="all_encompassingly_analogsignal",
+            sampling_rate=sigs[0].sampling_rate,
+            t_start=sigs[0].t_start,
+            units=sigs[0].units,
+            **sigs[0].annotations)
+    new_analogsignal.segment = new_segment
+    new_segment.analogsignals.append(new_analogsignal)
+
+    spiketimes = [
+        np.concatenate([
+            st.times.as_array() for st in sts
+        ])
+        for sts in zip(*[seg.spiketrains for seg in block.segments])
+    ]
+
+    wfs = [
+        np.concatenate([
+            st.waveforms for st in sts
+        ], axis=0)
+        for sts in zip(*[seg.spiketrains for seg in block.segments])
+    ]
+
+    for unit_idx, template_st in enumerate(block.segments[0].spiketrains):
+        new_spiketrain = SpikeTrain(
+            spiketimes[unit_idx],
+            t_start=new_analogsignal.t_start,
+            t_stop=new_analogsignal.t_stop,
+            name=template_st.unit.name,
+            waveforms=wfs[unit_idx],
+            # unit=template_st.unit,
+            units=template_st.units
+        )
+        template_st.unit.spiketrains = [new_spiketrain]
+        new_spiketrain.unit = template_st.unit
+        new_spiketrain.segment = new_segment
+        new_segment.spiketrains.append(new_spiketrain)
+
+    new_segment.create_many_to_one_relationship()
+
+    block.segments = [new_segment]
+
+    block.create_many_to_one_relationship(force=True, recursive=True)
+    block.create_many_to_many_relationship()
+    block.create_relationship(force=True, recursive=True, append=True)
+
+    return block
+
+
 def consolidate_segments(segments):
     """Merge segments that overlap so that there are no overlaps
     """
@@ -411,8 +498,13 @@ def segment(block, segment_dicts):
 		end_time >= block.segments[curr_seg].t_stop or
 		np.isclose(end_time.item(), block.segments[curr_seg].t_stop.item())
 	)
-	if ends_after:
-	    curr_seg += 1
+
+        while ends_after:
+            curr_seg += 1
+            ends_after = (curr_seg < len(block.segments)) and (
+                    end_time >= block.segments[curr_seg].t_stop or
+                    np.isclose(end_time.item(), block.segments[curr_seg].t_stop.item())
+            )
 
 	new_segment = Segment(
 		name="{}_{}".format(segment_dict["name"], trial_id),  # must be unique!
