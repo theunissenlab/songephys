@@ -27,7 +27,7 @@
                 </div>
                 <div class="col col-md-10">
                   <div class="row">
-                    <img ng-repeat="(clusterId, cluster) in timeBlock.clusters" ng-class="{active: !!cluster.active, inactive: !!cluster.selected}" class="card-box" ng-src="{{ cluster.waveforms }}" ng-click="toggle(timeBlock, cluster, clusterId)">{{cluster}}</img>
+                    <img ng-repeat="cluster in timeBlock.clusters" ng-class="{active: !!isActive($parent.$index, cluster.label), inactive: !!isSelected($parent.$index, cluster.label)}" class="card-box" ng-src="{{ cluster.waveforms }}" ng-click="toggle($parent.$index, cluster.label)">{{cluster}}</img>
                   </div>
                 </div>
               </div>
@@ -36,12 +36,15 @@
               <button ng-click="submit()">Save All Clusters</button>
               <button style="padding: 10px; margin: 10px;" ng-click="save_new_cluster()">Link Cluster</button>
 
-              <div ng-repeat="unit in newUnits">
-                <div ng-repeat="(key, cluster) in unit.pieces">
-                  <img class="small" ng-src="{{ cluster.waveforms }}"></img>
-                  <p>{{ key }}</p>
+              <div ng-repeat="unitarr in TOSUBMIT track by $index">
+                <div ng-repeat="dataarr in unitarr" ng-show="dataarr.length !== 0">
+                  <div ng-repeat="clusterId in dataarr track by $index">
+                    <img class="small" ng-src="{{ timeBlocks[$parent.$index].clusters[timeBlocks[$parent.$index].labels.indexOf(clusterId)].waveforms }}"></img>  <!-- how to get hte idnex of thig thing -->
+                    <p> {{$meow }} {{ $parent.$index }} {{$index }} </p>
+                    <p>{{ timeBlocks[$parent.$index].t_start }} {{  timeBlocks[$parent.$index].clusters[timeBlocks[$parent.$index].labels.indexOf(clusterId)].waveforms }}</p>
+                  </div>
                 </div>
-                <button ng-click="ungroup_cluster(unit.id)">clear</button>
+                <button ng-click="ungroup_cluster($parent.$parent.$index)">clear</button>
               </div>
             </div>
           </div>

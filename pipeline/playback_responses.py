@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from figure_scripts import unit_summary
 from segment_analysis import MultiSegment
 
-from spike_sorting import WriteSorted
+from resegment import Resegment
 
 
 class PlotUnitWaveforms(luigi.Task):
@@ -26,7 +26,7 @@ class PlotUnitWaveforms(luigi.Task):
         return luigi.LocalTarget(os.path.join(responses_dir, output_file))
 
     def requires(self):
-        return WriteSorted(self.session_dir)
+        return Resegment(self.session_dir)
 
     def run(self):
         with open(self.input().path, "rb") as input_file:
@@ -53,7 +53,7 @@ class PlotPlaybackResponses(luigi.Task):
         return luigi.LocalTarget(responses_dir)
 
     def requires(self):
-        return WriteSorted(self.session_dir)
+        return Resegment(self.session_dir)
 
     def run(self):
         with open(self.input().path, "rb") as input_file:

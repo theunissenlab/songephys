@@ -16,6 +16,7 @@ import config
 from rhd2nix import Rhd2Nix
 from setup import CombineTrialMetadata
 from segmentation.audio_segment import (
+    consolidate_segments,
     segment,
     generate_stim_dicts,
     generate_live_vocalization_dicts,
@@ -24,6 +25,7 @@ from segmentation.audio_segment import (
     load_stimulus_database,
     validate_digital_codes
 )
+from segmentation.autodetect import separate_song_sources
 
 from utils import session_basename
 
@@ -39,7 +41,11 @@ class DetectSoundSegments(luigi.Task):
     def output(self):
         segmentation_dir = os.path.join(self.session_dir, "segmentation")
         output_filename = "{}-segmented.pkl".format(session_basename(self.session_dir))
-        return luigi.LocalTarget(os.path.join(segmentation_dir, output_filename))
+        segment_data_file = "{}-segments.npy".format(session_basename(self.session_dir))
+        return [
+            luigi.LocalTarget(os.path.join(segmentation_dir, output_filename)),
+            luigi.LocalTarget(os.path.join(segmentation_dir, segment_data_file))
+        ]
 
     def run(self):
         nix = NixIO(self.input()[0].path)
@@ -50,9 +56,7 @@ class DetectSoundSegments(luigi.Task):
         sound_arr = sound.as_array()[:, 0]
         sampling_rate = sound.sampling_rate.item()
 
-        # TODO: will at some point want live dicts to be categorized/labeled
-        # live_dicts = generate_live_vocalization_dicts(df)
-        # FIXME: my memory is getting super screwed by this... im going to have to cut down on them for now
+        # FIXME: my memory is getting super screwed by this... right now im saving myself
         live_dicts = generate_vocal_periods_dicts(sound_arr, sampling_rate)
         print("found {} live vocalizations".format(len(live_dicts)))
         live_dicts = [
@@ -69,7 +73,6 @@ class DetectSoundSegments(luigi.Task):
             playbacks_csv["time"] = playbacks_csv["time"].apply(
                     lambda time_str: datetime.datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S.%f"))
 
-
         if len(playbacks_csv) == 0:
             print("No pyoperant file found (no playbacks)")
             segment_dicts = live_dicts
@@ -77,22 +80,35 @@ class DetectSoundSegments(luigi.Task):
             playbacks_db = load_stimulus_database(self.input()[1][0].path)
             digital_signals = block.segments[0].events[0]
 
-            # TODO: validate playbacks csv and digital signals here
-            timing_offsets = validate_digital_codes(digital_signals, playbacks_csv)
-            print(timing_offsets)
-            print("Largest error found: {}s".format(np.max(timing_offsets)))
+            # the timing_offsets should be all close to zero
+            # timing_offsets = validate_digital_codes(digital_signals, playbacks_csv)
 
             playback_dicts = generate_stim_dicts(digital_signals, playbacks_db.database)
             print("Identified {} playback periods".format(len(playback_dicts)))
 
             segment_dicts = merge_segments(playback_dicts, live_dicts)
-            print("Creating {} segments, ({} playback, {} live)".format(
+            # TODO (kevin): Save segment_dicts to a file...
+
+            create_segments = consolidate_segments(segment_dicts)
+
+            print("Identified {} segments, ({} playback, {} live)".format(
                     len(segment_dicts),
                     len(playback_dicts),
                     len(segment_dicts) - len(playback_dicts)
             ))
 
-        new_block = segment(block, segment_dicts)
+            print("Creating {} segments without overlap".format(len(create_segments)))
 
-        with open(self.output().path, "wb") as output_file:
+        new_block = segment(block, create_segments)
+
+        np.save(
+            self.output()[1].path,
+            {
+                "live": live_dicts,
+                "playback": playback_dicts,
+                "consolidated": create_segments
+            }
+        )
+
+        with open(self.output()[0].path, "wb") as output_file:
             pickle.dump(new_block, output_file)

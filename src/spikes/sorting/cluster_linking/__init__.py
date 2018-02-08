@@ -17,21 +17,22 @@ def format_data(time_ranges, data_blocked, labels, metric_blocks, figure_locatio
             "t_start": t[0],
             "t_stop": t[1],
             "scatter": figs.get("scatter"),
-            "clusters": dict(
-                (str(c), {
+            "clusters": [
+                {
+                    "label": str(c),
                     "waveforms": figs[c],
                     "selected": False,
                     "active": False
-                })
-                for c in sorted(np.unique(l))
-            )
+                }
+                for c in sorted(np.unique(l))],
+            "labels": map(str, sorted(np.unique(l)))
         }
 
         entries.append(entry)
     return entries
 
 
-def create_server(data_info_file):
+def create_server(data_info_file, output_file):
     app = Flask(__name__, static_folder="static", template_folder="templates")
     app.config["TEMPLATE_AUTO_RELOAD"] = True
     @app.after_request
@@ -81,9 +82,46 @@ def create_server(data_info_file):
 
     @app.route('/submit', methods=["POST"])
     def save():
-        data = request.get_json(silent=True)
-        print data
-        pass
+        save_data = request.get_json(silent=True)
+
+        result = []
+
+        for unit_idx, unit in enumerate(save_data["units"]):
+            unit_times = None
+            unit_wfs = None
+            for time_block_idx, cluster_ids in enumerate(unit):
+                cluster_ids = map(int, cluster_ids)
+
+                dat = data["data"][time_block_idx]
+                lab = data["labels"][time_block_idx]
+
+                # don't double count any spikes
+                if time_block_idx != 0:
+                    filter_times = (
+                        dat["times"] >= data["time_ranges"][time_block_idx - 1][1]
+                    )
+                else:
+                    filter_times = np.ones_like(dat["times"]).astype(bool)
+                lab = lab[filter_times]
+
+                for cluster_id in cluster_ids:
+                    if unit_wfs is None:
+                        if dat["waveforms"][filter_times][lab == cluster_id].shape[0] > 1:
+                            unit_wfs = dat["waveforms"][filter_times][lab == cluster_id]
+                            unit_times = dat["times"][filter_times][lab == cluster_id]
+                    else:
+                        unit_wfs = np.concatenate([unit_wfs, dat["waveforms"][filter_times][lab == cluster_id]], axis=0)
+                        unit_times = np.concatenate([unit_times, dat["times"][filter_times][lab == cluster_id]], axis=0)
+
+            sorter = np.argsort(unit_times)
+            unit_times = unit_times[sorter]
+            unit_wfs = unit_wfs[sorter]
+            
+            result.append({"times": unit_times, "waveforms": unit_wfs})
+
+        np.save(output_file, result)
+
+        return jsonify({"sucesss": True})
 
     return app
 

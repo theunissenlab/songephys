@@ -3,6 +3,8 @@ Plotting functions to give a summary of unit data in a session
 
 Plots waveforms for each unit and psths+rasters to playback
 """
+import os
+
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -94,9 +96,20 @@ def plot_playback_responses(block, width=5):
             ax = ax.twinx()
             multiseg.plotter.plot_psth(unit_idx, ax=ax, color="Red", alpha=0.0, mode="gaussian", convolve_params=(width,))
 
+            playback_labels = {}
+            playback_labels["vocalizer"] = multiseg.annotations.get("vocalizer")
+
+            playback_labels["vocalizer"] = " ".join(os.path.basename(multiseg.annotations.get("playback_file")).split("_")[1:3])
+            playback_labels["vocalization_type"] = multiseg.annotations.get("vocalization_type")
+
+            if not multiseg.annotations.get("vocalizer"):
+                playback_labels["vocalizer"] = "tutor" + playback_labels["vocalizer"]
+            if "MJP" in multiseg.annotations["playback_file"]:
+                playback_labels["vocalizer"] = "self" + playback_labels["vocalizer"]
+
             ax.set_xlim(0.0, 3.0)
             ax.set_ylim(-0.20, 0.20)
-            ax.text(0.2, 0.15, "{vocalizer}\n{vocalization_type}".format(**multiseg.annotations))
+            ax.text(0.2, 0.15, "{vocalizer}\n{vocalization_type}".format(**playback_labels))
             ax.set_xticks([])
             ax.set_yticks([])
 

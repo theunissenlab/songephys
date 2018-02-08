@@ -151,13 +151,17 @@ def validate_digital_codes(digital_signals, trials_csv):
     on_times = np.array(np.round(digital_signals.times * sample_rate)).astype("int")
     digital_codes = import_multielectrode.convert_digital_to_metadata(on_times)
 
-    code_diffs = np.diff([start_time for (start_time, _) in digital_codes])
+    code_diffs = np.diff([start_time / 30000.0 for (start_time, _) in digital_codes])
     csv_diffs = [t.item() for t in np.diff(trials_csv["time"])]
 
-    if len(code_diffs) != len(csv_diffs):
-        raise Exception("Different number of digital codes and csv trials")
+    # sometimes the first or last code_diff will be way larger than the other ones...
+    # that means we probbaly want to ignore it or somethign
 
-    return code_diffs - csv_diffs
+    if len(code_diffs) != len(csv_diffs):
+        # raise Exception("Different number of digital codes and csv trials")
+        pass
+
+    return code_diffs[:len(csv_diffs)] / 30000.0 - csv_diffs[:len(code_diffs)]
 
 
 def generate_stim_dicts(digital_signals, sound_db):
@@ -177,6 +181,9 @@ def generate_stim_dicts(digital_signals, sound_db):
     on_times = np.array(np.round(digital_signals.times * sample_rate)).astype("int")
 
     digital_codes = import_multielectrode.convert_digital_to_metadata(on_times)
+    # TODO: if the digital codes dont match up with the csv codes... we need to correct digital_codes by removing the bad ones
+
+    digital_codes = [codes for codes in digital_codes if codes[1]["action"] == "queu"]
 
     stim_dicts = []
 
@@ -192,7 +199,10 @@ def generate_stim_dicts(digital_signals, sound_db):
 
         # can we VALIDATE the digital code start time with the
         # data in sounddb or the csv?
-        stim_id = sound_db.filter_ids(index=current_trial)[0]
+        try:
+            stim_id = sound_db.filter_ids(index=current_trial)[0]
+        except IndexError:
+            break
         duration = sound_db.get_annotations(stim_id)["duration"]
 
         metadata = sound_db.get_metadata(stim_id)
@@ -208,8 +218,8 @@ def generate_stim_dicts(digital_signals, sound_db):
             "vocalizer": vocalizer_relation,
             "playback_file": annotations.get("original_filename"),
             "stim_id": stim_id,
-            "start_time": start_time.rescale(pq.s),
-            "duration": duration * pq.s
+            "start_time": start_time.rescale(pq.s) - config.PAD_SONG_BEFORE * pq.s,
+            "duration": (duration + config.PAD_SONG_AFTER + config.PAD_SONG_BEFORE) * pq.s
         })
 
     return stim_dicts
@@ -288,6 +298,31 @@ def generate_live_vocalization_dicts(df):
     return seg_dicts
 
 
+def consolidate_segments(segments):
+    """Merge segments that overlap so that there are no overlaps
+    """
+
+    segments.sort(key=lambda seg: seg["start_time"])
+
+    new_segments = []
+
+    current_segment = None
+    for segment in segments:
+        next_end = segment["start_time"] + segment["duration"]
+
+        if current_segment is None:
+            current_segment = dict(**segment)
+        elif segment["start_time"] <= (current_segment["start_time"] + current_segment["duration"]):
+            current_segment["duration"] = next_end - current_segment["start_time"]
+        else:
+            new_segments.append(current_segment)
+            current_segment = dict(**segment)
+
+    new_segments.append(current_segment)
+
+    return new_segments
+
+
 def merge_segments(segments_1, segments_2, dedupe=True):
     """Combine segments with optional de-duplication"""
     if dedupe:
@@ -345,7 +380,7 @@ def segment(block, segment_dicts):
     Returns:
         neo.core.Block: The original block, modified with new segments
     """
-    main_segment = block.segments[0]
+    # main_segment = block.segments[0]
 
     # Remove the link to main analogsignal from the Amplifier and Board ADC channel indexes
     for ci in block.channel_indexes:
@@ -355,44 +390,70 @@ def segment(block, segment_dicts):
             ci.analogsignals = []
 
     if len(block.segments) > 1:
-        raise Exception("This block already has more than one segment. What are you doing?")
+        # TODO (kevin): raise a warning if the block has more than one segment?
+        print "warn warn warn"
+        # raise Exception("This block already has more than one segment. What are you doing?")
+
+    new_segments = []
+    curr_seg = 0
+
+    for channel_index in block.channel_indexes:
+	for unit in channel_index.units:
+	    del unit.spiketrains[:]
 
     for trial_id, segment_dict in enumerate(segment_dicts):
-        start_time = segment_dict["start_time"]
+	start_time = segment_dict["start_time"]
+	end_time = start_time + segment_dict["duration"]
 
-        new_segment = Segment(
-                name="{}_{}".format(segment_dict["name"], trial_id),  # must be unique!
-                description=segment_dict["description"],
-                file_origin=main_segment.file_origin,
-                file_datetime=main_segment.file_datetime,
-                rec_datetime=main_segment.rec_datetime,
-                index=trial_id,
-                times=start_time,
-                sound_type=segment_dict.get("sound_type"),
-                vocalization_type=segment_dict.get("vocalization_type"),
-                vocalizer=segment_dict.get("vocalizer"),
-                playback_file=segment_dict.get("playback_file")
-        )
+	old_segment = block.segments[curr_seg]
 
-        for signal in main_segment.analogsignals:
-            end_time = start_time + segment_dict["duration"] + config.PAD_SONG_AFTER * pq.s
-            if end_time > signal.t_stop:
-                end_time = None
-            sliced_signal = signal.time_slice(
-                start_time - config.PAD_SONG_BEFORE * pq.s,
-                end_time
-            )
-            for channel_index in block.channel_indexes:
-                # TODO: preserve the channel number (e.g. 8 instead of 0)
-                if channel_index.name in signal.name:  # Amplifier or Board ADC
-                    channel_index.analogsignals.append(sliced_signal)
+	ends_after =  (
+		end_time >= block.segments[curr_seg].t_stop or
+		np.isclose(end_time.item(), block.segments[curr_seg].t_stop.item())
+	)
+	if ends_after:
+	    curr_seg += 1
 
-            new_segment.analogsignals.append(sliced_signal)
+	new_segment = Segment(
+		name="{}_{}".format(segment_dict["name"], trial_id),  # must be unique!
+		description=segment_dict["description"],
+		file_origin=old_segment.file_origin,
+		file_datetime=old_segment.file_datetime,
+		rec_datetime=old_segment.rec_datetime,
+		index=trial_id,
+		times=start_time,
+		sound_type=segment_dict.get("sound_type"),
+		vocalization_type=segment_dict.get("vocalization_type"),
+		vocalizer=segment_dict.get("vocalizer"),
+		playback_file=segment_dict.get("playback_file")
+	)
 
-        new_segment.create_many_to_one_relationship()
-        block.segments.append(new_segment)
+	for signal in old_segment.analogsignals:
+	    if end_time > signal.t_stop:
+		end_time = None
+	    sliced_signal = signal.time_slice(start_time, end_time)
+	    for channel_index in block.channel_indexes:
+		# TODO: preserve the channel number (e.g. 8 instead of 0)
+		if channel_index.name in signal.name:  # Amplifier or Board ADC
+		    channel_index.analogsignals.append(sliced_signal)
 
-    del block.segments[0]
+	    new_segment.analogsignals.append(sliced_signal)
+	    sliced_signal.segment = new_segment
+	    
+	for spiketrain in old_segment.spiketrains:
+	    if end_time > signal.t_stop:
+		end_time = None
+	    new_spiketrain = spiketrain.time_slice(start_time, end_time)
+	    new_segment.spiketrains.append(new_spiketrain)
+	    spiketrain.unit.spiketrains.append(new_spiketrain)
+	    
+	new_segment.create_many_to_one_relationship()
+	new_segments.append(new_segment)
+
+    del block.segments[:]
+    for segment in new_segments:
+        block.segments.append(segment)
+
     block.create_many_to_one_relationship(force=True, recursive=True)
     block.create_many_to_many_relationship()
     block.create_relationship(force=True, recursive=True, append=True)

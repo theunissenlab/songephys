@@ -30,14 +30,13 @@ SONG_CLASSIFIER_PARAMS = os.path.join(
     "songvnoise_classifier_noz_big_nopca.pkl"
 )
 
-
 #################################
 ### Audio segmentation params ###
 #################################
 
 STIM_DIR = "TutFamBos"
-PAD_SONG_BEFORE = 1.0   # Time to pad detected song segments (in seconds)
-PAD_SONG_AFTER = 1.0 
+PAD_SONG_BEFORE = .5   # Time to pad detected song segments (in seconds)
+PAD_SONG_AFTER = .5
 AUTODETECT_FUSE_DURATION = 0.2
 AUTODETECT_SHORTEST_DURATION = 0.6
 MIN_SEGMENT_LENGTH = 1.0
@@ -48,11 +47,11 @@ MAX_SEGMENT_LENGTH = 6.0
 ### spike sorting params ###
 ############################
 
-Z_THRESHOLD = 3.0       # number of standard deviations to threshold initial spike detection
+Z_THRESHOLD = 4.0       # number of standard deviations to threshold initial spike detection
 WF_START = 10           # start index to slice waveforms at
 WF_STOP = 50            # stop index to slice waveforms at
-WF_START = 8  # these are values for the 25kHz sampled data
-WF_STOP = 40
+# WF_START = 8  # these are values for the 25kHz sampled data
+# WF_STOP = 40
 WF_SIZE = WF_STOP - WF_START
 WF_SLICE = slice(WF_START, WF_STOP)
 ELEC_SAMPLE_RATE = 30000.0

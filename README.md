@@ -27,3 +27,9 @@ The three options to install these are (all need to be tested)
 
 3. Install the repository directory directly `pip install -e <directory>`
 
+
+## Gdrive access
+
+settings.yaml.default
+
+How to get the client id and secret?

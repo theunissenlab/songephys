@@ -27,6 +27,7 @@ def write_neo(old_block, new_spike_times, new_spike_waveforms):
                        for channel_index in old_block.channel_indexes
                        if channel_index.name.startswith("Amp Elec")]
 
+    # basically copy over all segments
     new_segments = [
             Segment(
                 name=seg.name,
@@ -61,6 +62,9 @@ def write_neo(old_block, new_spike_times, new_spike_waveforms):
             new_unit = Unit(name="e{}u{}".format(electrode_idx, new_unit_idx))
 
             for segment_idx, old_spiketrain in enumerate(old_unsorted_unit.spiketrains):
+                if not len(spike_times_list):
+                    continue
+
                 spike_train = SpikeTrain(
                         spike_times_list[segment_idx][new_unit_idx],
                         t_start=old_spiketrain.t_start,
