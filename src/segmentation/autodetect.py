@@ -16,132 +16,6 @@ from scipy.stats import zscore
 from scipy.signal import decimate
 import sys
 
-
-def find_syllables_old(audio_stream_in, amp_thresh = '', fs=25000, fuse_duration=0.1,  syll_dur = 20.0, sil_dur = 5.0, verbose=False):
- 
-    """
-    This function is not yet very functional (Bill, 9/2017)- in fact as you can see it's "Old"
-    For segmenting into syllables.
-    You should pass amp_thresh, which should come from find_vocal_periods
-    The idea of this function is that instead of just a threshold based amplitude sorting into v
-    putative vocalization periods, we can use 
-    """
-    audio_stream = np.squeeze(audio_stream_in)
-    # First we try to find the amplitude envelope. We only care about vocal sounds,
-    # so we high-pass filter higher than normal.
-    streams_filtered_env = np.zeros(np.shape(audio_stream))
-    streams_filtered_env = highpass_filter(audio_stream, fs, 2000)
-    streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env, fs, 5000)) # Rectify and lowpass filter
-    env = lowpass_filter(streams_filtered_env, fs, 100)
-
-    if amp_thresh == '':
-        amp_thresh = np.mean(env)
-    # Now iterate through amplitude envelop and look for syllables. It would be more pythonic to do this in a 
-    # linear algebraish way, but I am going to just try to get it to work for now.
-    sound_on = 0 # keep count of how many points had sound
-    sil_on = 0 #  " " silence
-    hold = 0 # hold the value of sound_on in case of short silences
-    syllables = list()
-    for i in range(len(env)):
-        if i < syll_dur + sil_dur: # When we havn't had enough time to gather a syllable yet
-            if env[i] > amp_thresh:  
-                sound_on += 1
-                if sil_on < sil_dur: # if the silence was transient act like it didn't exist
-                    sound_on = sound_on + hold + sil_on # add the transient silence time to the syllable time
-                sil_on = 0
-                hold = 0
-            else:
-                sil_on += 1
-                if sound_on > 0: # previous point had sound
-                    hold = sound_on # prepare to look if the silence is brief
-                    sound_on = 0                
-        else: # the main loop
-            if env[i] > amp_thresh:  
-                sound_on += 1
-                if sil_on < sil_dur: # if the silence was transient act like it didn't exist
-                    sound_on = sound_on + hold + sil_on # add the transient silence time to the syllable time
-                sil_on = 0
-                hold = 0
-            else:
-                sil_on += 1
-                if sound_on > 0: # previous point had sound
-                    hold = sound_on # prepare to look if the silence is brief
-                    sound_on = 0                    
-                elif sil_on == sil_dur: # if it's been silent long enough to trigger a syllable end check if there was a syllable
-                    if hold > syll_dur: # Indicating there was a long enough period of sound to save as a syllable before
-                        syll_end = i - sil_dur
-                        syll_start = syll_end - hold
-                        syllables.append([syll_start,syll_end])
-                        
-    if verbose:
-        plt.figure()
-        plt.plot(env)
-        for i in range(len(syllables)):
-            plt.plot(syllables[i][0], min(env),'*', markersize= 12)
-            plt.plot(syllables[i][1], min(env),'x', markersize= 12)
-#            plt.plot(range(len(env)), np.ones(len(env)) * lower_thresh,'b')
-            plt.plot(range(len(env)), np.ones(len(env)) * amp_thresh,'r')
-            
-    # TODO turn syllables into seconds.
-            
-    return syllables
-
-def find_syllables(audio_stream_in, fs=30000, fuse_duration=0.01, shortest_duration=0.01, test_mode=False, amp_thresh=None, normalize_sound=True, normalize_thresh=None, lowpass = 2000, highpass = 5000, analog_signals = None):
-    """ 
-TODO        The basic premise is sound and taken from a noteboook but I haven't finished making it work for both one signal and many. many is useful for histograms (analog_signals)= Bill
-        Use amplitude thresholds for identifying syllable times in a song.        
-        Essentially a helper function for using findVocalPeriods.
-    
-        fuse_duration -         Gaps shorter than this will be fused into single syllables
-        shortest_duration -     Syllables shosrter than this will be ignored
-        test_mode -             Plots a bunch of things for helping determine ideal parameter values- in work
-        amp_thresh -            The amplitude threshold that you're going to be changing the most to get this all to work right
-        normalize_sound -       Divides the sound by the mean amplitude to normalize it, recommended to be True
-        normalize_thresh -      When normalize_sound=True all values below normalize_thresh first get set to 0- keeps the noise floor from being amplified.
-        lowpass_thresh and 
-        highpass_thresh -       It can be surprisingly useful to only search over a very limited bandwidth. Don't be afraid to try 6kHz to 9kHz or something
-        analog_signals -        Send a series of signals if you want your histograms to look any good
-
-    """
-    if test_mode:
-        # try lowpass filtering it to throw away "noise" in fast frequency correlations
-        if analog_signals:
-            
-            plt.figure()
-            plt.plot(amp_env[0])
-            plt.title("Raw Smoothed Amplitude Envelope- one of many")
-            plt.show()
-        else:
-            signal = np.copy(audio_stream_in)        
-            signal = highpass_filter(signal, fs, highpass)
-            signal = np.abs(lowpass_filter(signal, fs, lowpass))
-            amp_env = lowpass_filter(signal, fs, 100)
-            plt.figure()
-            plt.plot(amp_env)
-            plt.title("Raw Smoothed Amplitude Envelope")
-            plt.show()
-            
-            # normalize amplitude to near 1 in case this matters... make really low values just equal zero first to fix stretching        
-            low_vals = np.where(amp_env<normalize_thresh)
-            amp_env[low_vals] = 0
-            amp_env = (1/np.mean(amp_env)) * amp_env
-            plt.figure()
-            plt.plot(amp_env)
-            plt.title("normalized amplitude envelope")
-    
-            # for figuring out amp_thresh, or enter it in hardcoded on next cell
-            a = analogsignals[0]
-            plt.figure()
-            plt.hist([a for a in analogsignals[0] if a > 0], bins=100)
-            n, bins = np.histogram([a for a in analogsignals[0] if a > 0], bins=100)
-            amp_thresh = bins[np.argmax(n)+2] 
-            print("Amplitude threshold is: {}".format(amp_thresh))
-    
-    syll_times, _ = find_vocal_periods(audio_stream_in,fs,fuse_duration,shortest_duration,amp_thresh,normalize_sound,normalize_thresh,lowpass,highpass)
-
-    return syll_times
-    
-    
     
 def get_syllable_features(soundIn, fs = 30000): 
     """ 
@@ -528,7 +402,69 @@ def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=700
     return pca_df, spectro_list, big_df #spectrogram list, for plotting spectrograms
 
 
-def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.2, shortest_duration=0.6, verbose=False, amp_thresh=None, normalize_sound=False, normalize_thresh=0.006, lowpass = 2000, highpass = 5000):
+def test_find_vocal_periods(audio_stream_in, fs=30000, fuse_duration=0.01, shortest_duration=0.01, test_mode=True, amp_thresh=None, normalize_sound=False, normalize_thresh=None, lowpass = 2000, highpass = 5000, analog_signals = None):
+    """ 
+    This basically just implements a test mode for find_vocal_periods such that you can plot some thresholds that are being automatically generated. Generally just use find_vocal_periods
+    Bill 2/2018
+    
+        fuse_duration -         Gaps shorter than this will be fused into single syllables
+        shortest_duration -     Syllables shosrter than this will be ignored
+        test_mode -             Plots a bunch of things for helping determine ideal parameter values- in work
+        amp_thresh -            The amplitude threshold that you're going to be changing the most to get this all to work right
+        normalize_sound -       Divides the sound by the mean amplitude to normalize it, recommended to be True
+        normalize_thresh -      When normalize_sound=True all values below normalize_thresh first get set to 0- keeps the noise floor from being amplified.
+        lowpass_thresh and 
+        highpass_thresh -       It can be surprisingly useful to only search over a very limited bandwidth. Don't be afraid to try 6kHz to 9kHz or something
+        analog_signals -        Send a series of signals if you want your histograms to look any good
+    """
+    if test_mode:
+        # try lowpass filtering it to throw away "noise" in fast frequency correlations
+        if analog_signals:
+            
+            plt.figure()
+            plt.plot(amp_env[0])
+            plt.title("Raw Smoothed Amplitude Envelope- one of many")
+            plt.show()
+        else:
+            signal = np.copy(audio_stream_in)        
+            signal = highpass_filter(signal, fs, highpass)
+            signal = np.abs(lowpass_filter(signal, fs, lowpass))
+            amp_env = lowpass_filter(signal, fs, 100)
+            plt.figure()
+            plt.plot(amp_env)
+            plt.title("Raw Smoothed Amplitude Envelope")
+            plt.show()
+            
+            # normalize amplitude to near 1 in case this matters... make really low values just equal zero first to fix stretching        
+            low_vals = np.where(amp_env<normalize_thresh)
+            amp_env[low_vals] = 0
+            amp_env = (1/np.mean(amp_env)) * amp_env
+            plt.figure()
+            plt.plot(amp_env)
+            plt.title("normalized amplitude envelope")
+    
+            # for figuring out amp_thresh, or enter it in hardcoded on next cell
+            a = analogsignals[0]
+            plt.figure()
+            plt.hist([a for a in analogsignals[0] if a > 0], bins=100)
+            n, bins = np.histogram([a for a in analogsignals[0] if a > 0], bins=100)
+            amp_thresh = bins[np.argmax(n)+2] 
+            print("Amplitude threshold is: {}".format(amp_thresh))
+
+    syll_times, _ = find_vocal_periods(
+        audio_stream_in=audio_stream_in,
+        fs=fs,
+        fuse_duration=fuse_duration,
+        shortest_duration=shortest_duration,
+        amp_thresh=amp_thresh,
+        normalize_sound=normalize_sound,
+        normalize_thresh=normalize_thresh,
+        lowpass=lowpass,
+        highpass=highpass)
+
+    return syll_times, amp_thresh
+
+def find_vocal_periods(audio_stream_in, fs=30000, fuse_duration=0.2, shortest_duration=0.6, verbose=False, amp_thresh=None, normalize_sound=False, normalize_thresh=0.006, lowpass = 2000, highpass = 5000):
     """
     Given an audio stream, attempts to detect all segments of noise that might be bird calls of
     some sort.
@@ -551,7 +487,6 @@ def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.2, shortest_du
         Each tuple represents a (low_index:high_index) interval in the original array.
     """
     audio_stream = np.squeeze(audio_stream_in)
-
     # First we try to find the amplitude envelope. We only care about vocal sounds,
     # so we high-pass filter higher than normal.
     streams_filtered_env = np.zeros(np.shape(audio_stream))
@@ -560,18 +495,19 @@ def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.2, shortest_du
     streams_filtered_env = lowpass_filter(streams_filtered_env, fs, 100) # We essentially have an amplitude trace now
     # normalize amplitude to near 1 in case this matters... make really low values just equal zero first to fix stretching
     if normalize_sound:
-        if normalize_thresh == 0:
+        if normalize_thresh is None: # autocalculate a threshold based on histogram, a little sketchy- should be checked if using this
             n, bins = np.histogram([a for a in streams_filtered_env if a > 0], bins=100)
             normalize_thresh = bins[np.argmax(n)+1]
-        #print("setting values below {} to 0.".format(normalize_thresh))
+        print("setting values below {} to 0.".format(normalize_thresh))
         low_vals = np.where(streams_filtered_env < normalize_thresh)
         streams_filtered_env[low_vals] = 0
         streams_filtered_env = (1.0/np.mean(streams_filtered_env)) * streams_filtered_env
 
     # Simply threshold against the mean of the signal. This works surprisingly well.
     # If you think about it, all of the noises that get made during a session drag
-    # the mean to be slightly above background noise.   
-    amp_thresh = np.mean(streams_filtered_env) if amp_thresh is None else amp_thresh
+    # the mean to be slightly above background noise. 
+    if amp_thresh is None:
+        amp_thresh = np.mean(streams_filtered_env) 
     # sound onsets: 1 is an onset, -1 is an offset
     vd_crosses = np.zeros(len(streams_filtered_env))
     for i in xrange(len(streams_filtered_env)):
@@ -635,9 +571,77 @@ def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.2, shortest_du
     vocal_periods = np.array(zip(sound_onset, sound_offset))
     lengths = np.apply_along_axis(lambda p: p[1] - p[0], 1, vocal_periods)
     vocal_periods = vocal_periods[lengths > shortest_duration * fs]
+
     return vocal_periods, amp_thresh
     
+def find_syllables_old(audio_stream_in, amp_thresh = '', fs=25000, fuse_duration=0.1,  syll_dur = 20.0, sil_dur = 5.0, verbose=False):
+ 
+    """
+    This function is not yet very functional (Bill, 9/2017)- in fact as you can see it's "Old"
+    For segmenting into syllables. The basic idea is implementing multiple amplitude threshholds, each of which has it's own duration threshold...
+    I now think you could make the duration threshold dependent on the amplitude, such that the quieter it is, the shorter the gap needs to be to call it a new sylable.
+    This is really just here for posterity.
+    Bill 2/2018 
+    """
+    audio_stream = np.squeeze(audio_stream_in)
+    # First we try to find the amplitude envelope. We only care about vocal sounds,
+    # so we high-pass filter higher than normal.
+    streams_filtered_env = np.zeros(np.shape(audio_stream))
+    streams_filtered_env = highpass_filter(audio_stream, fs, 2000)
+    streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env, fs, 5000)) # Rectify and lowpass filter
+    env = lowpass_filter(streams_filtered_env, fs, 100)
 
+    if amp_thresh == '':
+        amp_thresh = np.mean(env)
+    # Now iterate through amplitude envelop and look for syllables. It would be more pythonic to do this in a 
+    # linear algebraish way, but I am going to just try to get it to work for now.
+    sound_on = 0 # keep count of how many points had sound
+    sil_on = 0 #  " " silence
+    hold = 0 # hold the value of sound_on in case of short silences
+    syllables = list()
+    for i in range(len(env)):
+        if i < syll_dur + sil_dur: # When we havn't had enough time to gather a syllable yet
+            if env[i] > amp_thresh:  
+                sound_on += 1
+                if sil_on < sil_dur: # if the silence was transient act like it didn't exist
+                    sound_on = sound_on + hold + sil_on # add the transient silence time to the syllable time
+                sil_on = 0
+                hold = 0
+            else:
+                sil_on += 1
+                if sound_on > 0: # previous point had sound
+                    hold = sound_on # prepare to look if the silence is brief
+                    sound_on = 0                
+        else: # the main loop
+            if env[i] > amp_thresh:  
+                sound_on += 1
+                if sil_on < sil_dur: # if the silence was transient act like it didn't exist
+                    sound_on = sound_on + hold + sil_on # add the transient silence time to the syllable time
+                sil_on = 0
+                hold = 0
+            else:
+                sil_on += 1
+                if sound_on > 0: # previous point had sound
+                    hold = sound_on # prepare to look if the silence is brief
+                    sound_on = 0                    
+                elif sil_on == sil_dur: # if it's been silent long enough to trigger a syllable end check if there was a syllable
+                    if hold > syll_dur: # Indicating there was a long enough period of sound to save as a syllable before
+                        syll_end = i - sil_dur
+                        syll_start = syll_end - hold
+                        syllables.append([syll_start,syll_end])
+                        
+    if verbose:
+        plt.figure()
+        plt.plot(env)
+        for i in range(len(syllables)):
+            plt.plot(syllables[i][0], min(env),'*', markersize= 12)
+            plt.plot(syllables[i][1], min(env),'x', markersize= 12)
+#            plt.plot(range(len(env)), np.ones(len(env)) * lower_thresh,'b')
+            plt.plot(range(len(env)), np.ones(len(env)) * amp_thresh,'r')
+            
+    # TODO turn syllables into seconds.
+            
+    return syllables
 
 def extract_birdsong_features(signal, points, fs=25000, minfreq=1000, maxfreq=8000,
                               pca_model=None):
