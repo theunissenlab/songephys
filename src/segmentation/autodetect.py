@@ -17,21 +17,8 @@ from scipy.signal import decimate
 import sys
 
     
-def get_syllable_features(soundIn, fs = 30000): 
-    """ 
-        An easy interface for computing many sound features from bioSound
-TODO    Short syllables trigger a warning in Biosound spectroCalc because it can't bandpass them. 
-        Takes a raw sound file and a sampling rate and returns a dict:
-            syllable_features = {"fund": fund, 
-                       "cvfund": cvfund, "F1": meanF1, "F2": meanF2, "F3" : meanF3,
-                       "sal": np.float(myBioSound.sal), "rms": np.float(myBioSound.rms), 
-                       "meanS": np.float(myBioSound.meanspect), "stdS": np.float(myBioSound.stdspect), 
-                       "q1": np.float(myBioSound.q1), "q2": np.float(myBioSound.q2), "q3": np.float(myBioSound.q3),
-                       "timestd": np.float(myBioSound.stdtime), "skewspect":np.float(myBioSound.skewspect),
-                       "kurtosisspect": np.float(myBioSound.kurtosisspect), "entropyspect": np.float(myBioSound.entropyspect)}
-        
-    """
-    ## Returns biosound properties from a chunk of sound.
+def get_biosound_properties(soundIn, fs=30000, plotme = False, lowFc = 50, highFc = 4900): # FET CHANGES!!!!!!!!, minFund = 500, maxFund = 3000):
+    ## Returns biosoudn properties from a chunk of sound.
     soundIn = soundIn - np.mean(soundIn,axis=0) # correct for DC offsets if they exist.
     #print 'Processing sound'
     maxAmp = np.asarray(np.abs(soundIn).max())      
@@ -45,49 +32,7 @@ TODO    Short syllables trigger a warning in Biosound spectroCalc because it can
     # Calculate the power spectrum
     myBioSound.spectrum(f_high=10000)
     # Calculate fundamental and related values
-    myBioSound.fundest(maxFund = 3000, minFund = 500, lowFc = 50, highFc = 6000, minSaliency = 0.5)   
-
-    meanF1 = np.mean(myBioSound.F1[~np.isnan(myBioSound.F1)])
-    meanF2 = np.mean(myBioSound.F2[~np.isnan(myBioSound.F2)])
-    meanF3 = np.mean(myBioSound.F3[~np.isnan(myBioSound.F3)])
-
-    if myBioSound.fund is not None:
-        if myBioSound.fund.size == 0:
-            fund = None
-            cvfund = None
-        else:
-            fund = np.float(myBioSound.fund)
-            cvfund = np.float(myBioSound.cvfund)
-    else:
-        fund = None 
-        cvfund = None   
-    
-    syllable_features = {"fund": fund, 
-                       "cvfund": cvfund, "F1": meanF1, "F2": meanF2, "F3" : meanF3,
-                       "sal": np.float(myBioSound.sal), "rms": np.float(myBioSound.rms), 
-                       "meanS": np.float(myBioSound.meanspect), "stdS": np.float(myBioSound.stdspect), 
-                       "q1": np.float(myBioSound.q1), "q2": np.float(myBioSound.q2), "q3": np.float(myBioSound.q3),
-                       "timestd": np.float(myBioSound.stdtime), "skewspect":np.float(myBioSound.skewspect),
-                       "kurtosisspect": np.float(myBioSound.kurtosisspect), "entropyspect": np.float(myBioSound.entropyspect)}
-
-    return syllable_features
-
-def getBioSoundProperties(soundIn, plotme = False): # FET CHANGES!!!!!!!!, minFund = 500, maxFund = 3000):
-    ## Returns biosoudn properties from a chunk of sound.
-    soundIn = soundIn - np.mean(soundIn,axis=0) # correct for DC offsets if they exist.
-    #print 'Processing sound'
-    maxAmp = np.asarray(np.abs(soundIn).max())      
-    myBioSound = BioSound(soundWave=np.squeeze(np.asarray(soundIn).astype(float))/maxAmp, fs=float(soundIn.sampling_rate), calltype = "")
-                 
-    # Create BioSound Object and store some values
-    myBioSound.spectroCalc(spec_sample_rate=100)
-    myBioSound.rms = myBioSound.sound.std()     # The rms  
-    # Calculate amplitude enveloppe
-    myBioSound.ampenv()  
-    # Calculate the power spectrum
-    myBioSound.spectrum(f_high=10000)
-    # Calculate fundamental and related values
-    myBioSound.fundest(maxFund = 1500, minFund = 500, lowFc = 50, highFc = 6000, minSaliency = 0.5)   
+    myBioSound.fundest(maxFund = 1500, minFund = 500, lowFc = lowFc, highFc = highFc, minSaliency = 0.5)   
 #    myBioSound.fundest(maxFund, minFund, lowFc = 150, highFc = 6000, minSaliency = 0.5) FET CHANGES!!!!!!!!!!!!!!!1
     meanF1 = np.mean(myBioSound.F1[~np.isnan(myBioSound.F1)])
     meanF2 = np.mean(myBioSound.F2[~np.isnan(myBioSound.F2)])
@@ -283,21 +228,21 @@ def align_spectrograms(spectro_list, freq_bins = [], t_before = 30, t_after = 30
     print('returning shifted spectogram array'    )
     return shifted_spect_array
 
-def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=7000, num_pcs_to_save=50, spect_pca_filename = "/auto/tdrive/billewood/intan data/LbY6074/spect_pca_combined.pkl", return_big_df=0, pca_model="", lowpass_thresh=4800, tutor_mic=0):
+def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=400, maxfreq=7000, num_pcs_to_save=50, spect_pca_filename = "/auto/tdrive/billewood/intan data/LbY6074/spect_pca_combined.pkl", return_big_df=0, pca_model="", lowpass_thresh=4800, tutor_mic=0):
     """
-
+        Given a long audio file and a set of periods of vocalizations.
         Returns a pandas database of sound properties useful for sorting and analyzing vocalizations.
         Most features come from the Theunissen lab Biosound object:
             sound.py, https://github.com/theunissenlab/soundsig.git)        
         Most features are self-evident, but:
-            -Spectrogram derived data is generally only calculated for frequency bins
+            -Spectrogram derived data is only calculated for frequency bins
             between minfreq and maxfreq.
             -freqvars is the variance of each frequency bin in the spectrogram.
             -The pandas df that is returned is pretty unwieldy but is in a good format 
             for PCA and t-sne analysis/visualization (amongst others)
-        Values with NaNs are replaced with column averages (without warnings, unfortunately).
+        Values with NaNs are replaced with column averages (without warnings).
     """
-    signal = audio_streams[:,0]
+    signal = np.squeeze(np.asarray(audio_streams[:,tutor_mic])) # tutor mic not implemented yet, just grabbing a mic channel
     new_df_data = list() #will transform into a pandas dataframe eventually
     freqvars = []
     psds = []
@@ -305,7 +250,7 @@ def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=700
     spectro_list = list() # contains the spectrograms for plotting later
     
     # make a pandas DataFrame with biousound properties of all syllables/vocalizations
-    print("Calculating biosound qualities and populating a database, this may take a while.")
+    print("Calculating biosound properties and populating a database, this may take a while.")
     annotated_pts, pt_diffs, std_idx = separate_song_sources(audio_streams, points, fs, tutor_mic)
 
     for i, pt in enumerate(points):
@@ -316,10 +261,11 @@ def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=700
             print('..',i)
         else: sys.stdout.write('..'+str(i))
         l,h = pt
-        if i in annotated_pts['tutor']:
-            sound = lowpass_filter(signal[l:h,tutor_mic], fs, lowpass_thresh)
-            sound = highpass_filter(sound, fs, 300)
-        new_biosound, fpsd, psd, freqvar, f_freqvar, spectro, ampenv = getBioSoundProperties(sound)
+        
+        #if i in annotated_pts['tutor']: # 2/18 I don't understand why this line exists commenting it out- Bill
+        sound = lowpass_filter(signal[l:h].T, sample_rate=fs, cutoff_freq=lowpass_thresh)
+        sound = highpass_filter(sound.T, fs, 300)
+        new_biosound, fpsd, psd, freqvar, f_freqvar, spectro, ampenv = get_biosound_properties(sound, fs=fs)
         new_df_data.append(new_biosound)
         spectro_list.append(spectro)
         ampenvs.append(ampenv)
@@ -568,9 +514,16 @@ def find_vocal_periods(audio_stream_in, fs=30000, fuse_duration=0.2, shortest_du
     sound_onset -= np.int(np.round(fuse_duration*fs))
     sound_offset += np.int(np.round(fuse_duration*fs))
 
+    if sound_onset[0] < 0:
+        sound_onset[0] = 0
+        if verbose:
+            print("First onset near beginning of file, rounding to account for fuse duration forced it to before file onset, "
+                + "first onset set to 0")
     vocal_periods = np.array(zip(sound_onset, sound_offset))
     lengths = np.apply_along_axis(lambda p: p[1] - p[0], 1, vocal_periods)
     vocal_periods = vocal_periods[lengths > shortest_duration * fs]
+    if verbose:
+        print("After fusing and cutting shortest, {} vocal periods remain".format(len(vocal_periods)))
 
     return vocal_periods, amp_thresh
     
