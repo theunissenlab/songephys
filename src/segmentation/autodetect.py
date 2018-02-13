@@ -65,7 +65,7 @@ def get_biosound_properties(soundIn, fs=30000, plotme = False, lowFc = 50, highF
                        "q1": np.float(myBioSound.q1), "q2": np.float(myBioSound.q2), "q3": np.float(myBioSound.q3),
                        "timestd": np.float(myBioSound.stdtime), "skewspect":np.float(myBioSound.skewspect),
                        "kurtosisspect": np.float(myBioSound.kurtosisspect), "entropyspect": np.float(myBioSound.entropyspect)}
-                          
+
     if plotme:  
         myBioSound.plot()  
         myBioSound.play()
@@ -81,7 +81,7 @@ def get_biosound_properties(soundIn, fs=30000, plotme = False, lowFc = 50, highF
     return vocSelData, fpsd, psd, freqvar, f_freqvar, spectro, ampenv
     
 
-def reduce_dimensions_pca(df, fs, pca_model="", pca_columns="", zscore_columns=""):
+def reduce_dimensions_pca(df, fs, pca_model=None, pca_columns="", zscore_columns=""):
     """
         Takes a pandas dataframe created with autodetect.populate_dataframe.
         Reduces the dimensionality by PCAing most of the columns,
@@ -100,13 +100,13 @@ def reduce_dimensions_pca(df, fs, pca_model="", pca_columns="", zscore_columns="
     else:
         print("Warning changing the default columns is probably buggy..."    )
     
-    if pca_model == "":
-        print("No PCA model (pkl file) passed for determining pca dimensionality reduction, attempting to use hard-coded one")
-        pca_model = '/auto/tdrive/billewood/intan data/LbY6074/LbY6074__161215_145633_PCA.pkl'
-        print("Using pca model at {}".format(pca_model))
-    
-    with open(pca_model,"r") as f:
-        pca = pickle.load(f)    
+    if pca_model is None:
+        print("No PCA model (pkl file) passed for determining pca dimensionality reduction. Using generic generated one.")
+        # TODO INSTERT PCA model here.
+    else:
+        print("Attempting to use model in pca_model = {}".format(pca_model)) 
+        with open(pca_model,"r") as f:
+            pca = pickle.load(f)    
         
     zscore_array = np.array(df[zscore_columns].apply(zscore))
 
@@ -139,7 +139,7 @@ def reduce_dimensions_pca(df, fs, pca_model="", pca_columns="", zscore_columns="
     
     pca_df['vocal_category'] = df['vocal_category']
 
-    return pca_df
+    return pca_df, pca
 
 
 def test_random_forest(classifier_dataset = "", fs=25000, save_it = False, pca_model = ""):
@@ -237,7 +237,7 @@ def align_spectrograms(spectro_list, freq_bins = [], t_before = 30, t_after = 30
     print('returning shifted spectogram array')
     return shifted_spect_array
 
-def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=150, maxfreq=4800, num_pcs_to_save=50, spect_pca_filename = "/auto/tdrive/billewood/intan data/LbY6074/spect_pca_combined.pkl", return_big_df=0, pca_model="", lowpass_thresh=4800, tutor_mic=0):
+def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=150, maxfreq=4800, num_pcs_to_save=50, spect_pca_filename = None, return_big_df=0, pca_model=None, lowpass_thresh=4800, tutor_mic=0):
     """
         Given a long audio file and a set of periods of vocalizations.
         Returns a pandas database of sound properties useful for sorting and analyzing vocalizations.
@@ -249,6 +249,10 @@ def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=150, maxfreq=4
             -freqvars is the variance of each frequency bin in the spectrogram.
             -The pandas df that is returned is pretty unwieldy but is in a good format 
             for PCA and t-sne analysis/visualization (amongst others)
+        About dimensionality reduction:
+        Spectrograms are PCAd to reduce dimensions with spect_pca_filename.
+        The PCAd spectrograms, along with the PSDs, freqvars, and amplitude envelope, are PCAd to reduce dimensions with pca_model.
+        This is what is returned in the PCA columns of df.
         Values with NaNs are replaced with column averages (without warnings).
     """
     signal = np.squeeze(np.asarray(audio_streams[:,tutor_mic])) # tutor mic not implemented yet, just grabbing a mic channel
@@ -274,6 +278,7 @@ def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=150, maxfreq=4
         #if i in annotated_pts['tutor']: # 2/18 I don't understand why this line exists commenting it out- Bill
         sound = lowpass_filter(signal[l:h].T, sample_rate=fs, cutoff_freq=lowpass_thresh)
         sound = highpass_filter(sound.T, fs, 150)
+        
         new_biosound, fpsd, psd, freqvar, f_freqvar, spectro, ampenv = get_biosound_properties(sound, fs=fs)
         new_df_data.append(new_biosound)
         spectro_list.append(spectro)
@@ -315,12 +320,6 @@ def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=150, maxfreq=4
         name = 'AMPENV t=%d' %i
         df[name] = ampenvs[:,i]
 
-
-    print("Calculating PCAs of aligned spectrograms and saving in dataframe.")
-    print("This involves projecting onto a precomputed PCA space contained at: {}.".format(spect_pca_filename))
-    with open(spect_pca_filename,"r") as f:
-        pca = pickle.load(f)
-
 # TODO I have reservations about how these spectrograms are being manipulated. make t_before into seconds
 
     shifted_spectro_list = align_spectrograms(spectro_list, freq_bins = [], t_before = 30, t_after = 30)    
@@ -330,7 +329,19 @@ def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=150, maxfreq=4
         flat_spect = np.ravel(spect)
         flat_spect_array[i,:] = flat_spect
 
-    pca_array = pca.transform(flat_spect_array) # PSD, freqVAR, and ampenv freatures.   
+    if spect_pca_filename is not None:
+        print("Calculating PCAs of aligned spectrograms and saving in dataframe.")
+        print("This involves projecting onto a precomputed PCA space contained at: {}.".format(spect_pca_filename))
+        with open(spect_pca_filename,"r") as f:
+            spect_pca = pickle.load(f)
+    else:
+        print("Calculating PCAs of aligned spectrograms and saving in dataframe.")
+        print("Creating a generic PCA space")
+        spect_pca = PCA(n_components=40)
+        spect_pca.fit(flat_spect_array)
+
+    pca_array = spect_pca.transform(flat_spect_array, pca) # PSD, freqVAR, and ampenv freatures. 
+
     for i in range(pca_array.shape[1]):
         name = 'spectro pca #%d' %i
         df[name] = pca_array[:,i]
@@ -356,9 +367,9 @@ def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=150, maxfreq=4
     else:
         big_df = pandas.DataFrame()
         
-    pca_df = reduce_dimensions_pca(df, fs, pca_model)
+    pca_df, df_pca = reduce_dimensions_pca(df, fs, pca_model) # pca_df is df after applying the pca, df_pca is the PCA that was applied.
     
-    return pca_df, spectro_list, big_df #spectrogram list, for plotting spectrograms
+    return pca_df, spectro_list, big_df, spect_pca, df_pca #spectrogram list, for plotting spectrograms
 
 
 def test_find_vocal_periods(audio_stream_in, fs=30000, fuse_duration=0.01, shortest_duration=0.01, test_mode=True, amp_thresh=None, normalize_sound=False, normalize_thresh=None, lowpass = 2000, highpass = 5000, analog_signals = None):
