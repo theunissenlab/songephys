@@ -17,7 +17,7 @@ from scipy.signal import decimate
 import sys
 
     
-def get_biosound_properties(soundIn, fs=30000, plotme = False, lowFc = 50, highFc = 4900, spec_sample_rate=100): # FET CHANGES!!!!!!!!, minFund = 500, maxFund = 3000):
+def get_biosound_properties(soundIn, fs=30000, plotme = False, lowFc = 50, highFc = 4900, spectro_sample_rate=100): # FET CHANGES!!!!!!!!, minFund = 500, maxFund = 3000):
     """
     Returns biosound properties from a chunk of sound.
     First subtract mean (correct for DC offsets), and normalize by maximum amplitude (correct for birds singing towards/away from mic, etc).
@@ -34,7 +34,7 @@ def get_biosound_properties(soundIn, fs=30000, plotme = False, lowFc = 50, highF
     myBioSound = BioSound(soundWave=np.squeeze(np.asarray(soundIn).astype(float))/maxAmp, fs=fs, calltype = "") # normalize to maximum amplitude
                  
     # Create BioSound Object and store some values
-    myBioSound.spectroCalc(spec_sample_rate=spec_sample_rate)
+    myBioSound.spectroCalc(spec_sample_rate=spectro_sample_rate,min_freq=lowFc,max_freq=highFc) # this creates the spectrogram, saved as myBioSound.spectro
     myBioSound.rms = myBioSound.sound.std()     # The rms  
     # Calculate amplitude enveloppe
     myBioSound.ampenv()  
@@ -237,15 +237,15 @@ def align_spectrograms(spectro_list, freq_bins = [], t_before = 30, t_after = 30
     print('returning shifted spectogram array')
     return shifted_spect_array
 
-def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=400, maxfreq=7000, num_pcs_to_save=50, spect_pca_filename = "/auto/tdrive/billewood/intan data/LbY6074/spect_pca_combined.pkl", return_big_df=0, pca_model="", lowpass_thresh=4800, tutor_mic=0):
+def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=150, maxfreq=4800, num_pcs_to_save=50, spect_pca_filename = "/auto/tdrive/billewood/intan data/LbY6074/spect_pca_combined.pkl", return_big_df=0, pca_model="", lowpass_thresh=4800, tutor_mic=0):
     """
         Given a long audio file and a set of periods of vocalizations.
         Returns a pandas database of sound properties useful for sorting and analyzing vocalizations.
         Most features come from the Theunissen lab Biosound object:
             sound.py, https://github.com/theunissenlab/soundsig.git)        
         Most features are self-evident, but:
-            -Spectrogram derived data is only calculated for frequency bins
-            between minfreq and maxfreq.
+            -Sound is lowpassed (lowpass_thresh) and highpassed (150 Hz) before any sound features are calculated.
+            -psds and freqvars are cut to only include frequencies between minfreq and maxfreq.
             -freqvars is the variance of each frequency bin in the spectrogram.
             -The pandas df that is returned is pretty unwieldy but is in a good format 
             for PCA and t-sne analysis/visualization (amongst others)
@@ -273,7 +273,7 @@ def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=400, maxfreq=7
         
         #if i in annotated_pts['tutor']: # 2/18 I don't understand why this line exists commenting it out- Bill
         sound = lowpass_filter(signal[l:h].T, sample_rate=fs, cutoff_freq=lowpass_thresh)
-        sound = highpass_filter(sound.T, fs, 300)
+        sound = highpass_filter(sound.T, fs, 150)
         new_biosound, fpsd, psd, freqvar, f_freqvar, spectro, ampenv = get_biosound_properties(sound, fs=fs)
         new_df_data.append(new_biosound)
         spectro_list.append(spectro)
@@ -321,9 +321,9 @@ def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=400, maxfreq=7
     with open(spect_pca_filename,"r") as f:
         pca = pickle.load(f)
 
-# TODO I have great reservations about how these spectrograms are being manipulated.
+# TODO I have reservations about how these spectrograms are being manipulated. make t_before into seconds
 
-    shifted_spectro_list = align_spectrograms(spectro_list, freq_bins = [10,90], t_before = 30, t_after = 30)    
+    shifted_spectro_list = align_spectrograms(spectro_list, freq_bins = [], t_before = 30, t_after = 30)    
 
     flat_spect_array = np.zeros([len(shifted_spectro_list), shifted_spectro_list[0].shape[0] * shifted_spectro_list[0].shape[1]])
     for i, spect in enumerate(shifted_spectro_list):
