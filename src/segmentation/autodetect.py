@@ -17,20 +17,29 @@ from scipy.signal import decimate
 import sys
 
     
-def get_biosound_properties(soundIn, fs=30000, plotme = False, lowFc = 50, highFc = 4900): # FET CHANGES!!!!!!!!, minFund = 500, maxFund = 3000):
-    ## Returns biosoudn properties from a chunk of sound.
+def get_biosound_properties(soundIn, fs=30000, plotme = False, lowFc = 50, highFc = 4900, spec_sample_rate=100): # FET CHANGES!!!!!!!!, minFund = 500, maxFund = 3000):
+    """
+    Returns biosound properties from a chunk of sound.
+    First subtract mean (correct for DC offsets), and normalize by maximum amplitude (correct for birds singing towards/away from mic, etc).
+    Typically only analyze frequencies between 50 and 4900 Hz because we have noise at 5kHz.
+    Returns a dict of simple values (vocSelData), plus PSD, frequency variances, spectrograms, and amplitude envelope.
+    
+    spec_sample_rate: sampling rate for the output spectrogram in Hz (spectro). This variable sets the overlap for the windows in the STFFT.
+
+    """
+
     soundIn = soundIn - np.mean(soundIn,axis=0) # correct for DC offsets if they exist.
     #print 'Processing sound'
     maxAmp = np.asarray(np.abs(soundIn).max())      
-    myBioSound = BioSound(soundWave=np.squeeze(np.asarray(soundIn).astype(float))/maxAmp, fs=fs, calltype = "")
+    myBioSound = BioSound(soundWave=np.squeeze(np.asarray(soundIn).astype(float))/maxAmp, fs=fs, calltype = "") # normalize to maximum amplitude
                  
     # Create BioSound Object and store some values
-    myBioSound.spectroCalc(spec_sample_rate=100)
+    myBioSound.spectroCalc(spec_sample_rate=spec_sample_rate)
     myBioSound.rms = myBioSound.sound.std()     # The rms  
     # Calculate amplitude enveloppe
     myBioSound.ampenv()  
     # Calculate the power spectrum
-    myBioSound.spectrum(f_high=10000)
+    myBioSound.spectrum(f_high=highFc)
     # Calculate fundamental and related values
     myBioSound.fundest(maxFund = 1500, minFund = 500, lowFc = lowFc, highFc = highFc, minSaliency = 0.5)   
 #    myBioSound.fundest(maxFund, minFund, lowFc = 150, highFc = 6000, minSaliency = 0.5) FET CHANGES!!!!!!!!!!!!!!!1
@@ -225,7 +234,7 @@ def align_spectrograms(spectro_list, freq_bins = [], t_before = 30, t_after = 30
         shifted_spect[:, pre_pad:pre_pad + (end_time-start_time)] = spect[freq_bins[0]:freq_bins[1],start_time:end_time]
         shifted_spect_array.append(shifted_spect)
 
-    print('returning shifted spectogram array'    )
+    print('returning shifted spectogram array')
     return shifted_spect_array
 
 def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=400, maxfreq=7000, num_pcs_to_save=50, spect_pca_filename = "/auto/tdrive/billewood/intan data/LbY6074/spect_pca_combined.pkl", return_big_df=0, pca_model="", lowpass_thresh=4800, tutor_mic=0):
@@ -306,10 +315,14 @@ def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=400, maxfreq=7
         name = 'AMPENV t=%d' %i
         df[name] = ampenvs[:,i]
 
+
     print("Calculating PCAs of aligned spectrograms and saving in dataframe.")
     print("This involves projecting onto a precomputed PCA space contained at: {}.".format(spect_pca_filename))
     with open(spect_pca_filename,"r") as f:
         pca = pickle.load(f)
+
+# TODO I have great reservations about how these spectrograms are being manipulated.
+
     shifted_spectro_list = align_spectrograms(spectro_list, freq_bins = [10,90], t_before = 30, t_after = 30)    
 
     flat_spect_array = np.zeros([len(shifted_spectro_list), shifted_spectro_list[0].shape[0] * shifted_spectro_list[0].shape[1]])
@@ -341,7 +354,7 @@ def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=400, maxfreq=7
     if return_big_df:
         big_df = df
     else:
-        big_df = pandas.DataFrame()  
+        big_df = pandas.DataFrame()
         
     pca_df = reduce_dimensions_pca(df, fs, pca_model)
     
