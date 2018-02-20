@@ -16,204 +16,32 @@ from scipy.stats import zscore
 from scipy.signal import decimate
 import sys
 
-
-def find_syllables_old(audio_stream_in, amp_thresh = '', fs=25000, fuse_duration=0.1,  syll_dur = 20.0, sil_dur = 5.0, verbose=False):
- 
-    """
-    This function is not yet very functional (Bill, 9/2017)- in fact as you can see it's "Old"
-    For segmenting into syllables.
-    You should pass amp_thresh, which should come from find_vocal_periods
-    The idea of this function is that instead of just a threshold based amplitude sorting into v
-    putative vocalization periods, we can use 
-    """
-    audio_stream = np.squeeze(audio_stream_in)
-    # First we try to find the amplitude envelope. We only care about vocal sounds,
-    # so we high-pass filter higher than normal.
-    streams_filtered_env = np.zeros(np.shape(audio_stream))
-    streams_filtered_env = highpass_filter(audio_stream, fs, 2000)
-    streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env, fs, 5000)) # Rectify and lowpass filter
-    env = lowpass_filter(streams_filtered_env, fs, 100)
-
-    if amp_thresh == '':
-        amp_thresh = np.mean(env)
-    # Now iterate through amplitude envelop and look for syllables. It would be more pythonic to do this in a 
-    # linear algebraish way, but I am going to just try to get it to work for now.
-    sound_on = 0 # keep count of how many points had sound
-    sil_on = 0 #  " " silence
-    hold = 0 # hold the value of sound_on in case of short silences
-    syllables = list()
-    for i in range(len(env)):
-        if i < syll_dur + sil_dur: # When we havn't had enough time to gather a syllable yet
-            if env[i] > amp_thresh:  
-                sound_on += 1
-                if sil_on < sil_dur: # if the silence was transient act like it didn't exist
-                    sound_on = sound_on + hold + sil_on # add the transient silence time to the syllable time
-                sil_on = 0
-                hold = 0
-            else:
-                sil_on += 1
-                if sound_on > 0: # previous point had sound
-                    hold = sound_on # prepare to look if the silence is brief
-                    sound_on = 0                
-        else: # the main loop
-            if env[i] > amp_thresh:  
-                sound_on += 1
-                if sil_on < sil_dur: # if the silence was transient act like it didn't exist
-                    sound_on = sound_on + hold + sil_on # add the transient silence time to the syllable time
-                sil_on = 0
-                hold = 0
-            else:
-                sil_on += 1
-                if sound_on > 0: # previous point had sound
-                    hold = sound_on # prepare to look if the silence is brief
-                    sound_on = 0                    
-                elif sil_on == sil_dur: # if it's been silent long enough to trigger a syllable end check if there was a syllable
-                    if hold > syll_dur: # Indicating there was a long enough period of sound to save as a syllable before
-                        syll_end = i - sil_dur
-                        syll_start = syll_end - hold
-                        syllables.append([syll_start,syll_end])
-                        
-    if verbose:
-        plt.figure()
-        plt.plot(env)
-        for i in range(len(syllables)):
-            plt.plot(syllables[i][0], min(env),'*', markersize= 12)
-            plt.plot(syllables[i][1], min(env),'x', markersize= 12)
-#            plt.plot(range(len(env)), np.ones(len(env)) * lower_thresh,'b')
-            plt.plot(range(len(env)), np.ones(len(env)) * amp_thresh,'r')
-            
-    # TODO turn syllables into seconds.
-            
-    return syllables
-
-def find_syllables(audio_stream_in, fs=30000, fuse_duration=0.01, shortest_duration=0.01, test_mode=False, amp_thresh=None, normalize_sound=True, normalize_thresh=None, lowpass = 2000, highpass = 5000, analog_signals = None):
-    """ 
-TODO        The basic premise is sound and taken from a noteboook but I haven't finished making it work for both one signal and many. many is useful for histograms (analog_signals)= Bill
-        Use amplitude thresholds for identifying syllable times in a song.        
-        Essentially a helper function for using findVocalPeriods.
     
-        fuse_duration -         Gaps shorter than this will be fused into single syllables
-        shortest_duration -     Syllables shosrter than this will be ignored
-        test_mode -             Plots a bunch of things for helping determine ideal parameter values- in work
-        amp_thresh -            The amplitude threshold that you're going to be changing the most to get this all to work right
-        normalize_sound -       Divides the sound by the mean amplitude to normalize it, recommended to be True
-        normalize_thresh -      When normalize_sound=True all values below normalize_thresh first get set to 0- keeps the noise floor from being amplified.
-        lowpass_thresh and 
-        highpass_thresh -       It can be surprisingly useful to only search over a very limited bandwidth. Don't be afraid to try 6kHz to 9kHz or something
-        analog_signals -        Send a series of signals if you want your histograms to look any good
+def get_biosound_properties(soundIn, fs=30000, plotme = False, lowFc = 50, highFc = 4800, spectro_sample_rate=100): 
+    """
+    Returns biosound properties from a chunk of sound.
+    First subtract mean (correct for DC offsets), and normalize by maximum amplitude (correct for birds singing towards/away from mic, etc).
+    Typically only analyze frequencies between 50 and 4900 Hz because we have noise at 5kHz.
+    Returns a dict of simple values (vocSelData), plus PSD, frequency variances, spectrograms, and amplitude envelope.
+    
+    spec_sample_rate: sampling rate for the output spectrogram in Hz (spectro). This variable sets the overlap for the windows in the STFFT.
 
     """
-    if test_mode:
-        # try lowpass filtering it to throw away "noise" in fast frequency correlations
-        if analog_signals:
-            
-            plt.figure()
-            plt.plot(amp_env[0])
-            plt.title("Raw Smoothed Amplitude Envelope- one of many")
-            plt.show()
-        else:
-            signal = np.copy(audio_stream_in)        
-            signal = highpass_filter(signal, fs, highpass)
-            signal = np.abs(lowpass_filter(signal, fs, lowpass))
-            amp_env = lowpass_filter(signal, fs, 100)
-            plt.figure()
-            plt.plot(amp_env)
-            plt.title("Raw Smoothed Amplitude Envelope")
-            plt.show()
-            
-            # normalize amplitude to near 1 in case this matters... make really low values just equal zero first to fix stretching        
-            low_vals = np.where(amp_env<normalize_thresh)
-            amp_env[low_vals] = 0
-            amp_env = (1/np.mean(amp_env)) * amp_env
-            plt.figure()
-            plt.plot(amp_env)
-            plt.title("normalized amplitude envelope")
-    
-            # for figuring out amp_thresh, or enter it in hardcoded on next cell
-            a = analogsignals[0]
-            plt.figure()
-            plt.hist([a for a in analogsignals[0] if a > 0], bins=100)
-            n, bins = np.histogram([a for a in analogsignals[0] if a > 0], bins=100)
-            amp_thresh = bins[np.argmax(n)+2] 
-            print("Amplitude threshold is: {}".format(amp_thresh))
-    
-    syll_times, _ = find_vocal_periods(audio_stream_in,fs,fuse_duration,shortest_duration,amp_thresh,normalize_sound,normalize_thresh,lowpass,highpass)
 
-    return syll_times
-    
-    
-    
-def get_syllable_features(soundIn, fs = 30000): 
-    """ 
-        An easy interface for computing many sound features from bioSound
-TODO    Short syllables trigger a warning in Biosound spectroCalc because it can't bandpass them. 
-        Takes a raw sound file and a sampling rate and returns a dict:
-            syllable_features = {"fund": fund, 
-                       "cvfund": cvfund, "F1": meanF1, "F2": meanF2, "F3" : meanF3,
-                       "sal": np.float(myBioSound.sal), "rms": np.float(myBioSound.rms), 
-                       "meanS": np.float(myBioSound.meanspect), "stdS": np.float(myBioSound.stdspect), 
-                       "q1": np.float(myBioSound.q1), "q2": np.float(myBioSound.q2), "q3": np.float(myBioSound.q3),
-                       "timestd": np.float(myBioSound.stdtime), "skewspect":np.float(myBioSound.skewspect),
-                       "kurtosisspect": np.float(myBioSound.kurtosisspect), "entropyspect": np.float(myBioSound.entropyspect)}
-        
-    """
-    ## Returns biosound properties from a chunk of sound.
     soundIn = soundIn - np.mean(soundIn,axis=0) # correct for DC offsets if they exist.
     #print 'Processing sound'
     maxAmp = np.asarray(np.abs(soundIn).max())      
-    myBioSound = BioSound(soundWave=np.squeeze(np.asarray(soundIn).astype(float))/maxAmp, fs=fs, calltype = "")
+    myBioSound = BioSound(soundWave=np.squeeze(np.asarray(soundIn).astype(float))/maxAmp, fs=fs, calltype = "") # normalize to maximum amplitude
                  
     # Create BioSound Object and store some values
-    myBioSound.spectroCalc(spec_sample_rate=100)
+    myBioSound.spectroCalc(spec_sample_rate=spectro_sample_rate,min_freq=lowFc,max_freq=highFc) # this creates the spectrogram, saved as myBioSound.spectro
     myBioSound.rms = myBioSound.sound.std()     # The rms  
     # Calculate amplitude enveloppe
     myBioSound.ampenv()  
     # Calculate the power spectrum
-    myBioSound.spectrum(f_high=10000)
+    myBioSound.spectrum(f_high=highFc)
     # Calculate fundamental and related values
-    myBioSound.fundest(maxFund = 3000, minFund = 500, lowFc = 50, highFc = 6000, minSaliency = 0.5)   
-
-    meanF1 = np.mean(myBioSound.F1[~np.isnan(myBioSound.F1)])
-    meanF2 = np.mean(myBioSound.F2[~np.isnan(myBioSound.F2)])
-    meanF3 = np.mean(myBioSound.F3[~np.isnan(myBioSound.F3)])
-
-    if myBioSound.fund is not None:
-        if myBioSound.fund.size == 0:
-            fund = None
-            cvfund = None
-        else:
-            fund = np.float(myBioSound.fund)
-            cvfund = np.float(myBioSound.cvfund)
-    else:
-        fund = None 
-        cvfund = None   
-    
-    syllable_features = {"fund": fund, 
-                       "cvfund": cvfund, "F1": meanF1, "F2": meanF2, "F3" : meanF3,
-                       "sal": np.float(myBioSound.sal), "rms": np.float(myBioSound.rms), 
-                       "meanS": np.float(myBioSound.meanspect), "stdS": np.float(myBioSound.stdspect), 
-                       "q1": np.float(myBioSound.q1), "q2": np.float(myBioSound.q2), "q3": np.float(myBioSound.q3),
-                       "timestd": np.float(myBioSound.stdtime), "skewspect":np.float(myBioSound.skewspect),
-                       "kurtosisspect": np.float(myBioSound.kurtosisspect), "entropyspect": np.float(myBioSound.entropyspect)}
-
-    return syllable_features
-
-def getBioSoundProperties(soundIn, plotme = False): # FET CHANGES!!!!!!!!, minFund = 500, maxFund = 3000):
-    ## Returns biosoudn properties from a chunk of sound.
-    soundIn = soundIn - np.mean(soundIn,axis=0) # correct for DC offsets if they exist.
-    #print 'Processing sound'
-    maxAmp = np.asarray(np.abs(soundIn).max())      
-    myBioSound = BioSound(soundWave=np.squeeze(np.asarray(soundIn).astype(float))/maxAmp, fs=float(soundIn.sampling_rate), calltype = "")
-                 
-    # Create BioSound Object and store some values
-    myBioSound.spectroCalc(spec_sample_rate=100)
-    myBioSound.rms = myBioSound.sound.std()     # The rms  
-    # Calculate amplitude enveloppe
-    myBioSound.ampenv()  
-    # Calculate the power spectrum
-    myBioSound.spectrum(f_high=10000)
-    # Calculate fundamental and related values
-    myBioSound.fundest(maxFund = 1500, minFund = 500, lowFc = 50, highFc = 6000, minSaliency = 0.5)   
+    myBioSound.fundest(maxFund = 1500, minFund = 500, lowFc = lowFc, highFc = highFc, minSaliency = 0.5)   
 #    myBioSound.fundest(maxFund, minFund, lowFc = 150, highFc = 6000, minSaliency = 0.5) FET CHANGES!!!!!!!!!!!!!!!1
     meanF1 = np.mean(myBioSound.F1[~np.isnan(myBioSound.F1)])
     meanF2 = np.mean(myBioSound.F2[~np.isnan(myBioSound.F2)])
@@ -237,7 +65,7 @@ def getBioSoundProperties(soundIn, plotme = False): # FET CHANGES!!!!!!!!, minFu
                        "q1": np.float(myBioSound.q1), "q2": np.float(myBioSound.q2), "q3": np.float(myBioSound.q3),
                        "timestd": np.float(myBioSound.stdtime), "skewspect":np.float(myBioSound.skewspect),
                        "kurtosisspect": np.float(myBioSound.kurtosisspect), "entropyspect": np.float(myBioSound.entropyspect)}
-                          
+
     if plotme:  
         myBioSound.plot()  
         myBioSound.play()
@@ -253,7 +81,7 @@ def getBioSoundProperties(soundIn, plotme = False): # FET CHANGES!!!!!!!!, minFu
     return vocSelData, fpsd, psd, freqvar, f_freqvar, spectro, ampenv
     
 
-def reduce_dimensions_pca(df, fs, pca_model="", pca_columns="", zscore_columns=""):
+def reduce_dimensions_pca(df, fs, df_pca_filename=None, pca_columns="", zscore_columns=""):
     """
         Takes a pandas dataframe created with autodetect.populate_dataframe.
         Reduces the dimensionality by PCAing most of the columns,
@@ -272,46 +100,39 @@ def reduce_dimensions_pca(df, fs, pca_model="", pca_columns="", zscore_columns="
     else:
         print("Warning changing the default columns is probably buggy..."    )
     
-    if pca_model == "":
-        print("No PCA model (pkl file) passed for determining pca dimensionality reduction, attempting to use hard-coded one")
-        pca_model = '/auto/tdrive/billewood/intan data/LbY6074/LbY6074__161215_145633_PCA.pkl'
-        print("Using pca model at {}".format(pca_model))
-    
-    with open(pca_model,"r") as f:
-        pca = pickle.load(f)    
+    if df_pca_filename is None:
+        print("No PCA model (pkl file) passed for determining pca dimensionality reduction. Generating new PCA.")
+        pca = PCA(n_components=40)
+    else:
+        print("Attempting to use model in df_pca_filename = {}".format(df_pca_filename)) 
+        with open(df_pca_filename,"r") as f:
+            pca = pickle.load(f)    
         
     zscore_array = np.array(df[zscore_columns].apply(zscore))
-
     pca_df = pandas.DataFrame()
 
     for col in range(len(zscore_columns)):
         pca_df["%s zscore"%zscore_columns[col]] = zscore_array[:,col]
     
     pca_df["duration"] = [np.diff(seg)/fs for seg in df["segment start and stop"]]
-
-    
-    pca = PCA(n_components=40) #
-    pre_pca_array = df[pca_columns]
-    pca_array = pca.fit_transform(pre_pca_array) # PSD, freqVAR, and ampenv freatures.
-    
+    pca_array = pca.fit_transform(df[pca_columns]) # PSD, freqVAR, and ampenv freatures.  
 
     for col in range(pca_array.shape[1]):
-        pca_df["PCA %i"%col] = pca_array[:,col]
-        
-        # Then add in the categorical/descriptive data
+        pca_df["PCA %i"%col] = pca_array[:,col]        
+    # Then add in the categorical/descriptive data
     for col in df.columns[[-4]+[-2]+[-1]]:
         pca_df["%s"%col] = df[col]    
 
-    PCAd_array = pca.transform(df[pca_columns]) # PSD, freqVAR, and ampenv freatures.
-    zscore_array = np.array(df[zscore_columns].apply(zscore))
+    # PCAd_array = pca.transform(df[pca_columns]) # PSD, freqVAR, and ampenv freatures.
+    # zscore_array = np.array(df[zscore_columns].apply(zscore))
     
-    for col in range(PCAd_array.shape[1]):
-        pca_df["PCA %i"%col] = PCAd_array[:,col]
+    # for col in range(PCAd_array.shape[1]):
+    #     pca_df["PCA %i"%col] = PCAd_array[:,col]
 
     
     pca_df['vocal_category'] = df['vocal_category']
 
-    return pca_df
+    return pca_df, pca
 
 
 def test_random_forest(classifier_dataset = "", fs=25000, save_it = False, pca_model = ""):
@@ -406,24 +227,29 @@ def align_spectrograms(spectro_list, freq_bins = [], t_before = 30, t_after = 30
         shifted_spect[:, pre_pad:pre_pad + (end_time-start_time)] = spect[freq_bins[0]:freq_bins[1],start_time:end_time]
         shifted_spect_array.append(shifted_spect)
 
-    print('returning shifted spectogram array'    )
+    print('returning shifted spectogram array')
     return shifted_spect_array
 
-def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=7000, num_pcs_to_save=50, spect_pca_filename = "/auto/tdrive/billewood/intan data/LbY6074/spect_pca_combined.pkl", return_big_df=0, pca_model="", lowpass_thresh=4800, tutor_mic=0):
-    """
-
+def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=150, maxfreq=4800, return_big_df=True, spect_pca_filename = None, df_pca_filename=None, tutor_mic=0):
+    """                 
+        Given a long audio file and a set of periods of vocalizations.
         Returns a pandas database of sound properties useful for sorting and analyzing vocalizations.
         Most features come from the Theunissen lab Biosound object:
             sound.py, https://github.com/theunissenlab/soundsig.git)        
         Most features are self-evident, but:
-            -Spectrogram derived data is generally only calculated for frequency bins
-            between minfreq and maxfreq.
+            -Sound is lowpassed (maxfreq) and highpassed (minfreq) before any sound features are calculated.
+                Extraneous frequency bands are also discarded according to these variables in some spectral measures.
+            -psds and freqvars are cut to only include frequencies between minfreq and maxfreq.
             -freqvars is the variance of each frequency bin in the spectrogram.
             -The pandas df that is returned is pretty unwieldy but is in a good format 
             for PCA and t-sne analysis/visualization (amongst others)
-        Values with NaNs are replaced with column averages (without warnings, unfortunately).
+        About dimensionality reduction:
+        Spectrograms are PCAd to reduce dimensions with spect_pca_filename.
+        The PCAd spectrograms, along with the PSDs, freqvars, and amplitude envelope, are PCAd to reduce dimensions with pca_model.
+        This is what is returned in the PCA columns of df.
+        Values with NaNs are replaced with column averages (without warnings).
     """
-    signal = audio_streams[:,0]
+    signal = np.squeeze(np.asarray(audio_streams[:,tutor_mic])) # tutor mic not implemented yet, just grabbing a mic channel
     new_df_data = list() #will transform into a pandas dataframe eventually
     freqvars = []
     psds = []
@@ -431,7 +257,7 @@ def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=700
     spectro_list = list() # contains the spectrograms for plotting later
     
     # make a pandas DataFrame with biousound properties of all syllables/vocalizations
-    print("Calculating biosound qualities and populating a database, this may take a while.")
+    print("Calculating biosound properties and populating a database, this may take a while.")
     annotated_pts, pt_diffs, std_idx = separate_song_sources(audio_streams, points, fs, tutor_mic)
 
     for i, pt in enumerate(points):
@@ -442,10 +268,12 @@ def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=700
             print('..',i)
         else: sys.stdout.write('..'+str(i))
         l,h = pt
-        if i in annotated_pts['tutor']:
-            sound = lowpass_filter(signal[l:h,tutor_mic], fs, lowpass_thresh)
-            sound = highpass_filter(sound, fs, 300)
-        new_biosound, fpsd, psd, freqvar, f_freqvar, spectro, ampenv = getBioSoundProperties(sound)
+        
+        #if i in annotated_pts['tutor']: # 2/18 I don't understand why this line exists commenting it out- Bill
+        sound = lowpass_filter(signal[l:h].T, sample_rate=fs, cutoff_freq=maxfreq)
+        sound = highpass_filter(sound.T, fs, minfreq)
+        
+        new_biosound, fpsd, psd, freqvar, f_freqvar, spectro, ampenv = get_biosound_properties(sound, fs=fs)
         new_df_data.append(new_biosound)
         spectro_list.append(spectro)
         ampenvs.append(ampenv)
@@ -486,18 +314,28 @@ def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=700
         name = 'AMPENV t=%d' %i
         df[name] = ampenvs[:,i]
 
-    print("Calculating PCAs of aligned spectrograms and saving in dataframe.")
-    print("This involves projecting onto a precomputed PCA space contained at: {}.".format(spect_pca_filename))
-    with open(spect_pca_filename,"r") as f:
-        pca = pickle.load(f)
-    shifted_spectro_list = align_spectrograms(spectro_list, freq_bins = [10,90], t_before = 30, t_after = 30)    
+# TODO I have reservations about how these spectrograms are being manipulated. make t_before into seconds
+
+    shifted_spectro_list = align_spectrograms(spectro_list, freq_bins = [], t_before = 30, t_after = 30)    
 
     flat_spect_array = np.zeros([len(shifted_spectro_list), shifted_spectro_list[0].shape[0] * shifted_spectro_list[0].shape[1]])
     for i, spect in enumerate(shifted_spectro_list):
         flat_spect = np.ravel(spect)
         flat_spect_array[i,:] = flat_spect
 
-    pca_array = pca.transform(flat_spect_array) # PSD, freqVAR, and ampenv freatures.   
+    if spect_pca_filename is not None:
+        print("Calculating PCAs of aligned spectrograms and saving in dataframe.")
+        print("This involves projecting onto a precomputed PCA space contained at: {}.".format(spect_pca_filename))
+        with open(spect_pca_filename,"r") as f:
+            spect_pca = pickle.load(f)
+    else:
+        print("Calculating PCAs of aligned spectrograms and saving in dataframe.")
+        print("Creating a generic PCA space")
+        spect_pca = PCA(n_components=40)
+        spect_pca.fit(flat_spect_array)
+
+    pca_array = spect_pca.transform(flat_spect_array) # PSD, freqVAR, and ampenv freatures. 
+
     for i in range(pca_array.shape[1]):
         name = 'spectro pca #%d' %i
         df[name] = pca_array[:,i]
@@ -521,14 +359,76 @@ def populate_dataframe(audio_streams, points, fs=30000, minfreq=400, maxfreq=700
     if return_big_df:
         big_df = df
     else:
-        big_df = pandas.DataFrame()  
+        big_df = pandas.DataFrame()
         
-    pca_df = reduce_dimensions_pca(df, fs, pca_model)
+    pca_df, df_pca = reduce_dimensions_pca(df, fs, df_pca_filename) # pca_df is df after applying the pca, df_pca is the PCA that was applied.
     
-    return pca_df, spectro_list, big_df #spectrogram list, for plotting spectrograms
+    return pca_df, spectro_list, big_df, spect_pca, df_pca #spectrogram list, for plotting spectrograms
 
 
-def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.2, shortest_duration=0.6, verbose=False, amp_thresh=None, normalize_sound=False, normalize_thresh=0.006, lowpass = 2000, highpass = 5000):
+def test_find_vocal_periods(audio_stream_in, fs=30000, fuse_duration=0.01, shortest_duration=0.01, test_mode=True, amp_thresh=None, normalize_sound=False, normalize_thresh=None, lowpass = 2000, highpass = 5000, analog_signals = None):
+    """ 
+    This basically just implements a test mode for find_vocal_periods such that you can plot some thresholds that are being automatically generated. Generally just use find_vocal_periods
+    Bill 2/2018
+    
+        fuse_duration -         Gaps shorter than this will be fused into single syllables
+        shortest_duration -     Syllables shosrter than this will be ignored
+        test_mode -             Plots a bunch of things for helping determine ideal parameter values- in work
+        amp_thresh -            The amplitude threshold that you're going to be changing the most to get this all to work right
+        normalize_sound -       Divides the sound by the mean amplitude to normalize it, recommended to be True
+        normalize_thresh -      When normalize_sound=True all values below normalize_thresh first get set to 0- keeps the noise floor from being amplified.
+        lowpass_thresh and 
+        highpass_thresh -       It can be surprisingly useful to only search over a very limited bandwidth. Don't be afraid to try 6kHz to 9kHz or something
+        analog_signals -        Send a series of signals if you want your histograms to look any good
+    """
+    if test_mode:
+        # try lowpass filtering it to throw away "noise" in fast frequency correlations
+        if analog_signals:
+            
+            plt.figure()
+            plt.plot(amp_env[0])
+            plt.title("Raw Smoothed Amplitude Envelope- one of many")
+            plt.show()
+        else:
+            signal = np.copy(audio_stream_in)        
+            signal = highpass_filter(signal, fs, highpass)
+            signal = np.abs(lowpass_filter(signal, fs, lowpass))
+            amp_env = lowpass_filter(signal, fs, 100)
+            plt.figure()
+            plt.plot(amp_env)
+            plt.title("Raw Smoothed Amplitude Envelope")
+            plt.show()
+            
+            # normalize amplitude to near 1 in case this matters... make really low values just equal zero first to fix stretching        
+            low_vals = np.where(amp_env<normalize_thresh)
+            amp_env[low_vals] = 0
+            amp_env = (1/np.mean(amp_env)) * amp_env
+            plt.figure()
+            plt.plot(amp_env)
+            plt.title("normalized amplitude envelope")
+    
+            # for figuring out amp_thresh, or enter it in hardcoded on next cell
+            a = analogsignals[0]
+            plt.figure()
+            plt.hist([a for a in analogsignals[0] if a > 0], bins=100)
+            n, bins = np.histogram([a for a in analogsignals[0] if a > 0], bins=100)
+            amp_thresh = bins[np.argmax(n)+2] 
+            print("Amplitude threshold is: {}".format(amp_thresh))
+
+    syll_times, _ = find_vocal_periods(
+        audio_stream_in=audio_stream_in,
+        fs=fs,
+        fuse_duration=fuse_duration,
+        shortest_duration=shortest_duration,
+        amp_thresh=amp_thresh,
+        normalize_sound=normalize_sound,
+        normalize_thresh=normalize_thresh,
+        lowpass=lowpass,
+        highpass=highpass)
+
+    return syll_times, amp_thresh
+
+def find_vocal_periods(audio_stream_in, fs=30000, fuse_duration=0.2, shortest_duration=0.6, verbose=False, amp_thresh=None, normalize_sound=False, normalize_thresh=0.006, lowpass = 2000, highpass = 5000):
     """
     Given an audio stream, attempts to detect all segments of noise that might be bird calls of
     some sort.
@@ -551,27 +451,27 @@ def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.2, shortest_du
         Each tuple represents a (low_index:high_index) interval in the original array.
     """
     audio_stream = np.squeeze(audio_stream_in)
-
     # First we try to find the amplitude envelope. We only care about vocal sounds,
     # so we high-pass filter higher than normal.
     streams_filtered_env = np.zeros(np.shape(audio_stream))
     streams_filtered_env = highpass_filter(audio_stream, fs, highpass)
     streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env, fs, lowpass)) # Rectify and lowpass filter
-    streams_filtered_env = lowpass_filter(streams_filtered_env, fs, 100) # We essentially have an amplitude trace now
+    streams_filtered_env = lowpass_filter(streams_filtered_env, fs, 25) # We essentially have an amplitude trace now # was 100
     # normalize amplitude to near 1 in case this matters... make really low values just equal zero first to fix stretching
     if normalize_sound:
-        if normalize_thresh == 0:
+        if normalize_thresh is None: # autocalculate a threshold based on histogram, a little sketchy- should be checked if using this
             n, bins = np.histogram([a for a in streams_filtered_env if a > 0], bins=100)
             normalize_thresh = bins[np.argmax(n)+1]
-        #print("setting values below {} to 0.".format(normalize_thresh))
+        print("setting values below {} to 0.".format(normalize_thresh))
         low_vals = np.where(streams_filtered_env < normalize_thresh)
         streams_filtered_env[low_vals] = 0
         streams_filtered_env = (1.0/np.mean(streams_filtered_env)) * streams_filtered_env
 
     # Simply threshold against the mean of the signal. This works surprisingly well.
     # If you think about it, all of the noises that get made during a session drag
-    # the mean to be slightly above background noise.   
-    amp_thresh = np.mean(streams_filtered_env) if amp_thresh is None else amp_thresh
+    # the mean to be slightly above background noise. 
+    if amp_thresh is None:
+        amp_thresh = np.mean(streams_filtered_env) * 1.5
     # sound onsets: 1 is an onset, -1 is an offset
     vd_crosses = np.zeros(len(streams_filtered_env))
     for i in xrange(len(streams_filtered_env)):
@@ -632,12 +532,87 @@ def find_vocal_periods(audio_stream_in, fs=25000, fuse_duration=0.2, shortest_du
     sound_onset -= np.int(np.round(fuse_duration*fs))
     sound_offset += np.int(np.round(fuse_duration*fs))
 
+    if sound_onset[0] < 0:
+        sound_onset[0] = 0
+        if verbose:
+            print("First onset near beginning of file, rounding to account for fuse duration forced it to before file onset, "
+                + "first onset set to 0")
     vocal_periods = np.array(zip(sound_onset, sound_offset))
     lengths = np.apply_along_axis(lambda p: p[1] - p[0], 1, vocal_periods)
     vocal_periods = vocal_periods[lengths > shortest_duration * fs]
+    if verbose:
+        print("After fusing and cutting shortest, {} vocal periods remain".format(len(vocal_periods)))
+
     return vocal_periods, amp_thresh
     
+def find_syllables_old(audio_stream_in, amp_thresh = '', fs=25000, fuse_duration=0.1,  syll_dur = 20.0, sil_dur = 5.0, verbose=False):
+ 
+    """
+    This function is not yet very functional (Bill, 9/2017)- in fact as you can see it's "Old"
+    For segmenting into syllables. The basic idea is implementing multiple amplitude threshholds, each of which has it's own duration threshold...
+    I now think you could make the duration threshold dependent on the amplitude, such that the quieter it is, the shorter the gap needs to be to call it a new sylable.
+    This is really just here for posterity.
+    Bill 2/2018 
+    """
+    audio_stream = np.squeeze(audio_stream_in)
+    # First we try to find the amplitude envelope. We only care about vocal sounds,
+    # so we high-pass filter higher than normal.
+    streams_filtered_env = np.zeros(np.shape(audio_stream))
+    streams_filtered_env = highpass_filter(audio_stream, fs, 2000)
+    streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env, fs, 5000)) # Rectify and lowpass filter
+    env = lowpass_filter(streams_filtered_env, fs, 100)
 
+    if amp_thresh == '':
+        amp_thresh = np.mean(env)
+    # Now iterate through amplitude envelop and look for syllables. It would be more pythonic to do this in a 
+    # linear algebraish way, but I am going to just try to get it to work for now.
+    sound_on = 0 # keep count of how many points had sound
+    sil_on = 0 #  " " silence
+    hold = 0 # hold the value of sound_on in case of short silences
+    syllables = list()
+    for i in range(len(env)):
+        if i < syll_dur + sil_dur: # When we havn't had enough time to gather a syllable yet
+            if env[i] > amp_thresh:  
+                sound_on += 1
+                if sil_on < sil_dur: # if the silence was transient act like it didn't exist
+                    sound_on = sound_on + hold + sil_on # add the transient silence time to the syllable time
+                sil_on = 0
+                hold = 0
+            else:
+                sil_on += 1
+                if sound_on > 0: # previous point had sound
+                    hold = sound_on # prepare to look if the silence is brief
+                    sound_on = 0                
+        else: # the main loop
+            if env[i] > amp_thresh:  
+                sound_on += 1
+                if sil_on < sil_dur: # if the silence was transient act like it didn't exist
+                    sound_on = sound_on + hold + sil_on # add the transient silence time to the syllable time
+                sil_on = 0
+                hold = 0
+            else:
+                sil_on += 1
+                if sound_on > 0: # previous point had sound
+                    hold = sound_on # prepare to look if the silence is brief
+                    sound_on = 0                    
+                elif sil_on == sil_dur: # if it's been silent long enough to trigger a syllable end check if there was a syllable
+                    if hold > syll_dur: # Indicating there was a long enough period of sound to save as a syllable before
+                        syll_end = i - sil_dur
+                        syll_start = syll_end - hold
+                        syllables.append([syll_start,syll_end])
+                        
+    if verbose:
+        plt.figure()
+        plt.plot(env)
+        for i in range(len(syllables)):
+            plt.plot(syllables[i][0], min(env),'*', markersize= 12)
+            plt.plot(syllables[i][1], min(env),'x', markersize= 12)
+#            plt.plot(range(len(env)), np.ones(len(env)) * lower_thresh,'b')
+            plt.plot(range(len(env)), np.ones(len(env)) * amp_thresh,'r')
+            
+    # TODO turn syllables into seconds.
+            
+    return syllables
 
 def extract_birdsong_features(signal, points, fs=25000, minfreq=1000, maxfreq=8000,
                               pca_model=None):
