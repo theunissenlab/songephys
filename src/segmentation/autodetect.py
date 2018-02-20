@@ -334,7 +334,7 @@ def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=150, maxfreq=4
         spect_pca = PCA(n_components=40)
         spect_pca.fit(flat_spect_array)
 
-    pca_array = spect_pca.transform(flat_spect_array, pca) # PSD, freqVAR, and ampenv freatures. 
+    pca_array = spect_pca.transform(flat_spect_array) # PSD, freqVAR, and ampenv freatures. 
 
     for i in range(pca_array.shape[1]):
         name = 'spectro pca #%d' %i
@@ -456,7 +456,7 @@ def find_vocal_periods(audio_stream_in, fs=30000, fuse_duration=0.2, shortest_du
     streams_filtered_env = np.zeros(np.shape(audio_stream))
     streams_filtered_env = highpass_filter(audio_stream, fs, highpass)
     streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env, fs, lowpass)) # Rectify and lowpass filter
-    streams_filtered_env = lowpass_filter(streams_filtered_env, fs, 100) # We essentially have an amplitude trace now
+    streams_filtered_env = lowpass_filter(streams_filtered_env, fs, 25) # We essentially have an amplitude trace now # was 100
     # normalize amplitude to near 1 in case this matters... make really low values just equal zero first to fix stretching
     if normalize_sound:
         if normalize_thresh is None: # autocalculate a threshold based on histogram, a little sketchy- should be checked if using this
@@ -471,7 +471,7 @@ def find_vocal_periods(audio_stream_in, fs=30000, fuse_duration=0.2, shortest_du
     # If you think about it, all of the noises that get made during a session drag
     # the mean to be slightly above background noise. 
     if amp_thresh is None:
-        amp_thresh = np.mean(streams_filtered_env) 
+        amp_thresh = np.mean(streams_filtered_env) * 1.5
     # sound onsets: 1 is an onset, -1 is an offset
     vd_crosses = np.zeros(len(streams_filtered_env))
     for i in xrange(len(streams_filtered_env)):
