@@ -4,7 +4,7 @@ root="`dirname \"$root\"`"
 
 export PROJECT_ROOT="${root}"
 export PATH=$PROJECT_ROOT/bin:$PATH
-export PYTHONPATH=$PROJECT_ROOT/src:$PROJECT_ROOT/lib:$PROJECT_ROOT/pipeline
+export PYTHONPATH=$PROJECT_ROOT/src:$PROJECT_ROOT/lib:$PROJECT_ROOT/pipeline:$PROJECT_ROOT/load_intan_rhd_format
 export LUIGI_CONFIG_PATH=$PROJECT_ROOT/luigi.cfg
 
 if [ $# -eq 0 ]
