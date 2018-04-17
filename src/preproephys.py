@@ -25,7 +25,7 @@ import config
 
 
 # Function to divide segment signals into low pass and high pass signals.
-def high_low_filter(seg, debug = 0):
+def high_low_filter(seg, keep_lfp=False, keep_unfiltered=False, debug = 0):
     """ Replaces the signals that starts with Amplifier (the signal from the electrodes)
     with Low Pass and High Pass version of those signals.
     The low pass version is downsampled to get LFPs
@@ -40,7 +40,6 @@ def high_low_filter(seg, debug = 0):
     DELAYVAR = 4        # A delay of 4 sampls for removing within electrode array noise - this number was verified using the partial autocorrelation
     DELAYSOUND = 40     # A delay of 40 samples is used for the sound to electrode because these are not synched as well. This was obtained by cross-coherence analysis
     COHTHRES = 0.1      # The coherence threshold for sound filteringe
-    
        
     # First check is this has already been done.  If so do nothing.
     for sig in seg.analogsignals:
@@ -60,22 +59,22 @@ def high_low_filter(seg, debug = 0):
     siglist = seg.analogsignals[:]  # I make a copy becuase seg.analogsignals will change dynamically
     for sig in siglist:  
         if sig.name.startswith('Amplifier'):
-            
-            print('Processing', sig.name)
+            # print('Processing', sig.name)
             
             # Genererate low-pass and high-pass
             sr = sig.sampling_rate
             rawSignal = np.asarray(sig)
             
             # For the LFP low-pass filter and resample
-            lowSignal = []            
-            for channel in rawSignal.T:
-                lowchannel = lowpass_filter(channel, sr, CFL)
-                tr, lowchannel = resample_signal(lowchannel, sr, 2*CFL)
-                lowSignal.append(lowchannel)
-                
-            lowSignal = np.vstack(lowSignal).T
-            lowSR = (1.0/(tr[1]-tr[0]))   # Has the correct units.
+            if keep_lfp:
+                lowSignal = []
+                for channel in rawSignal.T:
+                    lowchannel = lowpass_filter(channel, sr, CFL)
+                    tr, lowchannel = resample_signal(lowchannel, sr, 2*CFL)
+                    lowSignal.append(lowchannel)
+
+                lowSignal = np.vstack(lowSignal).T
+                lowSR = (1.0/(tr[1]-tr[0]))   # Has the correct units.
             
             # For the high-pass signal filter and get clean version
             highSignal = np.vstack([highpass_filter(channel, sr, CFH) for channel in rawSignal.T]).T
@@ -171,26 +170,30 @@ def high_low_filter(seg, debug = 0):
                     rsh, = plt.plot(highSignal[:, ielec], 'k', label='Raw')
                     fsh, = plt.plot(highSignal_clean[:, ielec], 'r', label='Filtered')
                     plt.legend(handles=[rsh, fsh])
-                    
-                                             
+
+            # TODO (kevin): this block optional (we can leave out the non-clean signal to save space)
             # Make three new neo signals
-            lowSignalNeo = AnalogSignal(lowSignal,
-                               name=sig.name+'LFP',
-                               units=sig.units,
-                               t_start=sig.t_start,
-                               sampling_rate=lowSR,
-                               file_origin=sig.file_origin,
-                               copy=False)
-            lowSignalNeo.segment = seg
-            
-            highSignalNeo = AnalogSignal(highSignal,
-                               name=sig.name+'HP',
-                               units=sig.units,
-                               t_start=sig.t_start,
-                               sampling_rate=sr,
-                               file_origin=sig.file_origin,
-                               copy=False)
-            highSignalNeo.segment = seg
+            if keep_lfp:
+                lowSignalNeo = AnalogSignal(lowSignal,
+                                   name=sig.name+'LFP',
+                                   units=sig.units,
+                                   t_start=sig.t_start,
+                                   sampling_rate=lowSR,
+                                   file_origin=sig.file_origin,
+                                   copy=False)
+                lowSignalNeo.segment = seg
+                seg.analogsignals.append(lowSignalNeo)
+
+            if keep_unfiltered:
+                highSignalNeo = AnalogSignal(highSignal,
+                                   name=sig.name+'HP',
+                                   units=sig.units,
+                                   t_start=sig.t_start,
+                                   sampling_rate=sr,
+                                   file_origin=sig.file_origin,
+                                   copy=False)
+                highSignalNeo.segment = seg
+                seg.analogsignals.append(highSignalNeo)
             
             highCleanSignalNeo = AnalogSignal(highSignal_clean,
                                name=sig.name+'HPC',
@@ -200,18 +203,16 @@ def high_low_filter(seg, debug = 0):
                                file_origin=sig.file_origin,
                                copy=False)
             highCleanSignalNeo.segment = seg
-            
-            # Add signals to segment
-            seg.analogsignals.append(lowSignalNeo)
-            seg.analogsignals.append(highSignalNeo)
             seg.analogsignals.append(highCleanSignalNeo)
                     
             # Delete full sig from channel index and add new ones
             for ci in parentblk.channel_indexes:
                 if ci.name == 'Amplifier':
                     ci.analogsignals.remove(sig)
-                    ci.analogsignals.append(lowSignalNeo)
-                    ci.analogsignals.append(highSignalNeo)
+                    if keep_lfp:
+                        ci.analogsignals.append(lowSignalNeo)
+                    if keep_unfiltered:
+                        ci.analogsignals.append(highSignalNeo)
                     ci.analogsignals.append(highCleanSignalNeo)
                     ci.create_relationship(force=True)
                     
@@ -353,8 +354,8 @@ def extract_spikes(block):
                     noise_mask=noise_mask
             )
 
+            # print("Extracted {} spikes from {}".format(len(spike_indices), elec_id))
             spike_times = sig.times[spike_indices]
-            seg = sig.segment
 
             new_spiketrain = SpikeTrain(
                     spike_times, 
