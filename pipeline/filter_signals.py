@@ -1,4 +1,10 @@
-import cPickle as pickle
+from __future__ import print_function
+
+try:
+    import cPickle as pickle
+except ImportError:
+    import pickle
+
 import os
 import time
 
@@ -6,7 +12,7 @@ import luigi
 
 from detect_sound_segments import DetectSoundSegments
 # from preproephys import high_low_filter
-from filtering.filters import filter_segment
+from filtering.filters import filter_segment, detect_noisy_epochs, convert_to_epoch_obj
 
 from utils import session_basename
 

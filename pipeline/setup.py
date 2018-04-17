@@ -1,6 +1,9 @@
 from __future__ import print_function
 
-import cPickle as pickle
+try:
+    import cPickle as pickle
+except ImportError:
+    import pickle
 import os
 
 import glob
@@ -9,8 +12,7 @@ import pandas as pd
 
 import config
 from gdrive_access import download
-from segmentation.audio_segment import combine_stim_csvs
-from segmentation.audio_segment import load_stimulus_database, save_stimulus_database
+from stimuli import convert_pyoperant_csvs
 
 
 class DownloadSession(luigi.Task):
@@ -68,31 +70,27 @@ class CombineTrialMetadata(luigi.Task):
         if not os.path.exists(segmentation_dir):
             os.makedirs(segmentation_dir)
 
-        combined_db = "playbacks_db"
-        combined_csv = "playbacks.csv"
+        combined_db = "playbacks.pkl"
 
-        return [
-            luigi.LocalTarget(os.path.join(segmentation_dir, combined_db)),
-            luigi.LocalTarget(os.path.join(segmentation_dir, combined_csv))
-        ]
-
+        return luigi.LocalTarget(os.path.join(segmentation_dir, combined_db))
 
     def run(self):
         input_directory = os.path.join(self.session_dir, "raw")
         stimuli_directory = os.path.join(self.session_dir, "stimuli")
 
         csv_files = glob.glob(os.path.join(input_directory, "*.csv"))
+
         if not len(csv_files):
-            # TODO: im just creating empty files here if nothing
-            pd.DataFrame([]).to_csv(self.output()[1].path)
-            with open(self.output()[0].path, "a"):
-                pass
+            # If there's no csv with stimulus data, create a dummy
+            pd.DataFrame([]).to_csv(self.output().path)
             return
 
-        # Identify the stimulus directory (e.g. TutFamBos) associated
-        # with each pyoperant csv
+        # Identify and locate the stimulus directory (e.g. TutFamBos)
+        # associated with each pyoperant csv
         stim_dirs = []
-        possible_stim_dirs = [os.path.basename(f) for f in glob.glob(os.path.join(stimuli_directory, "*"))]
+        possible_stim_dirs = [
+            os.path.basename(f)
+            for f in glob.glob(os.path.join(stimuli_directory, "*"))]
 
         for csv_file in csv_files:
             print("Looking for stim dir for {}".format(csv_file))
@@ -106,15 +104,11 @@ class CombineTrialMetadata(luigi.Task):
                     break
 
             if stim_dir_used is None:
-                raise Exception("Couldn't find the stim dir for {}".format(csv_file))
+                raise Exception(
+                    "Couldn't find the stim dir for {}".format(csv_file))
 
             stim_dirs.append(stim_dir_used)
 
-        # Save the combined csv and also the database
-        new_csv = combine_stim_csvs(csv_files, stim_dirs)
-        new_csv.to_csv(self.output()[1].path)
-
-        print("Saving stim database {}".format(self.output()[0].path))
-        save_stimulus_database(
-                self.output()[1].path,
-                self.output()[0].path)
+        # Combine the data from the csvs into a single pickled dataframe
+        print("Saving stim database {}".format(self.output().path))
+        convert_pyoperant_csvs(csv_files, stim_dirs, self.output().path)

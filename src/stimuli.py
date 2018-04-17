@@ -5,6 +5,7 @@ import os
 
 import numpy as np
 import pandas as pd
+import scipy.io.wavfile
 
 
 def _parse_julie_filename_metadata(fname):
@@ -28,6 +29,11 @@ def _parse_julie_filename_metadata(fname):
     return metadata
 
 
+def _get_duration(wav_file):
+    rate, data = scipy.io.wavfile.read(wav_file)
+    return data.shape[0] / np.float(rate)
+
+
 def _transform_pyoperant_csv(df, stim_loc):
     """Transform dataframe into correct datatypes and derive columns
 
@@ -38,6 +44,7 @@ def _transform_pyoperant_csv(df, stim_loc):
     df (pd.DataFrame)
     stim_loc (str): path to stimulus directory
     """
+    df = df.rename(columns={"index": "trial"})
     df["time"] = df["time"].apply(
         lambda t: datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S.%f")
     )
@@ -47,12 +54,13 @@ def _transform_pyoperant_csv(df, stim_loc):
     df["stimulus_name"] = df["stimulus_name"].apply(
         lambda path: os.path.join(stim_loc, os.path.basename(path))
     )
+    # Fill in duration column for dataframe by reading wav files
+    df["duration"] = df["stimulus_name"].apply(_get_duration)
 
     metadata = df["stimulus_name"].apply(_parse_julie_filename_metadata)
     metadata = pd.DataFrame.from_records(metadata)
 
-    # NEED DURATION INFO HERE
-    return df[["stimulus_name", "index", "time"]].join(metadata)
+    return df[["duration", "stimulus_name", "trial", "time"]].join(metadata)
 
 
 def read_pyoperant_csv(path, stim_loc):
@@ -86,7 +94,7 @@ def convert_pyoperant_csvs(pyoperant_csvs, stim_dirs, dest_path):
     new_df = new_df.sort_values("time")
     new_df.index = np.arange(len(new_df))
     # TODO (kevin): explain what this column is used for
-    new_df["index"] = new_df.index + 1
+    new_df["trial"] = new_df.index + 1
 
     save_pyoperant_db(new_df, dest_path)
 

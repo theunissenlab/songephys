@@ -1,6 +1,9 @@
 from __future__ import print_function
 
-import cPickle as pickle
+try:
+    import cPickle as pickle
+except ImportError:
+    import pickle
 from soundsig.signal import lowpass_filter, highpass_filter
 import matplotlib.mlab as mlab
 import matplotlib.pyplot as plt
@@ -474,7 +477,7 @@ def find_vocal_periods(audio_stream_in, fs=30000, fuse_duration=0.2, shortest_du
         amp_thresh = np.mean(streams_filtered_env) * 1.5
     # sound onsets: 1 is an onset, -1 is an offset
     vd_crosses = np.zeros(len(streams_filtered_env))
-    for i in xrange(len(streams_filtered_env)):
+    for i in range(len(streams_filtered_env)):
         if streams_filtered_env[i] > amp_thresh:
             vd_crosses[i] = 1
 
@@ -509,7 +512,7 @@ def find_vocal_periods(audio_stream_in, fs=30000, fuse_duration=0.2, shortest_du
         last_onset = onsets[1]
         last_offset = offsets[0]
         assert last_offset < last_onset
-        for i in xrange(last_onset, len(sound_onsets)):
+        for i in range(last_onset, len(sound_onsets)):
             if sound_onsets[i] == 1:
                 last_onset = i
             elif sound_onsets[i] == -1:
@@ -534,10 +537,11 @@ def find_vocal_periods(audio_stream_in, fs=30000, fuse_duration=0.2, shortest_du
 
     if sound_onset[0] < 0:
         sound_onset[0] = 0
+        # kevin: might be weird
         if verbose:
             print("First onset near beginning of file, rounding to account for fuse duration forced it to before file onset, "
                 + "first onset set to 0")
-    vocal_periods = np.array(zip(sound_onset, sound_offset))
+    vocal_periods = np.array(list(zip(sound_onset, sound_offset)))
     lengths = np.apply_along_axis(lambda p: p[1] - p[0], 1, vocal_periods)
     vocal_periods = vocal_periods[lengths > shortest_duration * fs]
     if verbose:
