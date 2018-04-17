@@ -71,8 +71,6 @@ class DetectSoundSegments(luigi.Task):
         print("{} between {} and {}".format(len(live_dicts), config.MIN_SEGMENT_LENGTH, config.MAX_SEGMENT_LENGTH))
         del sound_arr
 
-        playbacks_db = pd.read_pickle(self.input()[1].path)
-
         # FIXME: not sure if this will alwyas work
         """
         if "time" in playbacks_csv:
@@ -80,7 +78,9 @@ class DetectSoundSegments(luigi.Task):
                     lambda time_str: datetime.datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S.%f"))
         """
 
-        if len(playbacks_db) == 0:
+        try:
+            playbacks_db = pd.read_pickle(self.input()[1].path)
+        except:
             print("No pyoperant file found (no playbacks)")
             playback_dicts = []
             segment_dicts = live_dicts

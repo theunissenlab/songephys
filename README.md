@@ -27,6 +27,8 @@ The three options to install these are (all need to be tested)
 
 3. Install the repository directory directly `pip install -e <directory>`
 
+4. Install libgpuarray (for Theano) by cd to libgpuarray and doing `python setup.py build` and `python setup.py install`
+
 
 ## Gdrive access
 
