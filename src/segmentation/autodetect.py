@@ -431,6 +431,15 @@ def test_find_vocal_periods(audio_stream_in, fs=30000, fuse_duration=0.01, short
 
     return syll_times, amp_thresh
 
+def find_cage_noise(sound_onsets, audio_stream, fs=30000):
+    """
+    Goes through the putative vocalizations and looks for things that match cage noise, and returns an index of them.
+    """ 
+
+    for onset in sound_onsets:
+        sound = audio_stream[onset:onset+(.2*fs)] 
+
+
 def find_vocal_periods(audio_stream_in, fs=30000, fuse_duration=0.2, shortest_duration=0.6, verbose=False, amp_thresh=None, normalize_sound=False, normalize_thresh=0.006, lowpass = 2000, highpass = 5000):
     """
     Given an audio stream, attempts to detect all segments of noise that might be bird calls of
@@ -459,7 +468,7 @@ def find_vocal_periods(audio_stream_in, fs=30000, fuse_duration=0.2, shortest_du
     streams_filtered_env = np.zeros(np.shape(audio_stream))
     streams_filtered_env = highpass_filter(audio_stream, fs, highpass)
     streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env, fs, lowpass)) # Rectify and lowpass filter
-    streams_filtered_env = lowpass_filter(streams_filtered_env, fs, 25) # We essentially have an amplitude trace now # was 100
+    streams_filtered_env = lowpass_filter(streams_filtered_env, fs, 100) # We essentially have an amplitude trace now # was 100
     # normalize amplitude to near 1 in case this matters... make really low values just equal zero first to fix stretching
     if normalize_sound:
         if normalize_thresh is None: # autocalculate a threshold based on histogram, a little sketchy- should be checked if using this
@@ -474,16 +483,22 @@ def find_vocal_periods(audio_stream_in, fs=30000, fuse_duration=0.2, shortest_du
     # If you think about it, all of the noises that get made during a session drag
     # the mean to be slightly above background noise. 
     if amp_thresh is None:
-        amp_thresh = np.mean(streams_filtered_env) * 1.5
+        amp_thresh = np.mean(streams_filtered_env) * 1
     # sound onsets: 1 is an onset, -1 is an offset
     vd_crosses = np.zeros(len(streams_filtered_env))
     for i in range(len(streams_filtered_env)):
         if streams_filtered_env[i] > amp_thresh:
             vd_crosses[i] = 1
-
     sound_onsets = vd_crosses[1:len(vd_crosses)] - vd_crosses[0:len(vd_crosses)-1]
     # Aligns crosses to proper index:
     sound_onsets = np.concatenate([np.array([0]), sound_onsets])
+
+    #Check to see which onsets are actually cage hops and delete these. If the hop is continuous with the first 
+    #syllable it's possible the syllable will be deleted
+    # # TODO IN PROGRESS
+    # cage_noise = find_cage_noise(sound_onsets, audio_stream, fs) 
+    # sound_onsets = [onset for i, onset in enumerate(sound_onsets) if i not in cage_noise]
+    # sound_offsets = [offset for i, offset in enumerate(sound_offsets) if i not in cage_noise] 
 
     # this just checks that the first sound onset wasn't obscured by the beginning of the file
     for i in range(len(sound_onsets)):
