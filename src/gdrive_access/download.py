@@ -4,7 +4,7 @@ import time
 
 from pydrive.drive import GoogleDrive
 
-from auth import get_auth
+from .auth import get_auth
 
 import config
 

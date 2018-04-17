@@ -1,4 +1,8 @@
-import cPickle as pickle
+try:
+    import cPickle as pickle
+except ImportError:
+    import pickle
+
 import numpy as np
 import os
 import time
@@ -50,4 +54,4 @@ class Resegment(luigi.Task):
         new_block = segment(block, segment_dicts)
 
         with open(self.output().path, "wb") as output_file:
-            pickle.dump(new_block, output_file)
+            pickle.dump(new_block, output_file, protocol=4)

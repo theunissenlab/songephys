@@ -166,24 +166,24 @@ class IsoSplit(object):
     def fit_isotonic_up_down(self, x, weights):
         """Best unimodal fit by optimally fitting an increasing and decreasing function
         """
-	N = len(weights)
-
-	x_rev = x[::-1]
-	weights_rev = weights[::-1]
-	
-	fitted, mse = self.fit_isotonic(x, weights)
-	fitted_rev, mse_rev = self.fit_isotonic(x_rev, weights_rev)
-	
-	mse += mse_rev[::-1]
-	best_ind = np.argmin(mse)
-	best_val = mse[best_ind]
-	fitted, mse = self.fit_isotonic(x, weights, N=best_ind + 1)
-	fitted_rev, mse_rev = self.fit_isotonic(x_rev, weights_rev, N=N-best_ind)
-	return np.concatenate([fitted, fitted_rev[-2::-1]])
+        N = len(weights)
+        
+        x_rev = x[::-1]
+        weights_rev = weights[::-1]
+        
+        fitted, mse = self.fit_isotonic(x, weights)
+        fitted_rev, mse_rev = self.fit_isotonic(x_rev, weights_rev)
+        
+        mse += mse_rev[::-1]
+        best_ind = np.argmin(mse)
+        best_val = mse[best_ind]
+        fitted, mse = self.fit_isotonic(x, weights, N=best_ind + 1)
+        fitted_rev, mse_rev = self.fit_isotonic(x_rev, weights_rev, N=N-best_ind)
+        return np.concatenate([fitted, fitted_rev[-2::-1]])
 
     def fit_isotonic_down_up(self, x, weights):
-	x_neg = -x
-	return -self.fit_isotonic_up_down(x_neg, weights)
+        x_neg = -x
+        return -self.fit_isotonic_up_down(x_neg, weights)
 
 
 def compute_means(data, labels):
@@ -218,10 +218,10 @@ class Tracker(object):
             return pairs
         
     def touch(self, label):
-        self.checked = filter(lambda x: label not in x, self.checked)
+        self.checked = list(filter(lambda x: label not in x, self.checked))
         
     def remove(self, label):
-        self.unique_labels = filter(lambda x: x != label, self.unique_labels)
+        self.unique_labels = list(filter(lambda x: x != label, self.unique_labels))
     
     def check(self, pair):
         # free up this to be checked again

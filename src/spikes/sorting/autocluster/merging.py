@@ -29,7 +29,7 @@ reassign_fns = {
 
 cluster_fns = {
     "gmm": lambda data, n: GaussianMixture(n_components=n).fit(data).predict(data),
-    "kmeans": lambda data, n: KMeans(n_clusters=n, n_jobs=2).fit_predict(data)
+    "kmeans": lambda data, n: KMeans(n_clusters=n).fit_predict(data)
 }
 
 

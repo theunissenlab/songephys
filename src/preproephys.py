@@ -421,3 +421,4 @@ def unit_report(block):
                 # modelAR_results = modelAR.iterative_fit(10)
                 # Ypred = modelAR.predict(modelAR_results.param, X)
                 # Yres = Y-Ypred
+

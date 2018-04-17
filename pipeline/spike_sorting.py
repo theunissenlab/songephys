@@ -1,4 +1,9 @@
-import cPickle as pickle
+from __future__ import print_function
+
+try:
+    import cPickle as pickle
+except ImportError:
+    import pickle
 import os
 
 import numpy as np
@@ -51,7 +56,7 @@ class ExtractSpikes(luigi.Task):
         extract_spikes(block)
 
         with open(self.output().path, "wb") as output_file:
-            pickle.dump(block, output_file)
+            pickle.dump(block, output_file, protocol=4)
 
 
 class CollectWaveforms(luigi.Task):
@@ -77,16 +82,18 @@ class CollectWaveforms(luigi.Task):
 
         for i, output in enumerate(self.output()):
             # a hack to get the electrode with index i
-            unit = (
+            unit = next(
                 channel_index.units[0]
                 for channel_index in block.channel_indexes
                 if channel_index.name == "Amp Elec {}".format(i)
-            ).next()
+            )
+            print(len(unit.spiketrains))
 
             waveforms, times = collect_waveforms(
                     unit.spiketrains,
                     force_single_peak=False
             )
+            print(waveforms.shape)
             waveforms = waveforms[:, config.WF_SLICE]
 
             # remove extremely large peaks
@@ -143,9 +150,9 @@ class ClusterOverTime(luigi.Task):
             if not os.path.exists(os.path.dirname(output_file.path)):
                 os.makedirs(os.path.dirname(output_file.path))
             data = np.load(input_file.path)[()]
-            print "sorting {}".format(input_file.path)
+            print("sorting {}".format(input_file.path))
 
-            time_ranges, data_blocks = time_slices(data)
+            time_ranges, data_blocks = time_slices(data, step_size=1800)
 
             # Run sorting a few times on each time range
             labels_blocks = []
@@ -186,7 +193,7 @@ class ClusterOverTime(luigi.Task):
                     metric_blocks.append({})
                     continue
                 
-                if elec_id in [6, 13]:
+                if elec_id in []:
                     isolation_metric = isolation(data_block["waveforms"], labels, k=6)
                 else:
                     isolation_metric = {}
@@ -235,7 +242,7 @@ class GenerateClusterLinkingFigures(luigi.Task):
             if not os.path.exists(output_dir):
                 os.makedirs(output_dir)
 
-            print "Generating figures from {} to {}".format(input_file.path, output_dir)
+            print("Generating figures from {} to {}".format(input_file.path, output_dir))
             data = np.load(input_file.path)[()]
 
             link_dirname = "images"  # this is for the 
@@ -323,11 +330,11 @@ class WriteSemiAutoSorted(luigi.Task):
             new_spike_times.append([])
             new_waveforms.append([])
 
-            unit = (
+            unit = next(
                 channel_index.units[0]
                 for channel_index in block.channel_indexes
                 if channel_index.name == "Amp Elec {}".format(elec_id)
-            ).next()
+            )
 
             # need to iterate over spiketrains (i.e. segments) and identify the sorted 
             # units on each one
@@ -347,10 +354,10 @@ class WriteSemiAutoSorted(luigi.Task):
                 new_waveforms[elec_id].append(np.array(new_wfs))
 
         for elec_id, spike_times in enumerate(new_spike_times):
-            new_spike_times[elec_id] = zip(*spike_times)
+            new_spike_times[elec_id] = list(zip(*spike_times))
 
         for elec_id, waveforms in enumerate(new_waveforms):
-            new_waveforms[elec_id] = zip(*waveforms)
+            new_waveforms[elec_id] = list(zip(*waveforms))
     
         for elec_id in range(16):
             print("shapes")
@@ -481,11 +488,11 @@ class WriteAutoSorted(luigi.Task):
             new_spike_times.append([])
             new_waveforms.append([])
 
-            unit = (
+            unit = next(
                 channel_index.units[0]
                 for channel_index in block.channel_indexes
                 if channel_index.name == "Amp Elec {}".format(elec_id)
-            ).next()
+            )
 
             wf_data = np.load(wf_data.path)[()]
             waveforms = wf_data["waveforms"]
@@ -538,16 +545,16 @@ class WriteSorted(luigi.Task):
 
         results = []
         for elec_id in range(16):
-            unit = (
+            unit = next(
                 channel_index.units[0]
                 for channel_index in block.channel_indexes
                 if channel_index.name == "Amp Elec {}".format(elec_id)
-            ).next()
+            )
         
             data = np.load(self.input()[elec_id + 1].path)[()]
             new_times, new_wfs = sort_spikes_on_unit(unit, -50, data["model"], data["units"])
             results.append((new_times, new_wfs))
-        results = zip(*results)
+        results = list(zip(*results))
 
         new_block = write_neo(block, *results)
         new_block.create_relationship(force=True, append=True, recursive=True)

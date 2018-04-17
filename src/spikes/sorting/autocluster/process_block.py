@@ -17,6 +17,7 @@ Key functions:
 Would be nice:
 1. Loading the spike waveform data from multiple sessions at once and combining
 """
+from __future__ import print_function
 
 import time
 
@@ -28,7 +29,6 @@ import scipy.stats
 import numpy as np
 from scipy.stats import norm
 
-import pywt
 from spikes.sorting.autocluster import sort
 from sklearn.decomposition import PCA
 from sklearn.lda import LDA
@@ -53,7 +53,7 @@ def time_slices(data, step_size=600):
     times = data["times"]
 
     t_starts = np.arange(0, int(np.ceil(times[-1] / step_size) * step_size), step_size / 2)
-    time_ranges = zip(t_starts, t_starts + step_size)
+    time_ranges = list(zip(t_starts, t_starts + step_size))
 
     result = [
         {
@@ -146,7 +146,6 @@ def relabel_across_time(time_ranges, data_blocks, label_blocks, threshold=0.8):
     relabeled_labels.append(label_blocks[0])
 
     for i in range(len(time_ranges) - 1):
-        print "used_bales", used_labels
         t_start_1, t_stop_1 = time_ranges[i]
         t_start_2, t_stop_2 = time_ranges[i + 1]
 
@@ -170,7 +169,7 @@ def relabel_across_time(time_ranges, data_blocks, label_blocks, threshold=0.8):
         for j, new_label in enumerate(new_label_set):
             match_rating = np.mean(label_was_equal[new_proposed_labels == new_label])
 
-            print new_label, old_label_set[j], match_rating
+            print(new_label, old_label_set[j], match_rating)
 
             if match_rating < threshold and used_labels:
                 new_label_set[j] = max(used_labels) + 1
@@ -179,9 +178,9 @@ def relabel_across_time(time_ranges, data_blocks, label_blocks, threshold=0.8):
         relabeled2 = np.copy(labels2)
 
         for old, new in zip(old_label_set, new_label_set):
-            print "labeling {} as {}".format(old, new)
+            print("labeling {} as {}".format(old, new))
             relabeled2[labels2 == old] = new
-        print relabeled2
+        print(relabeled2)
 
         relabeled_labels.append(relabeled2)
 
@@ -192,9 +191,9 @@ def gen_figures(time_range, data, labels, metrics):
     """generate figures for a single time block
     """
     figures = []
-    print len(np.unique(labels))
+    print(len(np.unique(labels)))
 
-    print data["waveforms"].shape
+    print(data["waveforms"].shape)
 
     if len(np.unique(labels)) > 2:
         pca = LDA(n_components=2).fit_transform(data["waveforms"], labels)

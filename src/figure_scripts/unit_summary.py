@@ -19,7 +19,7 @@ def get_square_dims(n):
         return int(root), int(root)
     else:
         a = int(np.ceil(root))
-        b = (n + a) / a
+        b = (n + a) // a
         return a, b
 
 
@@ -40,6 +40,7 @@ def plot_waveforms(waveforms, ax=None):
         ax = plt.gca()
     xmin = 0
     xmax = config.WF_SIZE / config.ELEC_SAMPLE_RATE * 1000
+
     ax.plot(np.linspace(0, xmax, config.WF_SIZE), waveforms.T, alpha=0.1, color="Gray")
     ax.plot(np.linspace(0, xmax, config.WF_SIZE), np.mean(waveforms, axis=0), color="Blue")
     ax.set_xlim(xmin, xmax)
@@ -55,9 +56,10 @@ def plot_all_waveforms(multiseg):
     fig, axes = plt.subplots(nrows=w, ncols=h, figsize=(4 * w, 3 * h))
 
     for unit_idx, wfs in enumerate(multiseg.waveforms()):
-        ax = axes.reshape(-1)[unit_idx]
-        plot_waveforms(wfs, ax=ax)
-        ax.set_title(unit_idx)
+        if len(wfs):
+            ax = axes.reshape(-1)[unit_idx]
+            plot_waveforms(wfs, ax=ax)
+            ax.set_title(unit_idx)
 
     for ax in axes.reshape(-1)[len(multiseg.units):]:
         clear_spines(ax)

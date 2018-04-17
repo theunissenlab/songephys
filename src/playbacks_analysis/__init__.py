@@ -15,9 +15,9 @@ class PlaybacksManager(object):
     """
 
     def __init__(self, segments):
-        self.segments = filter(
+        self.segments = list(filter(
                 lambda seg: seg.annotations["sound_type"] == "playback",
-                segments)
+                segments))
 
         # MultiSegment with all segments
         self.full_multiseg = MultiSegment(self.segments)

@@ -167,24 +167,24 @@ class IsoSplit(object):
     def fit_isotonic_up_down(self, x, weights):
         """Best unimodal fit by optimally fitting an increasing and decreasing function
         """
-	N = len(weights)
+        N = len(weights)
 
-	x_rev = x[::-1]
-	weights_rev = weights[::-1]
-	
-	fitted, mse = self.fit_isotonic(x, weights)
-	fitted_rev, mse_rev = self.fit_isotonic(x_rev, weights_rev)
-	
-	mse += mse_rev[::-1]
-	best_ind = np.argmin(mse)
-	best_val = mse[best_ind]
-	fitted, mse = self.fit_isotonic(x, weights, N=best_ind + 1)
-	fitted_rev, mse_rev = self.fit_isotonic(x_rev, weights_rev, N=N-best_ind)
-	return np.concatenate([fitted, fitted_rev[-2::-1]])
+        x_rev = x[::-1]
+        weights_rev = weights[::-1]
+        
+        fitted, mse = self.fit_isotonic(x, weights)
+        fitted_rev, mse_rev = self.fit_isotonic(x_rev, weights_rev)
+        
+        mse += mse_rev[::-1]
+        best_ind = np.argmin(mse)
+        best_val = mse[best_ind]
+        fitted, mse = self.fit_isotonic(x, weights, N=best_ind + 1)
+        fitted_rev, mse_rev = self.fit_isotonic(x_rev, weights_rev, N=N-best_ind)
+        return np.concatenate([fitted, fitted_rev[-2::-1]])
 
     def fit_isotonic_down_up(self, x, weights):
-	x_neg = -x
-	return -self.fit_isotonic_up_down(x_neg, weights)
+        x_neg = -x
+        return -self.fit_isotonic_up_down(x_neg, weights)
 
 
 def merge(labels, label1, label2):
@@ -256,8 +256,8 @@ def isosplit_cluster(X, k_initial=20, threshold=1.0):
     iso = IsoSplit()
 
     while tracker.pairs():
-	means = compute_means(X, labels)
-	i, j = tuple(tracker.pairs(sorter=means)[0])
+        means = compute_means(X, labels)
+        i, j = tuple(tracker.pairs(sorter=means)[0])
 
         proj = Projector(
                 np.mean(X[labels == i], axis=0),
@@ -269,16 +269,16 @@ def isosplit_cluster(X, k_initial=20, threshold=1.0):
             proj.project(X[labels == j])
         ])
 
-	k, cutpoint, a, b = iso.isocut(x)
-
-	if k < threshold:
-	    labels = merge(labels, i, j)
-	    tracker.touch(i)
-	    tracker.remove(j)
-	    tracker.check([i, j])
-	else:
-            # reassign based on best cut
-            # FIXME. need to fix the best cut location
-	    tracker.check([i, j])
+    k, cutpoint, a, b = iso.isocut(x)
+    
+    if k < threshold:
+        labels = merge(labels, i, j)
+        tracker.touch(i)
+        tracker.remove(j)
+        tracker.check([i, j])
+    else:
+              # reassign based on best cut
+              # FIXME. need to fix the best cut location
+        tracker.check([i, j])
 
     return labels

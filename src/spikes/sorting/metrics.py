@@ -78,17 +78,8 @@ def isolation(waveforms, labels, k=10):
 
     mins = np.min(overlaps, axis=0)
 
-    print overlaps
-
     result = {}
     for i, label in enumerate(unique_labels):
         result[label] = mins[i]
 
     return result
-
-
-
-
-
-
-

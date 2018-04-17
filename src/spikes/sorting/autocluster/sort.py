@@ -8,8 +8,8 @@ Autoclustering functions
 """
 import numpy as np
 
-from merging import cluster_fns, merge, reassign_fns, Projector
-from isosplit import IsoSplit, Merger, Tracker, compute_means
+from .merging import cluster_fns, merge, reassign_fns, Projector
+from .isosplit import IsoSplit, Merger, Tracker, compute_means
 
 
 # TODO: let you use tsne as features?
@@ -65,12 +65,14 @@ def sort_debugger(
     keep = np.ones_like(clusters)
     for clust, count in zip(*np.unique(clusters, return_counts=True)):
         if count < 10:
-	    keep[clusters == clust] = 0
+            keep[clusters == clust] = 0
     keep = keep.astype(bool)
 
     # waveforms = waveforms[keep]
     data = data[keep]
     clusters = clusters[keep]
+
+    print("Clustering this much data:", data.shape)
 
     tracker = Tracker(np.unique(clusters))
     iso = IsoSplit(scale=4.0)
