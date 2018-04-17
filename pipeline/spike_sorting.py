@@ -163,28 +163,31 @@ class ClusterOverTime(luigi.Task):
                         cluster_results.append([])
                         continue
                     labels, data = sort.sort(data_block["waveforms"][:, 10:32],
-                            initial_cluster_type="kmeans",
-                            initial_cluster_count=30,
+                            initial_cluster_type="gmm",
+                            initial_cluster_count=15,
                             ordered=False,
                             merge_mode="linear",
                             reassign_mode="kmeans",
-                            merge_initial_threshold=0.8,
+                            merge_initial_threshold=0.7,
                             merge_final_threshold=0.2,
-                            max_peak_size=300,
+                            max_peak_size=400,
                             min_peak_size=30,
                             peak_idx=10,
-                            reassign_dims=1)
+                            reassign_dims=4)
                     cluster_results.append(labels)
                 labels_blocks.append(cluster_results)
-                print "Just sorted one block"
+                print("Just sorted one block")
 
             # Compute the mode of each block and try to find consistent labeling across time
             best_labels = []
+
             for labels_block in labels_blocks:
                 best_labels.append(scipy.stats.mode(process_votes(labels_block)).mode.flatten())
+            print("Relabeling now")
             best_labels = relabel_across_time(time_ranges, data_blocks, best_labels, threshold=0.6)
 
             metric_blocks = []
+            print("Computing metrics")
             for _, data_block, labels, labels_block in zip(
                     time_ranges, data_blocks, best_labels, labels_blocks):
                 metric = {}
@@ -208,6 +211,7 @@ class ClusterOverTime(luigi.Task):
                     }
 
                 metric_blocks.append(metric)
+            print("Finished computing metrix")
 
             result = {
                 "time_ranges": time_ranges,

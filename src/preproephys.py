@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 # Theunissen Lab dependencies.
 from neo.core import AnalogSignal, SpikeTrain, Unit, ChannelIndex
 from soundsig.signal import lowpass_filter, highpass_filter, resample_signal, linear_filter1D
+from filtering.filters import get_mask
 
 import config
 
@@ -255,23 +256,34 @@ def fix_chIndex(block):
     block.create_relationship(force=True, append = False, recursive=False)  # Just do one level so that signals are not linked to channels.
     
 
-def extract_spikes_from_signal(signal, threshold_std=4, limit_std=None, spike_width=20):
+def extract_spikes_from_signal(signal,
+        threshold_std=4,
+        limit_std=None,
+        spike_width=20,
+        min_spacing=1,
+        noise_mask=None
+        ):
     """Extract negative-going spikes from signal
    
     Exclude any spikes with peaks greater than limit_std as noise
+
+    Exclude spikes that are too close to each other or are in a period with too much noise
     """
-    threshold = - threshold_std * np.std(signal)
+    noise_mask = noise_mask if noise_mask is not None else np.zeros(len(signal)).astype(np.bool)
+
+    std = np.std(signal[np.invert(noise_mask)])
+    threshold = - threshold_std * std
 
     spike_indices = []
     spike_waveforms = []
-    mask = np.where(signal < threshold)[0]
-    edges = np.where(np.diff(mask) > 1)[0]
+    mask = np.where((signal < threshold) & np.invert(noise_mask))[0]
+    edges = np.where(np.diff(mask) > min_spacing)[0]
 
     start_ind = 0
     for end_ind in edges:
         spike_ind = np.argmin(signal[mask[start_ind]:mask[end_ind]+1])
         spike_ind = mask[start_ind] + np.int(spike_ind)
-        if limit_std and signal[spike_ind] < limit_std * threshold:
+        if limit_std and signal[spike_ind] < - limit_std * std:
             pass
         elif spike_ind - spike_width < 0:
             # don't include spikes that are too close to the beginning
@@ -313,7 +325,18 @@ def extract_spikes(block):
 
         # HPC signals are clean electrode signals
         for sig in filter(lambda s: s.name.endswith("HPC"), channel_index.analogsignals):
+            seg = sig.segment
             sig_magnitude = sig.magnitude[:, elec_id]
+
+            if len(seg.epochs):
+                epoch = seg.epochs[0]
+                t_starts = epoch.times[epoch.labels == elec_id]
+                t_stops = t_starts + epoch.durations[epoch.labels == elec_id]
+                noise_mask = get_mask(sig, zip(t_starts, t_stops))
+                noise_indices = set(np.where(noise_mask)[0])
+            else:
+                noise_mask = np.zeros(len(sig_magnitude)).astype(np.bool)
+                noise_indices = set()
 
             # Get the threshold
             # Get the spike width in number of points
@@ -325,7 +348,9 @@ def extract_spikes(block):
                     sig_magnitude,
                     threshold_std=config.Z_THRESHOLD,
                     limit_std=30,
-                    spike_width=spikewd
+                    min_spacing=config.MIN_SPIKE_THRESHOLD_SPACING,
+                    spike_width=spikewd,
+                    noise_mask=noise_mask
             )
 
             spike_times = sig.times[spike_indices]

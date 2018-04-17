@@ -17,6 +17,8 @@ DATADIR = os.path.join(PROJECT_ROOT, "data")
 
 USE_TENSORFLOW = False
 HIGHPASS_CUTOFF = 300.0
+NOISE_WINDOW = 0.1
+NOISE_CORR_THRESHOLD = 0.005
 
 
 ####################
@@ -34,13 +36,13 @@ SONG_CLASSIFIER_PARAMS = os.path.join(
 ### Audio segmentation params ###
 #################################
 
-STIM_DIR = "TutFamBos"
 PAD_SONG_BEFORE = .5   # Time to pad detected song segments (in seconds)
 PAD_SONG_AFTER = .5
 AUTODETECT_FUSE_DURATION = 0.2
 AUTODETECT_SHORTEST_DURATION = 0.6
 MIN_SEGMENT_LENGTH = 1.0
 MAX_SEGMENT_LENGTH = 6.0
+VOCALIZATION_AMPLITUDE_THRESHOLD = 1.5
 
 
 ############################
@@ -55,6 +57,7 @@ WF_STOP = 50            # stop index to slice waveforms at
 WF_SIZE = WF_STOP - WF_START
 WF_SLICE = slice(WF_START, WF_STOP)
 ELEC_SAMPLE_RATE = 30000.0
+MIN_SPIKE_THRESHOLD_SPACING = 3
 
 
 #################

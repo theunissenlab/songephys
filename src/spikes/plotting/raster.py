@@ -23,6 +23,16 @@ def plot(spike_times, min_time=0.0, max_time=1.0, color="k", alpha=1.0, ax=None)
     ax.set_xlim(min_time, max_time)
 
 
+def plot_epochs(epochs, elec_idx=0, color="Red", ax=None):
+    ax = ax or plt.gca()
+
+    for trial_idx, epoch in enumerate(epochs):
+        for t, dur, label in zip(epoch.times, epoch.durations, epoch.labels):
+            if label != elec_idx:
+                continue
+            ax.hlines([trial_idx + 0.5], t - epoch.segment.t_start, t + dur - epoch.segment.t_start, color=color)
+
+
 def plot_probs(spike_times, cluster_probs, min_time=0.0, max_time=1.0, color="k", alpha=1.0):
     """Raster plot based on spike arrival times
 
