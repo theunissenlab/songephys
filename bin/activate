@@ -1,13 +1,17 @@
 #!/bin/bash
-
-root="`dirname \"${BASH_ARGV[0]}\"`"
-root="`cd \"${PWD}\" && cd \"$root\" && pwd`"
+root=$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )
 root="`dirname \"$root\"`"
 
 export PROJECT_ROOT="${root}"
-
 export PATH=$PROJECT_ROOT/bin:$PATH
 export PYTHONPATH=$PROJECT_ROOT/src:$PROJECT_ROOT/lib:$PROJECT_ROOT/pipeline:$PROJECT_ROOT/load_intan_rhd_format
 export LUIGI_CONFIG_PATH=$PROJECT_ROOT/luigi.cfg
 
-. $PROJECT_ROOT/env/bin/activate
+if [ $# -eq 0 ]
+  then
+  env=$PROJECT_ROOT/env
+  else
+  env=$PROJECT_ROOT/$1
+fi
+
+. $env/bin/activate
