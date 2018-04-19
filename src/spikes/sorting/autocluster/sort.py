@@ -82,7 +82,12 @@ def sort_debugger(
     iters_on_same_cluster_count = 0
 
     # Clustering merging algorithm
+    iters = 0
     while tracker.pairs():
+        if iters % 100 == 0:
+            print("{} cluster pairs left after {} iterations".format(len(tracker.pairs(), iters)))
+        iters += 1
+
         if ordered:
             means = compute_means(data, clusters)
             i, j = tuple(tracker.pairs(sorter=means)[0])
