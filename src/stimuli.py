@@ -45,9 +45,14 @@ def _transform_pyoperant_csv(df, stim_loc):
     stim_loc (str): path to stimulus directory
     """
     df = df.rename(columns={"index": "trial"})
-    df["time"] = df["time"].apply(
-        lambda t: datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S.%f")
-    )
+
+    def _convert_datetime(t):
+        try:
+            return datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S.%f")
+        except:
+            return datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S")
+
+    df["time"] = df["time"].apply(_convert_datetime)
     df["stimulus_name"] = df["stimulus_name"].apply(
         lambda path: path.replace("\\", "/")
     )

@@ -149,7 +149,7 @@ def generate_stim_dicts(digital_signals, playbacks_db):
             "sound_type": "playback",
             "vocalization_type": stim.get("callid", "UV"),
             "vocalizer": vocalizer_relation,
-            "playback_file": stim.get("original_filename"),
+            "playback_file": stim.get("stimulus_name"),
             "stim_id": stim_id,
             "start_time": start_time.rescale(pq.s) - config.PAD_SONG_BEFORE * pq.s,
             "duration": (stim["duration"] + config.PAD_SONG_AFTER + config.PAD_SONG_BEFORE) * pq.s
