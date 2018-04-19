@@ -53,7 +53,7 @@ def check_sorted(session):
 
 
 def fetch_files():
-    birddir = os.path.join(config.DATADIR, "birds", "GreYel3594M")
+    birddir = os.path.join(config.DATADIR, "birds", "*")
     sessions = glob.glob(os.path.join(birddir, "*__*_*"))
 
     files = []
