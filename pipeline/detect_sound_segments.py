@@ -38,7 +38,7 @@ class DetectSoundSegments(luigi.Task):
     """Segment data based on audio where songs are detected"""
 
     session_dir = luigi.Parameter()
-    full = luigi.BoolParameter(default=False)
+    full = luigi.BoolParameter(default=True)
 
     def requires(self):
         return [Rhd2Nix(self.session_dir), CombineTrialMetadata(self.session_dir)]

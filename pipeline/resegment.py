@@ -22,7 +22,7 @@ class Resegment(luigi.Task):
     """
 
     session_dir = luigi.Parameter()
-    full = luigi.BoolParameter(default=False)
+    full = luigi.BoolParameter(default=True)
 
     def requires(self):
         return [

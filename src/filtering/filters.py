@@ -154,22 +154,31 @@ def create_epochs(t_arr, corr, window, threshold):
 
 
 def threshold_crossing_windows(t_arr, signal, threshold, width):
+    """Create list of time windows during which threshold is exceeded
+
+    Params
+    t_arr (np.ndarray): time in seconds
+    signal (np.ndarray)
+    threshold (float)
+    width (fl
+
+    """
     all_windows = []
     curr_window = None
     dt = t_arr[1] - t_arr[0]
     for t, s in zip(t_arr, signal):
-        next_start = t - width
+        next_start = np.max([t - width, t])
         use_previous = (
-                curr_window is None and
-                len(all_windows) > 0 and
-                all_windows[-1][-1] >= next_start
+                curr_window is None and             # We are not in a window
+                len(all_windows) > 0 and            # We have a previous window
+                all_windows[-1][-1] >= next_start   # We are still within the previous windows time range
         )
 
         if use_previous:
             curr_window = all_windows.pop()
 
         if s >= threshold and curr_window is None:
-            curr_window = (t - width, t + dt + width)
+            curr_window = (next_start, t + dt + width)
         elif s >= threshold and curr_window is not None:
             curr_window = (curr_window[0], t + dt + width)
         elif s < threshold and curr_window is not None:
@@ -198,7 +207,12 @@ def get_noise_floor(signal):
         peaks = peaks[:, None]
         
     # cluster extrema on their magnitude and the magnitude of the first derivative
-    labels = kmeans.fit_predict(np.hstack([np.abs(peaks), magnitude]))
+    try:
+        labels = kmeans.fit_predict(np.hstack([np.abs(peaks), magnitude]))
+    except:
+        # FIXME (kevin): this might error... its a very costly error so need to figure out what triggers it
+        import pdb
+        pdb.set_trace()
 
     # choose the baseline noise cluster as the one with the smaller max amplitude
     base_cluster_idx = np.argmin([np.max(peaks[labels == label]) for label in np.unique(labels)])

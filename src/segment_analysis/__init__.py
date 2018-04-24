@@ -310,6 +310,8 @@ class MultiSegment(object):
                     [times[(times > self.t_start) & (times < self.t_stop)] for times in seg_spiketimes],
                     min_time=self.t_start,
                     dt=dt,
+                    # FIXME (kevin): this +1 seems to have inconsistent effects
+                    # sometimes you need it sometimes you dont...
                     n_bins=int((self.t_stop - self.t_start) / dt) + 1)
             results.append(spikes.T)
 

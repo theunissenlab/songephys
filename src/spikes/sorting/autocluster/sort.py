@@ -85,7 +85,7 @@ def sort_debugger(
     iters = 0
     while tracker.pairs():
         if iters % 100 == 0:
-            print("{} cluster pairs left after {} iterations".format(len(tracker.pairs(), iters)))
+            print("{} cluster pairs left after {} iterations".format(len(tracker.pairs()), iters))
         iters += 1
 
         if ordered:

@@ -57,6 +57,7 @@ WF_STOP = 50            # stop index to slice waveforms at
 WF_SIZE = WF_STOP - WF_START
 WF_SLICE = slice(WF_START, WF_STOP)
 ELEC_SAMPLE_RATE = 30000.0
+# ELEC_SAMPLE_RATE = 25000.0
 MIN_SPIKE_THRESHOLD_SPACING = 3
 
 
