@@ -9,15 +9,17 @@
     <th>Sorted</th>
     <th>Session Path</th>
 		<th>Notes</th>
+		<th>Units</th>
   </tr>
 
   {% for file in files %}
   <tr>
     <td>{{ file.str }}</td>
-    <td>{{ file.filtered_date | datetime("date") }}</td>
-    <td>{{ file.sorted_date | datetime("date") }}</td>
+    <td class="{{ 'green' if file.filtered_date and file.filtered_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.filtered_date | datetime("date") }}</td>
+    <td class="{{ 'green' if file.sorted_date and file.sorted_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.sorted_date | datetime("date") }}</td>
     <td>{{ file.path }}</td>
     <td>{{ file.notes }}</td>
+    <td class="{{ 'green' if file.units > 0 }}">{{ file.units }}</td>
   </tr>
   {% endfor %}
 
@@ -25,6 +27,11 @@
 
 
 <style>
+
+.green {
+  background: green;
+  color: white;
+}
 
 table a:link {
 	color: #666;

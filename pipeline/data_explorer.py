@@ -52,6 +52,11 @@ def check_sorted(session):
         return modified_at(matches[0])
 
 
+def check_summaries(session):
+    matches = glob.glob(os.path.join(session, "unit_summaries", "*.png"))
+    return len(matches)
+
+
 def fetch_files():
     birddir = os.path.join(config.DATADIR, "birds", "*")
     sessions = glob.glob(os.path.join(birddir, "*__*_*"))
@@ -69,6 +74,8 @@ def fetch_files():
         file_info["filtered_date"] = check_filtered(session)
         file_info["sorted_date"] = check_sorted(session)
         file_info["path"] = session
+        file_info["units"] = check_summaries(session)
+
         try:
             with open(os.path.join(session, "notes")) as notefile:
                 file_info["notes"] = notefile.read()
@@ -83,7 +90,7 @@ def fetch_files():
 @app.route("/")
 def index():
     files = fetch_files()
-    return render_template("data_explorer.html", files=files)
+    return render_template("data_explorer.html", files=files, datetime=datetime)
 
 
 app.run("0.0.0.0")
