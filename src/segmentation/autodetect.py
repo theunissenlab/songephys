@@ -292,7 +292,7 @@ def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=150, maxfreq=4
     # arrays in cells. Makes classification more straightforward later.    
     
     df = pandas.DataFrame(new_df_data)
-    durations = np.expand_dims(map(lambda x: x[1] - x[0], points), 1)
+    durations = np.expand_dims(list(map(lambda x: x[1] - x[0], points)), 1)
     df['duration'] = durations # add a duration column
     psds = np.asarray(psds)
     freqvars = np.asarray(freqvars)
@@ -670,8 +670,8 @@ def extract_birdsong_features(signal, points, fs=25000, minfreq=1000, maxfreq=80
     minfreq = 1000
     maxfreq = 8000
 
-    # all_lengths = scipy.stats.zscore(np.expand_dims(map(lambda x: x[1] - x[0], points), 1))
-    all_lengths = np.expand_dims(map(lambda x: x[1] - x[0], points), 1)
+    # all_lengths = scipy.stats.zscore(np.expand_dims(list(map(lambda x: x[1] - x[0], points)), 1))
+    all_lengths = np.expand_dims(list(map(lambda x: x[1] - x[0], points)), 1)
     for pt in points:
         l, h = pt
         Pxx, freqs, _ = mlab.specgram(signal[l:h], 256, Fs=fs,
@@ -755,7 +755,7 @@ def separate_song_sources(audio_streams, points, fs=25000, tutor_mic=0):
     diff = lambda c: (np.mean(get_amp_envelope(c), axis=0)[0]
                       - np.mean(get_amp_envelope(c), axis=0)[1])
     #print np.shape(points)
-    pt_diffs = np.expand_dims(map(diff, points), axis=1)
+    pt_diffs = np.expand_dims(list(map(diff, points)), axis=1)
     #print pt_diffs
     #print np.shape(pt_diffs)
     kmeans = KMeans(n_clusters=2, random_state=0).fit(pt_diffs)
