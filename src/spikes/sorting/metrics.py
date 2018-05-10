@@ -66,7 +66,7 @@ def isolation(waveforms, labels, k=10):
     unique_labels = np.unique(labels)
     overlaps = np.zeros((len(unique_labels), len(unique_labels)))
 
-    knn = NearestNeighbors(n_neighbors=k, algorithm='ball_tree', n_jobs=8).fit(waveforms)
+    knn = NearestNeighbors(n_neighbors=k, algorithm='ball_tree', n_jobs=2).fit(waveforms)
     _, neighbors = knn.kneighbors(waveforms)
 
     for i, A in enumerate(unique_labels):
@@ -78,17 +78,8 @@ def isolation(waveforms, labels, k=10):
 
     mins = np.min(overlaps, axis=0)
 
-    print overlaps
-
     result = {}
     for i, label in enumerate(unique_labels):
         result[label] = mins[i]
 
     return result
-
-
-
-
-
-
-

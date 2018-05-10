@@ -3,15 +3,20 @@ import numpy as np
 import pandas as pd
 import quantities as pq
 
-from neo.core import Segment
-from neosound import sound_manager
-from neosound.sound_store import HDF5Store
-from zeebeez.tdt2neo import stim, import_multielectrode
-from zeebeez.tdt2neo.import_multielectrode import binary_converter
+from neo.core import AnalogSignal, SpikeTrain, Segment, Epoch
+from .autodetect import find_vocal_periods
 
-
-import autodetect
 import config
+
+
+def binary_converter(code, bits_per_char):
+    num_vals = len(code) // bits_per_char
+    vals = np.zeros(num_vals)
+    for ii in range(num_vals):
+        binvec = code[ii * bits_per_char: (ii + 1) * bits_per_char]
+        vals[ii] = np.sum((2 ** np.arange(bits_per_char - 1, -1, -1)) * binvec)
+
+    return "".join(map(chr, vals.astype(np.uint8)))
 
 
 def convert_digital_to_metadata(on_times, code_length=384, bits_per_char=8):
@@ -57,79 +62,6 @@ def convert_digital_to_metadata(on_times, code_length=384, bits_per_char=8):
     return codes
 
 
-def read_stimulus_database(pyoperant_file, stim_dir):
-    """Read trial metadata from csv.
-    
-    Params
-    pyoperant_file (str): path to csv
-    stim_dir (str): path to local directory where wav files can be found
-
-    Returns
-    csv_reader (zeebeez.tdt2neo.stim.StimCSVReader)
-        stim csv reader object with reference to a pandas DataFrame
-        with trial data (csv_reader.stim_data)
-    """
-    csv_reader = stim.StimCSVReader()
-    csv_reader.read(pyoperant_file, root_dir=stim_dir)
-
-    return csv_reader
-
-
-def save_stimulus_database(pyoperant_file, db_path):
-    """Save database from csv to neosound database
-
-    Params
-    pyoperant_file (str): path to csv
-    db_path (str): path to store HDF5 neosound db
-
-    sound_manager (neosound.sound_manager.SoundManager)
-        Sound manager object with reference to HDF5 database,
-        which can query stimulus info by id
-    """
-    csv_reader = read_stimulus_database(pyoperant_file, None)
-    csv_reader.write(db_path)
-
-    return sound_manager.SoundManager(HDF5Store, db_path)
-
-
-def load_stimulus_database(db_path):
-    """Load neosound database from file
-
-    Params
-    db_path (str): path where neosound db is stored
-
-    sound_manager (neosound.sound_manager.SoundManager)
-        Sound manager object with reference to HDF5 database,
-        which can query stimulus info by id
-    """
-    return sound_manager.SoundManager(HDF5Store, db_path)
-
-
-def combine_stim_csvs(pyoperant_files, stim_dirs):
-    """Combine multipe pyoperant csvs into one
-    
-    Combines the csvs, sort them by time, reindexes index column (trial numbers)
-
-    Params
-    pyoperant_file (list of str):
-        list of pyoperant csvs to combine
-    stim_dirs (list of str):
-        list of paths to directories containing wavs for each pyoperant csv
-        e.g. paths to TutFamBos
-    """
-    csv_readers = [
-        read_stimulus_database(filename, stim_dir)
-        for filename, stim_dir in zip(pyoperant_files, stim_dirs)
-    ]
-
-    new_csv = pd.concat([reader.stim_data for reader in csv_readers])
-    new_csv = new_csv.sort_values("time")
-    new_csv.index = np.arange(len(new_csv))
-    new_csv["index"] = np.arange(len(new_csv)) + 1
-
-    return new_csv
-
-
 def get_vocalizer_relation(annotations):
     familiarity = annotations.get("source")
     if familiarity == "tutor":
@@ -149,7 +81,7 @@ def validate_digital_codes(digital_signals, trials_csv):
     """
     sample_rate = digital_signals.annotations["sampling_rate"]
     on_times = np.array(np.round(digital_signals.times * sample_rate)).astype("int")
-    digital_codes = import_multielectrode.convert_digital_to_metadata(on_times)
+    digital_codes = convert_digital_to_metadata(on_times)
 
     code_diffs = np.diff([start_time / 30000.0 for (start_time, _) in digital_codes])
     csv_diffs = [t.item() for t in np.diff(trials_csv["time"])]
@@ -164,12 +96,12 @@ def validate_digital_codes(digital_signals, trials_csv):
     return code_diffs[:len(csv_diffs)] / 30000.0 - csv_diffs[:len(code_diffs)]
 
 
-def generate_stim_dicts(digital_signals, sound_db):
+def generate_stim_dicts(digital_signals, playbacks_db):
     """Generate segment data from digital signal data and sound (stim) database
 
     Args:
         digital_signals (neo.core.Events)
-        sound_dbs (list of neosound.sound_store.HDF5Store)
+        playbacks_db (pandas.DataFrame): dataframe of stimuli played
 
     Returns:
         list of dicts: List of segment information
@@ -180,7 +112,7 @@ def generate_stim_dicts(digital_signals, sound_db):
     sample_rate = digital_signals.annotations["sampling_rate"]
     on_times = np.array(np.round(digital_signals.times * sample_rate)).astype("int")
 
-    digital_codes = import_multielectrode.convert_digital_to_metadata(on_times)
+    digital_codes = convert_digital_to_metadata(on_times)
     # TODO: if the digital codes dont match up with the csv codes... we need to correct digital_codes by removing the bad ones
 
     digital_codes = [codes for codes in digital_codes if codes[1]["action"] == "queu"]
@@ -199,27 +131,28 @@ def generate_stim_dicts(digital_signals, sound_db):
 
         # can we VALIDATE the digital code start time with the
         # data in sounddb or the csv?
-        try:
-            stim_id = sound_db.filter_ids(index=current_trial)[0]
-        except IndexError:
+
+        # Query the database for the correct trial
+        stim = playbacks_db[playbacks_db["trial"] == current_trial]
+        if len(stim) == 0:
+            # TODO (kevin): We couldn't find this trial. Raise error?
             break
-        duration = sound_db.get_annotations(stim_id)["duration"]
+        else:
+            stim_id = stim.index[0]
+            stim = dict(stim.iloc[0])
 
-        metadata = sound_db.get_metadata(stim_id)
-        annotations = sound_db.get_annotations(stim_id)
-
-        vocalizer_relation = get_vocalizer_relation(annotations)
+        vocalizer_relation = get_vocalizer_relation(stim)
 
         stim_dicts.append({
-            "name": "playback_{}".format(annotations["emitter"]),
+            "name": "playback_{}".format(stim["emitter"]),
             "description": "Created by segmentation.audio_segment.generate_stim_dicts",
             "sound_type": "playback",
-            "vocalization_type": annotations.get("callid", "UV"),
+            "vocalization_type": stim.get("callid", "UV"),
             "vocalizer": vocalizer_relation,
-            "playback_file": annotations.get("original_filename"),
+            "playback_file": stim.get("stimulus_name"),
             "stim_id": stim_id,
             "start_time": start_time.rescale(pq.s) - config.PAD_SONG_BEFORE * pq.s,
-            "duration": (duration + config.PAD_SONG_AFTER + config.PAD_SONG_BEFORE) * pq.s
+            "duration": (stim["duration"] + config.PAD_SONG_AFTER + config.PAD_SONG_BEFORE) * pq.s
         })
 
     return stim_dicts
@@ -230,7 +163,8 @@ def generate_vocal_periods_dicts(audio, sampling_rate):
 
     Does not include any classification/categorization step
     """
-    vocal_periods, _ = autodetect.find_vocal_periods(
+
+    vocal_periods, _ = find_vocal_periods(
         audio,
         fs=sampling_rate,
         fuse_duration=config.AUTODETECT_FUSE_DURATION,
@@ -296,6 +230,107 @@ def generate_live_vocalization_dicts(df):
         })
             
     return seg_dicts
+
+
+def generate_all_segment_dicts(block, t_width=10.0):
+    """Segment the whole block into segments that cover the whole thing.
+
+    Can remerge them later but need to do this for processing for now.
+    """
+    main_segment = block.segments[0]
+
+    seg_dicts = []
+    start_times = np.arange(main_segment.t_start.item(), main_segment.t_stop.item(), t_width)
+    for i, start_time in enumerate(start_times):
+        seg_dicts.append({
+            "name": "segment_{}".format(i),
+            "description": "Created by segmentation.audio_segment.generate_all_segment_dicts",
+            "sound_type": None,
+            "vocalization_type": None,
+            "vocalizer": None,
+            "playback_file": None,
+            "start_time": start_time * pq.s,
+            "duration": t_width * pq.s
+        })
+
+    return seg_dicts
+
+
+def _one_long_segment(block):
+    """Return a block to its original one-segment state"""
+    # merge analogsignals
+    # merge spiketrains
+
+    new_segment = Segment(
+            name="all_encompassingly",
+            description="the whole data",
+            index=0,
+            times=block.segments[0].t_start
+    )
+
+    sigs = [seg.analogsignals[0] for seg in block.segments]
+    new_analogsignal = AnalogSignal(
+            np.concatenate([s.as_array() for s in sigs]) * sigs[0].units,
+            name="all_encompassingly_analogsignal",
+            sampling_rate=sigs[0].sampling_rate,
+            t_start=sigs[0].t_start,
+            units=sigs[0].units,
+            **sigs[0].annotations)
+    new_analogsignal.segment = new_segment
+    new_segment.analogsignals.append(new_analogsignal)
+
+    epochs = [seg.epochs[0] for seg in block.segments]
+    new_epoch = Epoch(
+        times=np.concatenate([epoch.times for epoch in epochs]) * epochs[0].times.units,
+        durations=np.concatenate([epoch.durations for epoch in epochs]) * epochs[0].durations.units,
+        labels=np.concatenate([epoch.labels for epoch in epochs])
+    )
+    new_segment.epochs.append(new_epoch)
+
+    spiketimes = [
+        np.concatenate([
+            st.times.as_array() for st in sts
+        ])
+        for sts in zip(*[seg.spiketrains for seg in block.segments])
+    ]
+
+    wfs = [
+        np.concatenate([
+            st.waveforms for st in sts
+        ], axis=0)
+        for sts in zip(*[seg.spiketrains for seg in block.segments])
+    ]
+
+    for unit_idx, template_st in enumerate(block.segments[0].spiketrains):
+        new_spiketrain = SpikeTrain(
+            spiketimes[unit_idx],
+            t_start=new_analogsignal.t_start,
+            t_stop=new_analogsignal.t_stop,
+            name=template_st.unit.name,
+            waveforms=wfs[unit_idx],
+            # unit=template_st.unit,
+            units=template_st.units
+        )
+        template_st.unit.spiketrains = [new_spiketrain]
+        new_spiketrain.unit = template_st.unit
+        new_spiketrain.segment = new_segment
+        new_segment.spiketrains.append(new_spiketrain)
+
+    new_segment.create_many_to_one_relationship()
+
+    return new_segment
+
+
+def one_long_segment(block):
+    new_segment = _one_long_segment(block)
+
+    block.segments = [new_segment]
+
+    block.create_many_to_one_relationship(force=True, recursive=True)
+    block.create_many_to_many_relationship()
+    block.create_relationship(force=True, recursive=True, append=True)
+
+    return block
 
 
 def consolidate_segments(segments):
@@ -391,64 +426,73 @@ def segment(block, segment_dicts):
 
     if len(block.segments) > 1:
         # TODO (kevin): raise a warning if the block has more than one segment?
-        print "warn warn warn"
+        print("warn warn warn")
         # raise Exception("This block already has more than one segment. What are you doing?")
 
     new_segments = []
     curr_seg = 0
 
     for channel_index in block.channel_indexes:
-	for unit in channel_index.units:
-	    del unit.spiketrains[:]
+        for unit in channel_index.units:
+            del unit.spiketrains[:]
 
     for trial_id, segment_dict in enumerate(segment_dicts):
-	start_time = segment_dict["start_time"]
-	end_time = start_time + segment_dict["duration"]
+        start_time = segment_dict["start_time"]
+        end_time = start_time + segment_dict["duration"]
 
-	old_segment = block.segments[curr_seg]
+        old_segment = block.segments[curr_seg]
 
-	ends_after =  (
-		end_time >= block.segments[curr_seg].t_stop or
-		np.isclose(end_time.item(), block.segments[curr_seg].t_stop.item())
-	)
-	if ends_after:
-	    curr_seg += 1
+        ends_after =  (
+            end_time >= block.segments[curr_seg].t_stop or
+            np.isclose(end_time.item(), block.segments[curr_seg].t_stop.item())
+        )
 
-	new_segment = Segment(
-		name="{}_{}".format(segment_dict["name"], trial_id),  # must be unique!
-		description=segment_dict["description"],
-		file_origin=old_segment.file_origin,
-		file_datetime=old_segment.file_datetime,
-		rec_datetime=old_segment.rec_datetime,
-		index=trial_id,
-		times=start_time,
-		sound_type=segment_dict.get("sound_type"),
-		vocalization_type=segment_dict.get("vocalization_type"),
-		vocalizer=segment_dict.get("vocalizer"),
-		playback_file=segment_dict.get("playback_file")
-	)
+        while ends_after:
+            curr_seg += 1
+            ends_after = (curr_seg < len(block.segments)) and (
+                end_time >= block.segments[curr_seg].t_stop or
+                np.isclose(end_time.item(), block.segments[curr_seg].t_stop.item())
+            )
 
-	for signal in old_segment.analogsignals:
-	    if end_time > signal.t_stop:
-		end_time = None
-	    sliced_signal = signal.time_slice(start_time, end_time)
-	    for channel_index in block.channel_indexes:
-		# TODO: preserve the channel number (e.g. 8 instead of 0)
-		if channel_index.name in signal.name:  # Amplifier or Board ADC
-		    channel_index.analogsignals.append(sliced_signal)
+        new_segment = Segment(
+            name="{}_{}".format(segment_dict["name"], trial_id),  # must be unique!
+            description=segment_dict["description"],
+            file_origin=old_segment.file_origin,
+            file_datetime=old_segment.file_datetime,
+            rec_datetime=old_segment.rec_datetime,
+            index=trial_id,
+            times=start_time,
+            sound_type=segment_dict.get("sound_type"),
+            vocalization_type=segment_dict.get("vocalization_type"),
+            vocalizer=segment_dict.get("vocalizer"),
+            playback_file=segment_dict.get("playback_file")
+        )
 
-	    new_segment.analogsignals.append(sliced_signal)
-	    sliced_signal.segment = new_segment
-	    
-	for spiketrain in old_segment.spiketrains:
-	    if end_time > signal.t_stop:
-		end_time = None
-	    new_spiketrain = spiketrain.time_slice(start_time, end_time)
-	    new_segment.spiketrains.append(new_spiketrain)
-	    spiketrain.unit.spiketrains.append(new_spiketrain)
-	    
-	new_segment.create_many_to_one_relationship()
-	new_segments.append(new_segment)
+        for signal in old_segment.analogsignals:
+            stop_time = end_time if end_time <= signal.t_stop else None
+            sliced_signal = signal.time_slice(start_time, stop_time)
+            for channel_index in block.channel_indexes:
+                # TODO: preserve the channel number (e.g. 8 instead of 0)
+                if channel_index.name in signal.name:  # Amplifier or Board ADC
+                    channel_index.analogsignals.append(sliced_signal)
+
+            new_segment.analogsignals.append(sliced_signal)
+            sliced_signal.segment = new_segment
+            
+        for spiketrain in old_segment.spiketrains:
+            stop_time = end_time if end_time <= signal.t_stop else None
+            new_spiketrain = spiketrain.time_slice(start_time, stop_time)
+            new_segment.spiketrains.append(new_spiketrain)
+            spiketrain.unit.spiketrains.append(new_spiketrain)
+
+        for epoch in old_segment.epochs:
+            stop_time = end_time if end_time <= signal.t_stop else None
+            new_epoch = epoch.time_slice(start_time, stop_time)
+            new_segment.epochs.append(new_epoch)
+            epoch.segment = new_segment
+
+        new_segment.create_many_to_one_relationship()
+        new_segments.append(new_segment)
 
     del block.segments[:]
     for segment in new_segments:

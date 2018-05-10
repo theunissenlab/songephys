@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 import sys
 import numpy as np
 from flask import Flask, render_template, jsonify, request
@@ -25,7 +27,7 @@ def format_data(time_ranges, data_blocked, labels, metric_blocks, figure_locatio
                     "active": False
                 }
                 for c in sorted(np.unique(l))],
-            "labels": map(str, sorted(np.unique(l)))
+            "labels": list(map(str, sorted(np.unique(l))))
         }
 
         entries.append(entry)
@@ -37,18 +39,18 @@ def create_server(data_info_file, output_file):
     app.config["TEMPLATE_AUTO_RELOAD"] = True
     @app.after_request
     def add_header(r):
-	"""
-	Add headers to both force latest IE rendering engine or Chrome Frame,
-	and also to cache the rendered page for 10 minutes.
-	"""
-	r.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
-	r.headers["Pragma"] = "no-cache"
-	r.headers["Expires"] = "0"
-	r.headers['Cache-Control'] = 'public, max-age=0'
-	return r
+        """
+        Add headers to both force latest IE rendering engine or Chrome Frame,
+        and also to cache the rendered page for 10 minutes.
+        """
+        r.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        r.headers["Pragma"] = "no-cache"
+        r.headers["Expires"] = "0"
+        r.headers['Cache-Control'] = 'public, max-age=0'
+        return r
 
     data_dir = os.path.join(os.path.dirname(config.DATADIR), os.path.dirname(data_info_file))
-    print data_dir
+    print(data_dir)
     data = np.load(data_info_file)[()]
     entries = format_data(
             data["time_ranges"],
@@ -90,7 +92,7 @@ def create_server(data_info_file, output_file):
             unit_times = None
             unit_wfs = None
             for time_block_idx, cluster_ids in enumerate(unit):
-                cluster_ids = map(int, cluster_ids)
+                cluster_ids = list(map(int, cluster_ids))
 
                 dat = data["data"][time_block_idx]
                 lab = data["labels"][time_block_idx]

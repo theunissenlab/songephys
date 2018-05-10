@@ -49,12 +49,17 @@ def write_neo(old_block, new_spike_times, new_spike_waveforms):
         new_audio_channel_index.analogsignals.append(old_signal)
         new_segments[i].analogsignals.append(old_signal)
 
+        old_epoch = old_segment.epochs[0]
+        old_epoch.segment = new_segments[i]
+        new_segments[i].epochs.append(old_epoch)
+
     iterator = enumerate(zip(new_spike_times, new_spike_waveforms, channel_indexes))
     for electrode_idx, (spike_times_list, spike_waveforms_list, old_channel_index) in iterator:
         if not spike_times_list:
             continue
 
         old_unsorted_unit = old_channel_index.units[0]
+        new_channel_index = ChannelIndex(name=old_channel_index.name, index=electrode_idx)
 
         print("Creating {} units for electrode {}".format(len(spike_times_list[0]), electrode_idx))
 
@@ -84,9 +89,8 @@ def write_neo(old_block, new_spike_times, new_spike_waveforms):
                 spike_train.unit = new_unit
 
             new_channel_index_units[electrode_idx].append(new_unit)
-            new_unit.channel_index = channel_index
+            new_unit.channel_index = new_channel_index
 
-        new_channel_index = ChannelIndex(name=old_channel_index.name, index=electrode_idx)
         new_channel_index.units += new_channel_index_units[electrode_idx]
         new_block.channel_indexes.append(new_channel_index)
     new_block.channel_indexes.append(new_audio_channel_index)

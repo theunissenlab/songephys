@@ -1,6 +1,10 @@
 from __future__ import print_function
 
-import cPickle as pickle
+try:
+    import cPickle as pickle
+except ImportError:
+    import pickle
+
 import datetime
 import glob
 import os
@@ -20,9 +24,9 @@ from segmentation.audio_segment import (
     segment,
     generate_stim_dicts,
     generate_live_vocalization_dicts,
+    generate_all_segment_dicts,
     generate_vocal_periods_dicts,
     merge_segments,
-    load_stimulus_database,
     validate_digital_codes
 )
 from segmentation.autodetect import separate_song_sources
@@ -34,6 +38,7 @@ class DetectSoundSegments(luigi.Task):
     """Segment data based on audio where songs are detected"""
 
     session_dir = luigi.Parameter()
+    full = luigi.BoolParameter(default=True)
 
     def requires(self):
         return [Rhd2Nix(self.session_dir), CombineTrialMetadata(self.session_dir)]
@@ -66,30 +71,30 @@ class DetectSoundSegments(luigi.Task):
         print("{} between {} and {}".format(len(live_dicts), config.MIN_SEGMENT_LENGTH, config.MAX_SEGMENT_LENGTH))
         del sound_arr
 
-        playbacks_csv = pd.read_csv(self.input()[1][1].path)
-
         # FIXME: not sure if this will alwyas work
+        """
         if "time" in playbacks_csv:
             playbacks_csv["time"] = playbacks_csv["time"].apply(
                     lambda time_str: datetime.datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S.%f"))
+        """
 
-        if len(playbacks_csv) == 0:
+        try:
+            playbacks_db = pd.read_pickle(self.input()[1].path)
+        except:
             print("No pyoperant file found (no playbacks)")
+            playback_dicts = []
             segment_dicts = live_dicts
         else:
-            playbacks_db = load_stimulus_database(self.input()[1][0].path)
             digital_signals = block.segments[0].events[0]
 
             # the timing_offsets should be all close to zero
             # timing_offsets = validate_digital_codes(digital_signals, playbacks_csv)
 
-            playback_dicts = generate_stim_dicts(digital_signals, playbacks_db.database)
+            playback_dicts = generate_stim_dicts(digital_signals, playbacks_db)
             print("Identified {} playback periods".format(len(playback_dicts)))
 
             segment_dicts = merge_segments(playback_dicts, live_dicts)
             # TODO (kevin): Save segment_dicts to a file...
-
-            create_segments = consolidate_segments(segment_dicts)
 
             print("Identified {} segments, ({} playback, {} live)".format(
                     len(segment_dicts),
@@ -97,8 +102,11 @@ class DetectSoundSegments(luigi.Task):
                     len(segment_dicts) - len(playback_dicts)
             ))
 
-            print("Creating {} segments without overlap".format(len(create_segments)))
-
+        if self.full:
+            create_segments = generate_all_segment_dicts(block, t_width=5.0)
+        else:
+            create_segments = consolidate_segments(segment_dicts)
+        print("Creating {} segments without overlap".format(len(create_segments)))
         new_block = segment(block, create_segments)
 
         np.save(

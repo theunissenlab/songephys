@@ -1,4 +1,7 @@
-import cPickle as pickle
+try:
+    import cPickle as pickle
+except ImportError:
+    import pickle
 import os
 
 import luigi
@@ -32,6 +35,11 @@ class PlotUnitWaveforms(luigi.Task):
         with open(self.input().path, "rb") as input_file:
             block = pickle.load(input_file)
         block.create_relationship(force=True, append=True, recursive=True)
+        for seg in block.segments:
+            for k in seg.annotations:
+                v = seg.annotations[k]
+                if isinstance(v, bytes):
+                    seg.annotations[k] = v.decode("utf-8")
 
         multiseg = MultiSegment(np.random.choice(block.segments, replace=False, size=20))
 
@@ -59,6 +67,11 @@ class PlotPlaybackResponses(luigi.Task):
         with open(self.input().path, "rb") as input_file:
             block = pickle.load(input_file)
         block.create_relationship(force=True, append=True, recursive=True)
+        for seg in block.segments:
+            for k in seg.annotations:
+                v = seg.annotations[k]
+                if isinstance(v, bytes):
+                    seg.annotations[k] = v.decode("utf-8")
 
         figures = unit_summary.plot_playback_responses(block, width=self.gaussian_width)
 

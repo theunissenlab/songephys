@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import matplotlib
 import numpy as np
 
-import raster
+from . import raster
 
 
 def plot_spikes_with_timeseries(

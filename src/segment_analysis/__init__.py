@@ -1,4 +1,4 @@
-from __future__ import print_function
+from __future__ import print_function, unicode_literals
 
 import os
 
@@ -94,7 +94,7 @@ class MultiSegmentPlotter(object):
                 seg, signal=signal, channel=channel, align_to_segment=align_to_segment)
         plot_spectrogram(t_spec, f_spec, spec, colormap="gray_r", ax=ax, colorbar=False)
 
-    def plot_raster(self, unit, ax=None, align_to_segment=None):
+    def plot_raster(self, unit, ax=None, align_to_segment=None, mark_noise_epochs=False, elec_idx=None):
         """Plot the raster of the given unit over all trials in MultiSegment
 
         Params
@@ -111,6 +111,10 @@ class MultiSegmentPlotter(object):
         # TODO: how to align to segment?
         if ax is None:
             ax = plt.gca()
+
+        if mark_noise_epochs:
+            epochs = [seg.epochs[0] for seg in self._segments]
+            raster.plot_epochs(epochs, elec_idx=elec_idx, ax=ax)
 
         raster.plot(
             self._segments.spike_times(unit=unit, aligned=True),
@@ -218,7 +222,7 @@ class MultiSegment(object):
         new_multisegment (segment_analysis.MultiSegment):
             Returns a new instance of MultiSegment with the filtered list of segments
         """
-        return MultiSegment(filter(fn, self.segments))
+        return MultiSegment(list(filter(fn, self.segments)))
 
     def set_t_start(self, t_start=None):
         """Set a new t_start time"""
@@ -306,6 +310,8 @@ class MultiSegment(object):
                     [times[(times > self.t_start) & (times < self.t_stop)] for times in seg_spiketimes],
                     min_time=self.t_start,
                     dt=dt,
+                    # FIXME (kevin): this +1 seems to have inconsistent effects
+                    # sometimes you need it sometimes you dont...
                     n_bins=int((self.t_stop - self.t_start) / dt) + 1)
             results.append(spikes.T)
 
@@ -403,7 +409,8 @@ class MultiSegment(object):
             seg_idx = self.index_of(seg_idx)
         seg = self.segments[seg_idx]
 
-        if isinstance(signal, basestring):
+        # Python 2/3 compatibility hack for default string type
+        if isinstance(signal, "".__class__):
             # we are probably looking at a request for playback
             if signal != "playback":
                 raise Exception("signal must be either int or 'playback'")
