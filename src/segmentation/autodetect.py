@@ -12,6 +12,8 @@ import os
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.neighbors import NearestNeighbors
+from matplotlib import cm
 
 from soundsig.sound import BioSound 
 import pandas as pandas
@@ -915,6 +917,32 @@ def return_syllable_times(audio_streams, vocal_periods, fs, amp_thresh=None):
             good_index.append(index)
     vocal_periods = vocal_periods[good_index]
     return syllable_list, vocal_periods
+
+def get_cluster_quality(points, cluster_identities, num_neighbors = 5):
+    """ A quick way to assess how good your clusters are.
+    For each point we find the nearest (num_neighbors) neighbors, and calculate if they are in the same cluster or not.
+    The final value is how many points in each cluster had a neighbor in a different cluster. Pretty rough but not bad.
+    """
+
+    nbrs = NearestNeighbors(n_neighbors=num_neighbors, algorithm='ball_tree').fit(points)
+    neighbor_list = [nbrs.kneighbors([point], return_distance = False) for point in points]
+    # find how many of each points neighbors are from different clusters    
+    neighbor_clusters = np.array([len(np.unique(cluster_identities[point])) for point in neighbor_list])
+    # use neighbor_clusters to determine which clusters are good and which are bad...
+    # say if there are more than 5 points which have nearest neighbors in 2 clusters?
+    cluster_quality = list()
+    for clust in np.unique(cluster_identities): # 
+        x = np.where(cluster_identities==clust)[0]
+        cluster_quality.append(len(np.where(neighbor_clusters[x] > 1)[0]))
+
+    return cluster_quality
+
+
+def get_color(labels):
+    n_labels = np.float(len(np.unique(labels)))
+    colors = cm.gist_ncar(labels / n_labels)
+    print(labels/n_labels)
+    return colors
 
 
 def find_vocal_periods(audio_stream_in, fs=None, fuse_duration=0.2, shortest_duration=0.08, verbose=True, amp_thresh=None, normalize_sound=False, normalize_thresh=0.006, lowpass = 5000, highpass = 2000):
