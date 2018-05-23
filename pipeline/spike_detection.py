@@ -12,7 +12,7 @@ import luigi
 import matplotlib.pyplot as plt
 
 from filter_signals import FilterElectrodeSignals
-from preproephys import fix_chIndex, extract_spikes, drop_raw_traces
+from preproephys import fix_chIndex, extract_spikes, drop_electrode_traces
 
 from sklearn.manifold import TSNE
 from spikes.write_neo import write_neo
@@ -54,8 +54,7 @@ class ExtractSpikes(luigi.Task):
 
         fix_chIndex(block)
         extract_spikes(block)
-        drop_raw_traces(block)
-        # TODO (drop the raw spike waveform here)
+        drop_electrode_traces(block)
 
         with open(self.output().path, "wb") as output_file:
             pickle.dump(block, output_file, protocol=4)
@@ -105,8 +104,6 @@ class MergeThresholdedSessions(luigi.Task):
     def output(self):
         # Create a new directory that has all three unsorted blocks
         pass
-
-
 
     def requires(self):
         return [
