@@ -11,7 +11,7 @@ import scipy.stats
 import luigi
 import matplotlib.pyplot as plt
 
-from filter_signals import FilterElectrodeSignals
+from spike_detection import ExtractSpikes, CollectWaveforms
 from preproephys import fix_chIndex, extract_spikes
 
 from sklearn.manifold import TSNE
@@ -30,77 +30,6 @@ import webbrowser
 import config
 
 from utils import session_basename
-
-
-class ExtractSpikes(luigi.Task):
-
-    session_dir = luigi.Parameter()
-
-    def output(self):
-        sorting_dir = os.path.join(self.session_dir, "spikes")
-        if not os.path.exists(sorting_dir):
-            os.makedirs(sorting_dir)
-
-        output_file = "{}-thresholded.pkl".format(session_basename(self.session_dir))
-        return luigi.LocalTarget(os.path.join(sorting_dir, output_file))
-
-    def requires(self):
-        return FilterElectrodeSignals(self.session_dir)
-
-    def run(self):
-        with open(self.input().path, "rb") as input_file:
-            block = pickle.load(input_file)
-        block.create_relationship(force=True, append=True, recursive=True)
-
-        fix_chIndex(block)
-        extract_spikes(block)
-
-        with open(self.output().path, "wb") as output_file:
-            pickle.dump(block, output_file, protocol=4)
-
-
-class CollectWaveforms(luigi.Task):
-
-    session_dir = luigi.Parameter()
-
-    def output(self):
-        sorting_dir = os.path.join(self.session_dir, "spikes")
-
-        return [
-            luigi.LocalTarget(
-                os.path.join(sorting_dir, "spike_waveforms-e{}.npy".format(electrode))
-            ) for electrode in range(16)
-        ]
-            
-    def requires(self):
-        return ExtractSpikes(self.session_dir)
-
-    def run(self):
-        with open(self.input().path, "rb") as input_file:
-            block = pickle.load(input_file)
-        block.create_relationship(force=True, append=True, recursive=True)
-
-        for i, output in enumerate(self.output()):
-            # a hack to get the electrode with index i
-            unit = next(
-                channel_index.units[0]
-                for channel_index in block.channel_indexes
-                if channel_index.name == "Amp Elec {}".format(i)
-            )
-            print(len(unit.spiketrains))
-
-            waveforms, times = collect_waveforms(
-                    unit.spiketrains,
-                    force_single_peak=False
-            )
-            print(waveforms.shape)
-            waveforms = waveforms[:, config.WF_SLICE]
-
-            # remove extremely large peaks
-            # FIXME: remove this thing?
-            # waveforms = waveforms[np.max(np.abs(waveforms), axis=1) < 800]
-            # waveforms = waveforms[np.max(np.abs(waveforms), axis=1) < 800]
-            np.save(output.path, {"waveforms": waveforms, "times": times})
 
 
 class ComputeSpikeTSNE(luigi.Task):

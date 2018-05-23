@@ -8,7 +8,8 @@ import matplotlib.pyplot as plt
 import quantities as pq
 from scipy.io import wavfile
 
-from soundsig.sound import spectrogram, plot_spectrogram
+from soundsig.sound import plot_spectrogram, spectrogram
+from soundsig.signal import highpass_filter, lowpass_filter
 
 import config
 
@@ -444,6 +445,17 @@ class MultiSegment(object):
             result = result[:, channel]
 
         return t_arr, result, sampling_rate
+
+    def get_amplitude_envelope(self, seg_idx, signal=0, channel=None, original_times=False):
+        t_arr, result, sampling_rate = self.get_analogsignal(seg_idx,
+                signal=signal,
+                channel=channel,
+                original_times=original_times)
+
+        result = result - np.mean(result, axis=0)
+        result = highpass_filter(result.T, sampling_rate, 1000.0).T
+
+        return t_arr, lowpass_filter(np.abs(result).T, sampling_rate, 100.0).T, sampling_rate
 
     def get_spectrogram(self, seg_idx, signal=0, channel=0, align_to_segment=None):
         """Generate a spectrogram of a segment's signal
