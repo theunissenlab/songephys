@@ -1043,7 +1043,7 @@ def find_vocal_periods(audio_stream_in, fs=None, fuse_duration=0.2, shortest_dur
             if verbose:
                 print("First onset near beginning of file, rounding to account for fuse duration forced it to before file onset, "
                     + "first onset set to 0")
-        vocal_periods = np.array(zip(good_onsets,good_offsets))
+        vocal_periods = np.array(list(zip(good_onsets,good_offsets)))
         lengths = np.apply_along_axis(lambda p: p[1] - p[0], 1, vocal_periods)
         vocal_periods = vocal_periods[lengths > shortest_duration * fs]
         if verbose:
