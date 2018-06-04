@@ -153,34 +153,6 @@ def get_biosound_properties(soundIn, fs=30000, plotme = False, lowFc = 50, highF
     return vocSelData, fpsd, psd, freqvar, f_freqvar, spectro, ampenv
 
 
-def test_random_forest(classifier_dataset = "", fs=25000, save_it = False, pca_model = ""):
-    
-    if classifier_dataset == "":
-        classifier_dataset = "/auto/tdrive/billewood/intan data/LbY6074/LbY6074__161215_145633_categorized_final.pkl"
-        
-        # Import the classifier dataset and format if necessary
-    with open(classifier_dataset,"r") as f:
-        classifier_df = pickle.load(f)
-
-    features = classifier_df.columns[range(classifier_df.shape[1]-2)]
-    classifier_df['is_train'] = np.random.uniform(0, 1, len(classifier_df)) <= .5
-    train, test = classifier_df[classifier_df['is_train']==True], classifier_df[classifier_df['is_train']==False] 
-   
-    target_names = np.unique(classifier_df['vocal_category'])
-    y = train['vocal_category'].cat.codes
-
-    clf = RandomForestClassifier(n_jobs=2)
-    clf.fit(train[features], y)
-
-#    non_pca_cols = range(data_df.shape[1]-classifier_features.shape[1])
-    predictions = target_names[clf.predict(test[features])]
-
-    pandas.crosstab(test['vocal_category'], predictions, rownames=['actual'], colnames=['preds'])
-
-
-    return test, predictions    
-    
-
 def classify_vocalizations_random_forest(test_df, classifier_model_name = "/auto/tdrive/billewood/intan data/autodetection files/vocalization_sorting_classifier.pkl"):
     """
     Sorts the vocalizations with a presaved classifier from a conglomeration of files.
@@ -391,7 +363,7 @@ def get_full_spectrograms(signal,vocal_periods,fs=30000):
 def get_partial_spectrograms(signal,vocal_periods,fs=30000, spect_length=50, spect_sample_rate=500):
     """Returns a np.array of flattened spectrograms given a audio file and a series of timestamps
     """
-    points = fs/1000*spect_length # len is in ms, convert to data points
+    points = fs//1000*spect_length # len is in ms, convert to data points
     min_freq=500
     max_freq=10000
     freq_spacing = 50
@@ -406,6 +378,7 @@ def get_partial_spectrograms(signal,vocal_periods,fs=30000, spect_length=50, spe
         myBioSound = BioSound(soundWave=np.squeeze(np.asarray(sound).astype(float))/maxAmp, fs=fs, calltype = "") # normalize to maximum amplitude
         # this creates the spectrogram, saved as myBioSound.spectro
         myBioSound.spectroCalc(spec_sample_rate=spect_sample_rate,freq_spacing=freq_spacing,min_freq=min_freq,max_freq=max_freq) # this creates the spectrogram, saved as myBioSound.spectro
+        print(myBioSound.spectro.shape)
         spectro_flat_array[i,:] = np.ravel(myBioSound.spectro)
         spectro_list.append(myBioSound.spectro)
     return spectro_flat_array, spectro_list
@@ -587,83 +560,6 @@ def return_df_for_sorting(audio_streams, vocal_periods, syllable_times, fs=30000
 
     return df, spectro_list
 
-def return_df_for_sorting_old(audio_streams, vocal_periods,fs=25000.0,minfreq=100,maxfreq=4800,spect_pca_filename="/auto/tdrive/billewood/intan data/autodetection files/PCA_model_for_reducing_spectrogram_dimensions.pkl",bird_name="generic id",onset_in_ms = 190,offset_in_ms = 300):
-    """
-    TO be deleted as soon as I finish rewriting with syllables taken into account (above)
-    onset_in_ms = 190 # .2 s added before onset, so start .19 into file
-    offset_in_ms = 300 # taking the lenght of a short syllable, approximately 110 ms
-    """
-    signal = np.squeeze(np.asarray(audio_streams[:,0])) # tutor mic not implemented yet, just grabbing a mic channel
-    new_df_data = list() #will transform into a pandas dataframe eventually
-    spectro_list = list() # contains the spectrograms for plotting later
-    print("Calculating biosound properties and populating a database, this may take a while.")
-# go through all vocal periods one by one
-    for i, pt in enumerate(vocal_periods):
-        if i == 0:
-            print("Working on sound ", i+1, " out of ", len(vocal_periods), ". ")
-        # elif np.mod(i,40) == 0:
-        #     print(',',i)
-        else: sys.stdout.write(','+str(i))
-
-        l,h = pt
-
-        sound = signal[l:h] - np.mean(signal[l:h],axis=0)
-        sound = lowpass_filter(sound.T, sample_rate=fs, cutoff_freq=maxfreq)
-        sound = highpass_filter(sound.T, fs, minfreq)
-        
-        new_biosound, spectro = get_biosound_properties_simple(sound, fs=fs)
-        new_df_data.append(new_biosound)
-        spectro_list.append(spectro)
-        
-    print("Finished most calculations, populating pandas database."    )
-
-    # load the pca and sort the spectrograms, I need to make this a function
-    with open(spect_pca_filename,"r") as file:
-        spect_pca = pickle.load(file)
-
-    onset,offset = np.int(np.round(onset_in_ms / 10)), np.int(np.round(offset_in_ms / 10)) # 10 ms bins in spectrograms
-    flat_spect_array = np.zeros([len(spectro_list), spectro_list[0].shape[0] * (offset-onset)])
-    for i, spect in enumerate(spectro_list):
-        if offset > spect.shape[1]:
-            post_pad = np.zeros([spect.shape[0], offset-spect.shape[1]])
-            spect = np.concatenate((spect[:,onset:], post_pad), axis=1)
-        else:
-            spect = spect[:,onset:offset]
-        flat_spect = zscore(np.ravel(spect))
-        flat_spect_array[i,:] = flat_spect
-    pca_array = spect_pca.transform(flat_spect_array)
-
-    # Combine the flattened PCAs with the biosound values
-    df = pandas.DataFrame(new_df_data) # the " * 1" makes it not a pointer
-    for i in range(pca_array.shape[1]):
-        name = "PCA column %d" %i
-        df[name] = pca_array[:,i]
-
-    if audio_streams.shape[1] > 1:
-        annotated_pts, pt_diffs, std_idx = separate_song_sources(audio_streams, vocal_periods, fs)
-        df['mic_diff'] = pt_diffs
-        df['segment start and stop'] = list(vocal_periods)
-        df['vocalizer'] = "tutor"
-        df.loc[std_idx,'vocalizer'] = "student"   
-    else:
-        print("Only one microphone channel found, can not determine mic_diff or vocalizer.")
-        df['mic_diff'] = [0 for jj in range(len(vocal_periods))]
-        df['segment start and stop'] = list(vocal_periods)
-        df['vocalizer'] = ["unknown" for jj in range(len(vocal_periods))]
-
-    df["bird id"] = [bird_name for ii in range(len(df))]
-    """
-     I believe the columns should be 
-     [u'F1', u'F2', u'F3', u'cvfund', u'duration', u'entropyspect', u'fund',
-       u'kurtosisspect', u'meanS', u'rms', u'sal', u'skewspect', u'stdS',
-       u'PCA column 0', u'PCA column 1', u'PCA column 2', u'PCA column 3',
-       u'PCA column 4', u'PCA column 5', u'PCA column 6', u'PCA column 7',
-       u'PCA column 8', u'PCA column 9', u'mic_diff']
-       Nah, now (3/20/18) I'm feeling like just duration plus 40 PCs...
-       """
-    return df, spectro_list
-
-
 
 def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=150, maxfreq=4800, return_big_df=True, spect_pca_filename = None, df_pca_filename=None, tutor_mic=0):
     """                 
@@ -801,69 +697,7 @@ def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=150, maxfreq=4
     return pca_df, spectro_list, big_df, spect_pca, df_pca #spectrogram list, for plotting spectrograms
 
 
-def test_find_vocal_periods(audio_stream_in, fs=30000, fuse_duration=0.01, shortest_duration=0.01, test_mode=True, amp_thresh=None, normalize_sound=False, normalize_thresh=None, lowpass = 2000, highpass = 5000, analog_signals = None):
-    """ 
-    This basically just implements a test mode for find_vocal_periods such that you can plot some thresholds that are being automatically generated. Generally just use find_vocal_periods
-    Bill 2/2018
-    
-        fuse_duration -         Gaps shorter than this will be fused into single syllables
-        shortest_duration -     Syllables shosrter than this will be ignored
-        test_mode -             Plots a bunch of things for helping determine ideal parameter values- in work
-        amp_thresh -            The amplitude threshold that you're going to be changing the most to get this all to work right
-        normalize_sound -       Divides the sound by the mean amplitude to normalize it, recommended to be True
-        normalize_thresh -      When normalize_sound=True all values below normalize_thresh first get set to 0- keeps the noise floor from being amplified.
-        lowpass_thresh and 
-        highpass_thresh -       It can be surprisingly useful to only search over a very limited bandwidth. Don't be afraid to try 6kHz to 9kHz or something
-        analog_signals -        Send a series of signals if you want your histograms to look any good
-    """
-    if test_mode:
-        # try lowpass filtering it to throw away "noise" in fast frequency correlations
-        if analog_signals:
-            
-            plt.figure()
-            plt.plot(amp_env[0])
-            plt.title("Raw Smoothed Amplitude Envelope- one of many")
-            plt.show()
-        else:
-            signal = np.copy(audio_stream_in)        
-            signal = highpass_filter(signal, fs, highpass)
-            signal = np.abs(lowpass_filter(signal, fs, lowpass))
-            amp_env = lowpass_filter(signal, fs, 100)
-            plt.figure()
-            plt.plot(amp_env)
-            plt.title("Raw Smoothed Amplitude Envelope")
-            plt.show()
-            
-            # normalize amplitude to near 1 in case this matters... make really low values just equal zero first to fix stretching        
-            low_vals = np.where(amp_env<normalize_thresh)
-            amp_env[low_vals] = 0
-            amp_env = (1/np.mean(amp_env)) * amp_env
-            plt.figure()
-            plt.plot(amp_env)
-            plt.title("normalized amplitude envelope")
-    
-            # for figuring out amp_thresh, or enter it in hardcoded on next cell
-            a = analogsignals[0]
-            plt.figure()
-            plt.hist([a for a in analogsignals[0] if a > 0], bins=100)
-            n, bins = np.histogram([a for a in analogsignals[0] if a > 0], bins=100)
-            amp_thresh = bins[np.argmax(n)+2] 
-            print("Amplitude threshold is: {}".format(amp_thresh))
-
-    syll_times, _ = find_vocal_periods(
-        audio_stream_in=audio_stream_in,
-        fs=fs,
-        fuse_duration=fuse_duration,
-        shortest_duration=shortest_duration,
-        amp_thresh=amp_thresh,
-        normalize_sound=normalize_sound,
-        normalize_thresh=normalize_thresh,
-        lowpass=lowpass,
-        highpass=highpass)
-
-    return syll_times, amp_thresh
-
-def get_amp_thresh(audio_stream_in, fs=None, lowpass = 5000, highpass = 2000):
+def get_amp_thresh(audio_stream_in, fs=None, lowpass = None, highpass = None):
     """
     Calculate amplitude waveform over a large recording and calculate the mean. That's all.
     I use to calculate an amplitude threshold for a whole recording period, and then pass it to each individual segment.
@@ -875,10 +709,7 @@ def get_amp_thresh(audio_stream_in, fs=None, lowpass = 5000, highpass = 2000):
 
     # First we try to find the amplitude envelope. We only care about vocal sounds,
     # so we high-pass filter higher than normal.
-    streams_filtered_env = np.zeros(np.shape(audio_stream))
-    streams_filtered_env = highpass_filter(audio_stream, fs, highpass)
-    streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env, fs, lowpass)) # Rectify and lowpass filter
-    streams_filtered_env = lowpass_filter(streams_filtered_env, fs, 100) # We essentially have an amplitude trace now # was 100
+    streams_filtered_env = get_amplitude_envelope(audio_stream, fs)
 
     audio_stream = streams_filtered_env
     # Simply threshold against the mean of the signal. This works surprisingly well.
@@ -888,6 +719,13 @@ def get_amp_thresh(audio_stream_in, fs=None, lowpass = 5000, highpass = 2000):
 
     return amp_thresh
 
+def get_amplitude_envelope(sound, fs=30000.0, lowpass = 5000.0, highpass = 2000.0):
+    streams_filtered_env = np.zeros(np.shape(sound))
+    streams_filtered_env = highpass_filter(sound, fs, highpass)
+    streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env, fs, lowpass)) # Rectify and lowpass filter
+    streams_filtered_env = lowpass_filter(streams_filtered_env, fs, 100) # We essentially have an amplitude trace now # was 100
+    return streams_filtered_env
+
 def return_syllable_times(audio_streams, vocal_periods, fs, amp_thresh=None):
     """
     return_syllable_times(audio_streams, vocal_periods, fs, amp_thresh=None):
@@ -895,6 +733,8 @@ def return_syllable_times(audio_streams, vocal_periods, fs, amp_thresh=None):
     A helper function that just calls find_vocal_periods with particular paramaters to return syllable times for all the different sound segments.
     Also returns vocal_periods of only those segments that had syllables found (others are likely trash)
     Also removes any dc offset if it exists:     audio_streams = audio_streams-np.mean(audio_streams)
+    
+    It may be fairly important to send it amp_thresh, otherwise segments which are composed of only one syllable may not get detected properly
 
     syllables, thresh = find_vocal_periods(sound, fs=fs, amp_thresh=amp_thresh, fuse_duration=.005, shortest_duration=.02,verbose=False)
 
@@ -905,18 +745,23 @@ def return_syllable_times(audio_streams, vocal_periods, fs, amp_thresh=None):
     audio_streams = audio_streams-np.mean(audio_streams)
     if amp_thresh==None:
         amp_thresh = get_amp_thresh(audio_streams, fs=fs)
-    good_index = list()
     syllable_list = list()
     # try sorting syllables
-    for index, period in enumerate(vocal_periods):
+    for period in vocal_periods:
         l,h = period
         sound = audio_streams[l:h]
+
+# For Future! TO DO
+    # for segment in block.segments:
+    #     sound = segment.analogsignals[0]
+    #     segment.t_start.item()
+
         syllables, thresh = find_vocal_periods(sound, fs=fs, amp_thresh=amp_thresh, fuse_duration=.005, shortest_duration=.02,verbose=False)
         if len(syllables)>0:
             syllable_list.append(syllables)
-            good_index.append(index)
-    vocal_periods = vocal_periods[good_index]
-    return syllable_list, vocal_periods
+        else:
+            syllable_list.append(np.zeros((0, 2)))
+    return syllable_list
 
 def get_cluster_quality(points, cluster_identities, num_neighbors = 5):
     """ A quick way to assess how good your clusters are.
@@ -931,11 +776,12 @@ def get_cluster_quality(points, cluster_identities, num_neighbors = 5):
     # use neighbor_clusters to determine which clusters are good and which are bad...
     # say if there are more than 5 points which have nearest neighbors in 2 clusters?
     cluster_quality = list()
-    for clust in np.unique(cluster_identities): # 
+    cluster_ids = np.unique(cluster_identities)
+    for clust in cluster_ids: # 
         x = np.where(cluster_identities==clust)[0]
         cluster_quality.append(len(np.where(neighbor_clusters[x] > 1)[0]))
 
-    return cluster_quality
+    return cluster_quality, cluster_ids
 
 
 def get_color(labels):
@@ -980,11 +826,9 @@ def find_vocal_periods(audio_stream_in, fs=None, fuse_duration=0.2, shortest_dur
 
     # audio_stream = np.squeeze(audio_stream_in)
     # First we try to find the amplitude envelope. We only care about vocal sounds,
-    # so we high-pass filter higher than normal.
-    streams_filtered_env = np.zeros(np.shape(audio_stream_in))
-    streams_filtered_env = highpass_filter(audio_stream_in, fs, highpass)
-    streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env, fs, lowpass)) # Rectify and lowpass filter
-    streams_filtered_env = lowpass_filter(streams_filtered_env, fs, 100) # We essentially have an amplitude trace now # was 100
+
+    streams_filtered_env =  get_amplitude_envelope(audio_stream_in, fs)
+
     # normalize amplitude to near 1 in case this matters... make really low values just equal zero first to fix stretching
     if normalize_sound:
         if normalize_thresh is None: # autocalculate a threshold based on histogram, a little sketchy- should be checked if using this
