@@ -791,7 +791,7 @@ def get_color(labels):
     return colors
 
 
-def find_vocal_periods(audio_stream_in, fs=None, fuse_duration=0.2, shortest_duration=0.08, verbose=True, amp_thresh=None, normalize_sound=False, normalize_thresh=0.006, lowpass = 5000, highpass = 2000):
+def find_vocal_periods(audio_stream_in, fs=None, fuse_duration=0.5, shortest_duration=0.5, verbose=True, amp_thresh=None, normalize_sound=False, normalize_thresh=0.006, lowpass = 5000, highpass = 2000):
     """
     Given an audio stream, attempts to detect all segments of noise that might be bird calls of
     some sort.
