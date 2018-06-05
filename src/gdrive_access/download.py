@@ -52,7 +52,7 @@ def gdrive_listdir(dir):
     }).GetList()
 
 
-def download_session(session_id, pyoperant_files=tuple()):
+def download_session(session_id, save_to=None, pyoperant_files=tuple()):
     """Download a recording session data into the proper location
 
     Creates directories in this structure if they don't exist yet
@@ -69,8 +69,11 @@ def download_session(session_id, pyoperant_files=tuple()):
 
     bird_name = session_id.split("_")[0]
 
-    bird_dir = os.path.join(config.DATADIR, "birds", bird_name)
-    session_dir = os.path.join(bird_dir, session_id)
+    if save_to is None:
+        bird_dir = os.path.join(config.DATADIR, "birds", bird_name)
+        session_dir = os.path.join(bird_dir, session_id)
+    else:
+        session_dir = save_to
     raw_dir = os.path.join(session_dir, "raw")
     stimuli_dir = os.path.join(session_dir, "stimuli")
 
@@ -107,7 +110,7 @@ def download_session(session_id, pyoperant_files=tuple()):
         print("Downloading {} to {}".format(csv_file["title"], raw_dir))
         download_file(csv_file, os.path.join(raw_dir, csv_file["title"]))
         with open(os.path.join(raw_dir, csv_file["title"]), "rb") as csvfile:
-            csv_string += csvfile.read()
+            csv_string += csvfile.read().decode("utf-8")
 
     # We can load the csvs and check which stimulus directories to download
     if pyoperant_files:

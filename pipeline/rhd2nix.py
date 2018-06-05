@@ -13,8 +13,10 @@ import luigi
 from neo.io import RHDIO, NixIO
 
 from utils import session_basename
+from setup import DownloadSession
 
 
+'''
 class ValidateInputData(luigi.Task):
 
     session_dir = luigi.Parameter()
@@ -41,6 +43,7 @@ class ValidateInputData(luigi.Task):
 
     def run(self):
         pass
+'''
 
 
 class Rhd2Nix(luigi.Task):
@@ -48,7 +51,7 @@ class Rhd2Nix(luigi.Task):
     session_dir = luigi.Parameter()
 
     def requires(self):
-        return ValidateInputData(self.session_dir)
+        return DownloadSession(self.session_dir)
 
     def output(self):
         segmentation_dir = os.path.join(self.session_dir, "segmentation")
@@ -59,7 +62,10 @@ class Rhd2Nix(luigi.Task):
         return luigi.LocalTarget(os.path.join(segmentation_dir, nix_filename))
 
     def run(self):
-        rhd = RHDIO(self.input()[0].path)
+        # TODO (kevin): When I fix the validate step above
+        input_directory = self.input().path
+        rhd_file = glob.glob(os.path.join(input_directory, "*.rhd"))[0]
+        rhd = RHDIO(rhd_file)
         nix = NixIO(self.output().path)
 
         # check for if pyoperant file is needed, warn otherwise

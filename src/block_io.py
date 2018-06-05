@@ -2,6 +2,7 @@ try:
     import cPickle as pickle
 except ImportError:
     import pickle
+import yaml
 
 
 def save_block(filename, block):
@@ -13,3 +14,10 @@ def load_block(filename):
     with open(filename, "rb") as datafile:
         block = pickle.load(datafile)
     block.create_relationship(force=True, append=True, recursive=True)
+    return block
+
+
+def load_yaml(filename):
+    with open(filename, "r") as datafile:
+        data = yaml.load(datafile.read())
+    return data

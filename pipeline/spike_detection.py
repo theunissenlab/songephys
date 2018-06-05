@@ -12,7 +12,7 @@ import luigi
 import matplotlib.pyplot as plt
 
 from filter_signals import FilterElectrodeSignals
-from preproephys import fix_chIndex, extract_spikes, drop_electrode_traces
+from preproephys import fix_chIndex, extract_spikes, drop_electrode_signals
 
 from sklearn.manifold import TSNE
 from spikes.write_neo import write_neo
@@ -54,62 +54,7 @@ class ExtractSpikes(luigi.Task):
 
         fix_chIndex(block)
         extract_spikes(block)
-        drop_electrode_traces(block)
+        drop_electrode_signals(block)
 
         with open(self.output().path, "wb") as output_file:
             pickle.dump(block, output_file, protocol=4)
-
-
-class CollectWaveforms(luigi.Task):
-
-    session_dir = luigi.Parameter()
-
-    def output(self):
-        sorting_dir = os.path.join(self.session_dir, "spikes")
-
-        return [
-            luigi.LocalTarget(
-                os.path.join(sorting_dir, "spike_waveforms-e{}.npy".format(electrode))
-            ) for electrode in range(16)
-        ]
-            
-    def requires(self):
-        return ExtractSpikes(self.session_dir)
-
-    def run(self):
-        with open(self.input().path, "rb") as input_file:
-            block = pickle.load(input_file)
-        block.create_relationship(force=True, append=True, recursive=True)
-
-        for i, output in enumerate(self.output()):
-            # a hack to get the electrode with index i
-            unit = next(
-                channel_index.units[0]
-                for channel_index in block.channel_indexes
-                if channel_index.name == "Amp Elec {}".format(i)
-            )
-
-            waveforms, times = collect_waveforms(
-                    unit.spiketrains,
-                    force_single_peak=False
-            )
-            waveforms = waveforms[:, config.WF_SLICE]
-            np.save(output.path, {"waveforms": waveforms, "times": times})
-
-
-class MergeThresholdedSessions(luigi.Task):
-
-    session_dirs = luigi.Parameter()
-
-    def output(self):
-        # Create a new directory that has all three unsorted blocks
-        pass
-
-    def requires(self):
-        return [
-            CollectWaveforms(session_dir=session_dir)
-            for session_dir in self.session_dirs
-        ]
-
-    def run(self):
-        pass

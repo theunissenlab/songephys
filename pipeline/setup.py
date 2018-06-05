@@ -14,33 +14,33 @@ import config
 from gdrive_access import download
 from stimuli import convert_pyoperant_csvs
 
+from utils import session_basename
+
 
 class DownloadSession(luigi.Task):
     
-    session_name = luigi.Parameter()
+    session_dir = luigi.Parameter()
     pyoperants = luigi.ListParameter(default=[])
     notes = luigi.Parameter(default=None)
 
     def output(self):
+        self.session_name = session_basename(self.session_dir)
         bird_name = self.session_name.split("_")[0]
-        output_directory = os.path.join(
-                config.DATADIR,
-                "birds",
-                bird_name,
-                self.session_name,
-                "raw")
+        output_directory = os.path.join(self.session_dir, "raw")
 
         return luigi.LocalTarget(output_directory)
 
     def run(self):
         download.download_session(
             self.session_name,
-            self.pyoperants)
+            save_to=self.session_dir,
+            pyoperant_files=self.pyoperants)
         if self.notes:
             with open(os.path.join(self.output().path, "NOTES"), "a+") as notefile:
                 notefile.write(self.notes)
 
 
+'''
 class DownloadSessions(luigi.Task):
 
     file_summary = luigi.Parameter()
@@ -56,6 +56,7 @@ class DownloadSessions(luigi.Task):
 
     def run(self):
         pass
+'''
 
 
 class CombineTrialMetadata(luigi.Task):
@@ -63,7 +64,7 @@ class CombineTrialMetadata(luigi.Task):
     session_dir = luigi.Parameter()
 
     def requires(self):
-        return DownloadSession(os.path.basename(self.session_dir))
+        return DownloadSession(self.session_dir)
 
     def output(self):
         segmentation_dir = os.path.join(self.session_dir, "segmentation")
