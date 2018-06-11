@@ -378,15 +378,49 @@ def get_partial_spectrograms(signal,vocal_periods,fs=30000, spect_length=50, spe
         myBioSound = BioSound(soundWave=np.squeeze(np.asarray(sound).astype(float))/maxAmp, fs=fs, calltype = "") # normalize to maximum amplitude
         # this creates the spectrogram, saved as myBioSound.spectro
         myBioSound.spectroCalc(spec_sample_rate=spect_sample_rate,freq_spacing=freq_spacing,min_freq=min_freq,max_freq=max_freq) # this creates the spectrogram, saved as myBioSound.spectro
-        print(myBioSound.spectro.shape)
         spectro_flat_array[i,:] = np.ravel(myBioSound.spectro)
         spectro_list.append(myBioSound.spectro)
     return spectro_flat_array, spectro_list
 
+def get_partial_spectrograms_segments(vocal_periods, segments, fs=30000, spect_length=50, spect_sample_rate=500):
+    """Returns a np.array of flattened spectrograms given a audio file and a series of timestamps. Designed for use after segments have been created.
+        Default 50 ms of spectrogram returned (spect_length). Not sure it will work with other values as of now.
+    """
+    points = fs//1000*spect_length # len is in ms, convert to data points
+    min_freq=500
+    max_freq=10000
+    freq_spacing = 50
+    num_freq_bins = ((max_freq-min_freq)/freq_spacing)-8 # The 8 is because you have less frequency bins then expected...
+    #let's count how many rows we need...
+    rows = 0
+    for i in np.arange(len(vocal_periods)):
+        num_sylls = vocal_periods[i].shape[0]
+        rows = rows + num_sylls
+    spectro_flat_array = np.zeros([rows, np.int((spect_length/1000.0*spect_sample_rate)*num_freq_bins)])
+    spectro_list = list()
+    index = 0
+    for i,period in enumerate(vocal_periods):   
+        sound = np.asarray(segments[i].analogsignals[0][:,0])
+        sound = sound - np.mean(sound)
+        for syllable in period:
+            l,h = syllable
+            l  = l 
+            h = l + points 
+            signal = sound[l:h]
+            maxAmp = np.asarray(np.abs(signal).max())      
+            myBioSound = BioSound(soundWave=np.squeeze(np.asarray(signal).astype(float))/maxAmp, fs=fs, calltype = "") # normalize to maximum amplitude
+            # this creates the spectrogram, saved as myBioSound.spectro
+            myBioSound.spectroCalc(spec_sample_rate=spect_sample_rate,freq_spacing=freq_spacing,min_freq=min_freq,max_freq=max_freq) # this creates the spectrogram, saved as myBioSound.spectro
+            spectro_flat_array[index,:] = np.ravel(myBioSound.spectro)
+            spectro_list.append(myBioSound.spectro)
+            index+=1
+    return spectro_flat_array, spectro_list
+
+
 def get_spectrogram(sound,fs=30000):
     myBioSound = BioSound(soundWave=np.squeeze(np.asarray(sound).astype(float))/(np.asarray(np.abs(sound).max())), fs=fs, calltype = "") # normalize to maximum amplitude
     myBioSound.spectroCalc(spec_sample_rate=500,freq_spacing=50,min_freq=50,max_freq=10000) # this creates the spectrogram, saved as myBioSound.spectro
-    return myBioSound.spectro
+    return myBioSound.to, myBioSound.fo, myBioSound.spectro
 
 def return_df_for_sorting(audio_streams, vocal_periods, syllable_times, fs=30000.0,minfreq=100,maxfreq=4800,spect_pca_filename="/auto/tdrive/billewood/intan data/autodetection files/PCA_spectrogram_model_4_17.pkl",bird_name="generic id"):
     """
@@ -790,6 +824,17 @@ def get_color(labels):
     print(labels/n_labels)
     return colors
 
+def find_syllables(audio_stream_in, fs=None, amp_thresh=None):
+    """Calls find_vocal_periods with set paramaters for returning syllables
+    syllables, thresh = autodetect.find_vocal_periods(audio_stream_in, fs=fs, fuse_duration=.005, shortest_duration=.02,verbose=False)
+
+    """
+
+    if fs==None:
+        print("Warning it's best to pass the sampling rate, FS set to 30kHz")
+        fs = 30000
+    syllables, thresh = find_vocal_periods(audio_stream_in, fs=fs, fuse_duration=.005, shortest_duration=.02,verbose=False, amp_thresh=amp_thresh)
+    return syllables, thresh
 
 def find_vocal_periods(audio_stream_in, fs=None, fuse_duration=0.5, shortest_duration=0.5, verbose=True, amp_thresh=None, normalize_sound=False, normalize_thresh=0.006, lowpass = 5000, highpass = 2000):
     """
