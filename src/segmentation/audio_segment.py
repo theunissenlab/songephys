@@ -189,8 +189,8 @@ def generate_vocal_periods_dicts(audio, sampling_rate):
             "vocalization_type": "unknown",
             "vocalizer": "unknown",
             "playback_file": None,
-            "start_time": start_time * pq.s,
-            "duration": (stop_time - start_time) * pq.s
+            "start_time": (start_time - config.PAD_SONG_BEFORE) * pq.s,
+            "duration": (stop_time - start_time + config.PAD_SONG_BEFORE + config.PAD_SONG_AFTER) * pq.s
         })
 
     return seg_dicts
