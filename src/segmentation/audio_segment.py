@@ -470,7 +470,12 @@ def segment(block, segment_dicts):
 
         for signal in old_segment.analogsignals:
             stop_time = end_time if end_time <= signal.t_stop else None
-            sliced_signal = signal.time_slice(start_time, stop_time)
+            try:
+                sliced_signal = signal.time_slice(start_time, stop_time)
+            except:
+                import pdb
+                pdb.set_trace()
+
             for channel_index in block.channel_indexes:
                 # TODO: preserve the channel number (e.g. 8 instead of 0)
                 if channel_index.name in signal.name:  # Amplifier or Board ADC

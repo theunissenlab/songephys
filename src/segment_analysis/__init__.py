@@ -13,6 +13,7 @@ from soundsig.signal import highpass_filter, lowpass_filter
 
 import config
 
+from segmentation import autodetect
 from spikes.utils import bin_spikes
 from spikes.psth import conv, exponential_convolver, gaussian_convolver
 from spikes.plotting import raster
@@ -382,7 +383,13 @@ class MultiSegment(object):
 
         return np.array(wfs)
 
-    def get_analogsignal(self, seg_idx, signal=0, channel=None, original_times=False):
+    def get_analogsignal(self,
+            seg_idx,
+            signal=0,
+            channel=None,
+            original_times=False,
+            t_start=None,
+            t_stop=None):
         """Return timeseries data from a segment's analogsignals, and the time axis
 
         Params
@@ -396,6 +403,10 @@ class MultiSegment(object):
         original_times (bool, default=False)
             If True, the time array will return times corresponding to their time during the session.
             If False, the time array will align the defined offset times at 0.0.
+        t_start (float, default=None):
+            Time in to start cutting the analogsignal (default to start of segment)
+        t_stop (float, default=None):
+            Time in to stop cutting analogsignal (default to end of segment)
 
         Returns
         t_arr (np.ndarray, (n_timestpes))
@@ -444,6 +455,13 @@ class MultiSegment(object):
         if channel is not None:
             result = result[:, channel]
 
+        if t_start is not None:
+            result = result[t_arr >= t_start]
+            t_arr = t_arr[t_arr >= t_start]
+        if t_stop is not None:
+            result = result[t_arr < t_stop]
+            t_arr = t_arr[t_arr < t_stop]
+
         return t_arr, result, sampling_rate
 
     def get_amplitude_envelope(self, seg_idx, signal=0, channel=None, original_times=False):
@@ -453,11 +471,15 @@ class MultiSegment(object):
                 original_times=original_times)
 
         result = result - np.mean(result, axis=0)
-        result = highpass_filter(result.T, sampling_rate, 1000.0).T
+        return t_arr, autodetect.get_amplitude_envelope(result), sampling_rate
 
-        return t_arr, lowpass_filter(np.abs(result).T, sampling_rate, 100.0).T, sampling_rate
-
-    def get_spectrogram(self, seg_idx, signal=0, channel=0, align_to_segment=None):
+    def get_spectrogram(self,
+            seg_idx,
+            signal=0,
+            channel=0,
+            align_to_segment=None,
+            t_start=None,
+            t_stop=None):
         """Generate a spectrogram of a segment's signal
 
         Params
@@ -472,6 +494,10 @@ class MultiSegment(object):
             If not given, will use the MultiSegment's default alignment (aligned at t=0.0)
             If given, sets time axis to the original time axis of given segment
             (the index is relative to the segments in MultiSegment, not index of segment in the neo block)
+        t_start (float, default=None):
+            Time in to start cutting the analogsignal (default to start of segment)
+        t_stop (float, default=None):
+            Time in to stop cutting analogsignal (default to end of segment)
 
         Returns
         t_spec (np.ndarray, (n_timestpes)):
@@ -502,16 +528,23 @@ class MultiSegment(object):
         else:
             original_times = False
 
-        _, signal_data, sampling_rate = self.get_analogsignal(seg_idx, signal=signal, channel=channel)
-
+        _, signal_data, sampling_rate = self.get_analogsignal(
+                seg_idx,
+                signal=signal,
+                channel=channel,
+                t_start=t_start,
+                t_stop=t_stop)
         t_spec, f_spec, spec, rms = spectrogram(
-            signal_data - np.mean(signal_data),
-            sampling_rate,
-            1000.0,
-            50.0,
-            min_freq=0,
-            max_freq=10000,
-            nstd=6)
+                signal_data - np.mean(signal_data),
+                sampling_rate,
+                1000.0,
+                50.0,
+                min_freq=250,
+                max_freq=10000,
+                nstd=6)
+
+        if t_start is not None:
+            t_spec += t_start
 
         if not original_times:
             t_spec -= self.offsets[seg_idx]

@@ -14,7 +14,7 @@ from neo.core import AnalogSignal, Epoch
 from sklearn.cluster import KMeans
 import quantities as pq
 
-
+from preproephys import get_mask
 from soundsig.signal import lowpass_filter, highpass_filter
 
 import config
@@ -207,25 +207,25 @@ def get_noise_floor(signal):
         peaks = peaks[:, None]
         
     # cluster extrema on their magnitude and the magnitude of the first derivative
-    try:
-        labels = kmeans.fit_predict(np.hstack([np.abs(peaks), magnitude]))
-    except:
-        # FIXME (kevin): this might error... its a very costly error so need to figure out what triggers it
-        import pdb
-        pdb.set_trace()
+    labels = None
+    tries = 0
+    # FIXME (kevin): I'm not sure the best way to deal with the fact
+    # that this sometimes errors but since an error
+    # wastes up to 10 hours of processing just retry it over and over
+    # until it works...
+    while tries < 10:
+        try:
+            labels = kmeans.fit_predict(np.hstack([np.abs(peaks), magnitude]))
+        except:
+            tries += 1
+        else:
+            break
 
     # choose the baseline noise cluster as the one with the smaller max amplitude
     base_cluster_idx = np.argmin([np.max(peaks[labels == label]) for label in np.unique(labels)])
     base_cluster = peaks[labels == base_cluster_idx]
 
     return np.median(base_cluster)
-
-
-def get_mask(signal, ranges):
-    total = np.zeros(len(signal.times)).astype(np.bool)
-    for t_start, t_stop in ranges:
-        total = total | ((signal.times > t_start) & (signal.times < t_stop))
-    return total
 
 
 def detect_noisy_epochs(clean_signal, predicted_signal, threshold=3):

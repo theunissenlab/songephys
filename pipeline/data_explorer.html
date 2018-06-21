@@ -5,6 +5,8 @@
 <table>
   <tr>
     <th>File</th>
+    <th>Downloaded</th>
+    <th>Segmented</th>
     <th>Filtered</th>
     <th>Sorted</th>
     <th>Session Path</th>
@@ -12,15 +14,22 @@
 		<th>Units</th>
   </tr>
 
-  {% for file in files %}
+  {% for site, sessions in files.items() %}
   <tr>
-    <td>{{ file.str }}</td>
-    <td class="{{ 'green' if file.filtered_date and file.filtered_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.filtered_date | datetime("date") }}</td>
-    <td class="{{ 'green' if file.sorted_date and file.sorted_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.sorted_date | datetime("date") }}</td>
-    <td>{{ file.path }}</td>
-    <td>{{ file.notes }}</td>
-    <td class="{{ 'green' if file.units > 0 }}">{{ file.units }}</td>
+    <td class="sitetitle"> {{ site }} </td>
   </tr>
+    {% for file in sessions %}
+    <tr>
+      <td>{{ file.str }}</td>
+      <td class="{{ 'green' if file.downloaded_date and file.downloaded_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.downloaded_date | datetime("date") }}</td>
+      <td class="{{ 'green' if file.segmented_date and file.segmented_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.segmented_date | datetime("date") }}</td>
+      <td class="{{ 'green' if file.filtered_date and file.filtered_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.filtered_date | datetime("date") }}</td>
+      <td class="{{ 'green' if file.sorted_date and file.sorted_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.sorted_date | datetime("date") }}</td>
+      <td>{{ file.path }}</td>
+      <td>{{ file.notes }}</td>
+      <td class="{{ 'green' if file.units > 0 }}">{{ file.units }}</td>
+    </tr>
+    {% endfor %}
   {% endfor %}
 
 </table>
@@ -30,6 +39,11 @@
 
 .green {
   background: green;
+  color: white;
+}
+
+.sitetitle {
+  background: #888888;
   color: white;
 }
 

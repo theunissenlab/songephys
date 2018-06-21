@@ -755,9 +755,9 @@ def get_amp_thresh(audio_stream_in, fs=None, lowpass = None, highpass = None):
 
 def get_amplitude_envelope(sound, fs=30000.0, lowpass = 5000.0, highpass = 2000.0):
     streams_filtered_env = np.zeros(np.shape(sound))
-    streams_filtered_env = highpass_filter(sound, fs, highpass)
-    streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env, fs, lowpass)) # Rectify and lowpass filter
-    streams_filtered_env = lowpass_filter(streams_filtered_env, fs, 100) # We essentially have an amplitude trace now # was 100
+    streams_filtered_env = highpass_filter(sound.T, fs, highpass).T
+    streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env.T, fs, lowpass).T) # Rectify and lowpass filter
+    streams_filtered_env = lowpass_filter(streams_filtered_env.T, fs, 100).T # We essentially have an amplitude trace now # was 100
     return streams_filtered_env
 
 def return_syllable_times(audio_streams, vocal_periods, fs, amp_thresh=None):

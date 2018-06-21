@@ -15,6 +15,8 @@ import datetime
 import os
 import glob
 
+from block_io import load_yaml
+
 
 app = Flask(__name__, template_folder=".")
 app.config["TEMPLATE_AUTO_RELOAD"] = True
@@ -35,6 +37,22 @@ app.jinja_env.filters["datetime"] = format_datetime
 
 def modified_at(filename):
     return datetime.datetime.fromtimestamp(os.stat(filename).st_mtime)
+
+
+def check_downloaded(session):
+    matches = glob.glob(os.path.join(session, "raw", "*.rhd"))
+    if not len(matches):
+        return None
+    else:
+        return modified_at(matches[0])
+
+
+def check_segmented(session):
+    matches = glob.glob(os.path.join(session, "segmentation", "*-segmented.pkl"))
+    if not len(matches):
+        return None
+    else:
+        return modified_at(matches[0])
     
 
 def check_filtered(session):
@@ -44,8 +62,16 @@ def check_filtered(session):
     else:
         return modified_at(matches[0])
 
+'''
 def check_sorted(session):
     matches = glob.glob(os.path.join(session, "spikes", "*-sorted.pkl"))
+    if not len(matches):
+        return None
+    else:
+        return modified_at(matches[0])
+'''
+def check_sorted(site):
+    matches = glob.glob(os.path.join(site, "sorted.pkl"))
     if not len(matches):
         return None
     else:
@@ -59,32 +85,48 @@ def check_summaries(session):
 
 def fetch_files():
     birddir = os.path.join(config.DATADIR, "birds", "*")
-    sessions = glob.glob(os.path.join(birddir, "*__*_*"))
 
-    files = []
-    for session in sorted(sessions):
-        file_info = {}
-        file_parts = filter(None, os.path.basename(session).split("_"))
-        bird, date, time = file_parts
+    site_files = {}
 
-        date = "{}/{}/{}".format(date[2:4], date[4:], date[:2])
-        time = "{}:{}".format(time[:2], time[2:4])
+    for bird in sorted(glob.glob(birddir)):
+        for site_dir in sorted(glob.glob(os.path.join(bird, "sites", "*_*_*"))):
+            try:
+                session_info = load_yaml(os.path.join(site_dir, "sessions.yaml"))
+            except:
+                print("Can't load", os.path.join(site_dir, "sessions.yaml"))
+                continue
+            sessions = [s["id"] for s in session_info["sessions"]]
 
-        file_info["str"] = "{}, {}, {}".format(bird, date, time)
-        file_info["filtered_date"] = check_filtered(session)
-        file_info["sorted_date"] = check_sorted(session)
-        file_info["path"] = session
-        file_info["units"] = check_summaries(session)
+            # sessions = glob.glob(os.path.join(birddir, "*__*_*"))
 
-        try:
-            with open(os.path.join(session, "notes")) as notefile:
-                file_info["notes"] = notefile.read()
-        except IOError:
-            file_info["notes"] = ""
+            site_files[os.path.basename(site_dir)] = []
+            for session_name in sorted(sessions):
+                session = os.path.join(bird, "sessions", session_name)
+                file_info = {}
 
-        files.append(file_info)
-    
-    return files
+                file_parts = filter(None, session_name.split("_"))
+                bird_name, date, time = file_parts
+
+                date = "{}/{}/{}".format(date[2:4], date[4:], date[:2])
+                time = "{}:{}".format(time[:2], time[2:4])
+
+                file_info["str"] = "{}, {}, {}".format(bird_name, date, time)
+                file_info["downloaded_date"] = check_downloaded(session)
+                file_info["segmented_date"] = check_segmented(session)
+                file_info["filtered_date"] = check_filtered(session)
+                file_info["sorted_date"] = check_sorted(site_dir)
+                file_info["path"] = session
+                file_info["units"] = check_summaries(site_dir)
+
+                try:
+                    with open(os.path.join(session, "notes")) as notefile:
+                        file_info["notes"] = notefile.read()
+                except IOError:
+                    file_info["notes"] = ""
+
+                site_files[os.path.basename(site_dir)].append(file_info)
+
+    return site_files
 
 
 @app.route("/")

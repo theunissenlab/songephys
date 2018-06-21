@@ -19,9 +19,15 @@ import matplotlib.pyplot as plt
 # Theunissen Lab dependencies.
 from neo.core import AnalogSignal, SpikeTrain, Unit, ChannelIndex
 from soundsig.signal import lowpass_filter, highpass_filter, resample_signal, linear_filter1D
-from filtering.filters import get_mask
 
 import config
+
+
+def get_mask(signal, ranges):
+    total = np.zeros(len(signal.times)).astype(np.bool)
+    for t_start, t_stop in ranges:
+        total = total | ((signal.times > t_start) & (signal.times < t_stop))
+    return total
 
 
 # Function to divide segment signals into low pass and high pass signals.
@@ -306,6 +312,7 @@ def extract_spikes_from_signal(signal,
         threshold_std=4,
         limit_std=None,
         spike_width=20,
+        upward_gain=2,
         min_spacing=1,
         noise_mask=None
         ):
@@ -318,28 +325,44 @@ def extract_spikes_from_signal(signal,
     noise_mask = noise_mask if noise_mask is not None else np.zeros(len(signal)).astype(np.bool)
 
     std = np.std(signal[np.invert(noise_mask)])
-    threshold = - threshold_std * std
+    threshold = threshold_std * std
 
     spike_indices = []
     spike_waveforms = []
-    mask = np.where((signal < threshold) & np.invert(noise_mask))[0]
-    edges = np.where(np.diff(mask) > min_spacing)[0]
+    downward_mask = np.where(np.logical_and(
+        signal <= -threshold,
+        np.invert(noise_mask)
+    ))[0]
+    upward_mask = np.where(np.logical_and(
+        signal >= 2 * threshold,
+        np.invert(noise_mask)
+    ))[0]
 
-    start_ind = 0
-    for end_ind in edges:
-        spike_ind = np.argmin(signal[mask[start_ind]:mask[end_ind]+1])
-        spike_ind = mask[start_ind] + np.int(spike_ind)
-        if limit_std and signal[spike_ind] < - limit_std * std:
-            pass
-        elif spike_ind - spike_width < 0:
-            # don't include spikes that are too close to the beginning
-            pass
-        elif spike_ind + spike_width > len(signal):
-            # don't include spikes that are too close to the end
-            pass
-        else:
-            spike_indices.append(spike_ind)
-        start_ind = end_ind + 1
+    downward_edges = np.where(np.diff(downward_mask) > min_spacing)[0]
+    upward_edges = np.where(np.diff(upward_mask) > min_spacing)[0]
+
+    for direction, edges in [("down", downward_edges), ("up", upward_edges)]:
+        start_ind = 0
+        for end_ind in edges:
+            if direction is "down":
+                mask = downward_mask
+                spike_ind = np.argmin(signal[mask[start_ind]:mask[end_ind]+1])
+            elif direction is "up":
+                mask = upward_mask
+                spike_ind = np.argmax(signal[mask[start_ind]:mask[end_ind]+1])
+
+            spike_ind = mask[start_ind] + np.int(spike_ind)
+            if limit_std and signal[spike_ind] < - limit_std * std:
+                pass
+            elif spike_ind - spike_width < 0:
+                # don't include spikes that are too close to the beginning
+                pass
+            elif spike_ind + spike_width > len(signal):
+                # don't include spikes that are too close to the end
+                pass
+            else:
+                spike_indices.append(spike_ind)
+            start_ind = end_ind + 1
 
     spike_indices = np.array(spike_indices).astype(np.int)
 

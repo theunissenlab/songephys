@@ -21,7 +21,7 @@ from spikes.sorting.preprocess import collect_waveforms, sort_spikes_on_unit
 import suss.io
 from suss.core import SpikeDataset
 try:
-    from suss.sort import sexy_sort as sort
+    from suss.sort import sort_v3 as sort
 except:
     from suss.sort import default_sort as sort
 
@@ -94,7 +94,7 @@ class SortSpikes(luigi.Task):
 
     def run(self):
         dataset = suss.io.read_pickle(self.input()[self.electrode].path)
-        result = sort(dataset.times, dataset.waveforms, dataset.sample_rate)[-1]
+        result = sort(dataset.times, dataset.waveforms, dataset.sample_rate)
         suss.io.save_pickle(self.output().path, result)
 
 
@@ -183,39 +183,5 @@ class SortSite(luigi.Task):
 
                 elec_channels[elec_id].units.append(new_unit)
                 new_unit.channel_index = elec_channels[elec_id]
-
-            ### Create noise cluster also
-            flattened = sorted_data.flatten()
-            noise_cluster = flattened.source.complement(flattened)
-
-            new_unit = neo.core.Unit(
-                name="e{}-noise".format(elec_id, cluster_idx),
-                source=clustered.path
-            )
-
-            for segment in block.segments:
-                is_within_segment = (
-                        (noise_cluster.times >= segment.t_start) &
-                        (noise_cluster.times < segment.t_stop)
-                )
-                spike_train = neo.core.SpikeTrain(
-                    noise_cluster.times[is_within_segment],
-                    # TODO (kevin): this is where we can define the start
-                    # and stop of a unit?
-                    t_start=segment.t_start,
-                    t_stop=segment.t_stop,
-                    units=pq.s,
-                    waveforms=noise_cluster.waveforms[is_within_segment]
-                )
-                new_unit.spiketrains.append(spike_train)
-                segment.spiketrains.append(spike_train)
-
-                spike_train.segment = segment
-                spike_train.unit = new_unit
-
-            elec_channels[elec_id].units.append(new_unit)
-            new_unit.channel_index = elec_channels[elec_id]
-
-            ### end create noise cluster
 
         block_io.save_block(self.output().path, block)

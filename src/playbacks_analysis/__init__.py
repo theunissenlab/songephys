@@ -28,6 +28,9 @@ class PlaybacksManager(object):
     def get_id(self, seg):
         """Return id of the playback file for the given segment"""
         # TODO: figure out if I should use the playback filename or stimulus id
+        for key in seg.annotations:
+            if isinstance(seg.annotations[key], bytes):
+                seg.annotations[key] = seg.annotations[key].decode("utf-8")
         return seg.annotations["playback_file"].split("/")[-1]
         return seg["stim_id"]
 

@@ -42,9 +42,10 @@ def collect_waveforms(spiketrains, threshold=0, force_single_peak=False):
                 midpoints = spiketrain.waveforms[:, config.WF_SLICE, 0][:, wf_peak_idx]
             else:
                 midpoints = spiketrain.waveforms[:, config.WF_SLICE][:, wf_peak_idx]
+            midpoints = np.abs(midpoints)
 
-            waveforms += list(spiketrain.waveforms[(midpoints < threshold) & (mins)])
-            times += list(spiketrain.times[(midpoints < threshold) & (mins)])
+            waveforms += list(spiketrain.waveforms[(midpoints >= threshold) & (mins)])
+            times += list(spiketrain.times[(midpoints >= threshold) & (mins)])
 
     if spiketrain.waveforms.ndim == 3:
         return np.array(waveforms)[:, :, 0] if len(waveforms) else np.array(waveforms), np.array(times)

@@ -104,7 +104,7 @@ def download_session(session_id, save_to=None, pyoperant_files=tuple()):
         try:
             csv_file = gdrive_look_in(gdrive_pyoperant_dir, pyoperant_file)
         except:
-            print("Warning: file {} not found, skipping...".format(csv_file))
+            print("Warning: file {} not found, skipping...".format(pyoperant_file))
             continue
 
         print("Downloading {} to {}".format(csv_file["title"], raw_dir))
