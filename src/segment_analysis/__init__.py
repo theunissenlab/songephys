@@ -29,6 +29,7 @@ class MultiSegmentPlotter(object):
             unit,
             ax=None,
             color="Black",
+            mean_alpha=1.0,
             alpha=0.1,
             align_to_segment=None,
             single_segment=None,
@@ -69,8 +70,9 @@ class MultiSegmentPlotter(object):
                 raise Exception("single_segment must be int or neo.core.Segment")
             ax.plot(t_arr, psths[:, seg_idx], linewidth=2, color=color)
         else:
-            ax.plot(t_arr, psths, alpha=alpha, color=color)
-            ax.plot(t_arr, np.mean(psths, axis=1), linewidth=2, color=color)
+            if alpha:
+                ax.plot(t_arr, psths, alpha=alpha, color=color)
+            ax.plot(t_arr, np.mean(psths, axis=1), linewidth=2, alpha=mean_alpha, color=color)
 
     def plot_spectrogram(self, seg, signal=0, channel=0, ax=None, align_to_segment=None):
         """Plot the spectrogram of a given segment's analogsignal

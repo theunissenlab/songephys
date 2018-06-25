@@ -5,7 +5,7 @@ import matplotlib
 import numpy as np
 
 
-def plot(spike_times, min_time=0.0, max_time=1.0, color="k", alpha=1.0, ax=None):
+def plot(spike_times, min_time=0.0, max_time=1.0, color="k", linewidth=0.5, alpha=1.0, ax=None):
     """Raster plot based on spike arrival times
 
     Inputs:
@@ -14,10 +14,14 @@ def plot(spike_times, min_time=0.0, max_time=1.0, color="k", alpha=1.0, ax=None)
     ax = ax or plt.gca()
 
     for i, spikes in enumerate(spike_times):
-        ax.vlines(spikes, i + 0.2, i + 0.8, linewidth=1, color=color, alpha=alpha)
-
-    if min_time < 0.0:
-        ax.vlines([0.0], 0.0, len(spike_times), color="r", linestyle="--")
+        ax.vlines(
+                spikes,
+                i + 0.2,
+                i + 0.8,
+                linewidth=linewidth,
+                color=color,
+                alpha=alpha
+        )
 
     ax.set_ylim(0.0, len(spike_times))
     ax.set_xlim(min_time, max_time)

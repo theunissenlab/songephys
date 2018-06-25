@@ -31,7 +31,7 @@ def get_threshold(segments):
     return autodetect.get_amp_thresh(all_sounds, fs=fs)    
 
 
-def find_syllables(segments):
+def find_syllables(segments, signal=0, channel=1):
     sample_start = np.floor(config.PAD_SONG_BEFORE * 30000.0).astype(np.int)
     sample_stop = np.ceil(config.PAD_SONG_AFTER * 30000.0).astype(np.int)
     
@@ -42,8 +42,8 @@ def find_syllables(segments):
     for seg in multiseg.segments:
         _, sound, fs = multiseg.get_analogsignal(
             seg, 
-            signal=0,
-            channel=1)
+            signal=signal,
+            channel=channel)
         sound = sound[sample_start:-sample_stop]
         sound = sound - np.mean(sound)
         syllables, _ = autodetect.find_syllables(
@@ -150,8 +150,8 @@ class SpectrogramCollection(object):
         )
 
 
-def collect_syllable_objects(multiseg):
-    syllable_times = find_syllables(multiseg.segments)
+def collect_syllable_objects(multiseg, signal=0, channel=1):
+    syllable_times = find_syllables(multiseg.segments, signal=signal, channel=channel)
     syllables = []
     for seg_idx, syllable_idxs in enumerate(syllable_times):
         for start_idx, stop_idx in syllable_idxs:

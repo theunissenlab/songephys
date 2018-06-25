@@ -256,75 +256,99 @@ def generate_all_segment_dicts(block, t_width=10.0):
     return seg_dicts
 
 
-def _one_long_segment(block):
-    """Return a block to its original one-segment state"""
+def _find_segment_breaks(block):
+    """Find index of segments where time is discontinuous from previous
+    """
+    prev_stop = block.segments[0].t_start
+    breaks = [0]
+    for idx, seg in enumerate(block.segments):
+        if seg.t_start != prev_stop:
+            breaks.append(idx)
+        prev_stop = seg.t_stop
+
+    breaks.append(None)
+    return breaks
+
+
+def _join_continuous_segments(block):
+    """Return a block to its original one-segment state
+
+    Ok, since this can occur after a merge...
+    might be multiple segments.
+    """
     # merge analogsignals
     # merge spiketrains
 
-    new_segment = Segment(
-            name="all_encompassingly",
-            description="the whole data",
-            index=0,
-            times=block.segments[0].t_start
-    )
+    breaks = _find_segment_breaks(block)
 
-    sigs = [seg.analogsignals[0] for seg in block.segments]
-    new_analogsignal = AnalogSignal(
-            np.concatenate([s.as_array() for s in sigs]) * sigs[0].units,
-            name="all_encompassingly_analogsignal",
-            sampling_rate=sigs[0].sampling_rate,
-            t_start=sigs[0].t_start,
-            units=sigs[0].units,
-            **sigs[0].annotations)
-    new_analogsignal.segment = new_segment
-    new_segment.analogsignals.append(new_analogsignal)
-
-    epochs = [seg.epochs[0] for seg in block.segments]
-    new_epoch = Epoch(
-        times=np.concatenate([epoch.times for epoch in epochs]) * epochs[0].times.units,
-        durations=np.concatenate([epoch.durations for epoch in epochs]) * epochs[0].durations.units,
-        labels=np.concatenate([epoch.labels for epoch in epochs])
-    )
-    new_segment.epochs.append(new_epoch)
-
-    spiketimes = [
-        np.concatenate([
-            st.times.as_array() for st in sts
-        ])
-        for sts in zip(*[seg.spiketrains for seg in block.segments])
-    ]
-
-    wfs = [
-        np.concatenate([
-            st.waveforms for st in sts
-        ], axis=0)
-        for sts in zip(*[seg.spiketrains for seg in block.segments])
-    ]
-
-    for unit_idx, template_st in enumerate(block.segments[0].spiketrains):
-        new_spiketrain = SpikeTrain(
-            spiketimes[unit_idx],
-            t_start=new_analogsignal.t_start,
-            t_stop=new_analogsignal.t_stop,
-            name=template_st.unit.name,
-            waveforms=wfs[unit_idx],
-            # unit=template_st.unit,
-            units=template_st.units
+    new_segments = []
+    for start_idx, stop_idx in zip(breaks[:-1], breaks[1:]):
+        old_segments = block.segments[start_idx:stop_idx]
+        new_segment = Segment(
+                name="full_segment",
+                description="the whole data",
+                index=0,
+                times=old_segments[0].t_start
         )
-        template_st.unit.spiketrains = [new_spiketrain]
-        new_spiketrain.unit = template_st.unit
-        new_spiketrain.segment = new_segment
-        new_segment.spiketrains.append(new_spiketrain)
 
-    new_segment.create_many_to_one_relationship()
+        sigs = [seg.analogsignals[0] for seg in old_segments]
+        new_analogsignal = AnalogSignal(
+                np.concatenate([s.as_array() for s in sigs]) * sigs[0].units,
+                name="full_segment_analogsignal",
+                sampling_rate=sigs[0].sampling_rate,
+                t_start=sigs[0].t_start,
+                units=sigs[0].units,
+                **sigs[0].annotations)
+        new_analogsignal.segment = new_segment
+        new_segment.analogsignals.append(new_analogsignal)
 
-    return new_segment
+        epochs = [seg.epochs[0] for seg in old_segments]
+        new_epoch = Epoch(
+            times=np.concatenate([epoch.times for epoch in epochs]) * epochs[0].times.units,
+            durations=np.concatenate([epoch.durations for epoch in epochs]) * epochs[0].durations.units,
+            labels=np.concatenate([epoch.labels for epoch in epochs])
+        )
+        new_segment.epochs.append(new_epoch)
+
+        spiketimes = [
+            np.concatenate([
+                st.times.as_array() for st in sts
+            ])
+            for sts in zip(*[seg.spiketrains for seg in old_segments])
+        ]
+
+        wfs = [
+            np.concatenate([
+                st.waveforms for st in sts
+            ], axis=0)
+            for sts in zip(*[seg.spiketrains for seg in old_segments])
+        ]
+
+        for unit_idx, template_st in enumerate(old_segments[0].spiketrains):
+            new_spiketrain = SpikeTrain(
+                spiketimes[unit_idx],
+                t_start=new_analogsignal.t_start,
+                t_stop=new_analogsignal.t_stop,
+                name=template_st.unit.name,
+                waveforms=wfs[unit_idx],
+                # unit=template_st.unit,
+                units=template_st.units
+            )
+            template_st.unit.spiketrains = [new_spiketrain]
+            new_spiketrain.unit = template_st.unit
+            new_spiketrain.segment = new_segment
+            new_segment.spiketrains.append(new_spiketrain)
+
+        new_segment.create_many_to_one_relationship()
+        new_segments.append(new_segment)
+
+    return new_segments
 
 
-def one_long_segment(block):
-    new_segment = _one_long_segment(block)
+def join_continuous_segments(block):
+    new_segments = _join_continuous_segments(block)
 
-    block.segments = [new_segment]
+    block.segments = new_segments
 
     block.create_many_to_one_relationship(force=True, recursive=True)
     block.create_many_to_many_relationship()
