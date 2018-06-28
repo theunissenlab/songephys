@@ -1,4 +1,18 @@
+"""Module with helper functions to access our google drive
+
+Intan Ephys Data/
+    <bird name>/
+        RHD/
+            ...
+        pyoperant/
+            ...
+        Stimuli/
+            TutFamBos
+            ...
+"""
+
 from __future__ import print_function
+import logging
 import os
 import time
 
@@ -9,11 +23,21 @@ from .auth import get_auth
 import config
 
 
-drive = GoogleDrive(get_auth())
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.StreamHandler())
+logger.setLevel(logging.DEBUG)
 
-gdrive_root_dir = drive.ListFile({
-    "q": "title = 'Intan Ephys Data'"
-}).GetList()[0]
+
+try:
+    drive = GoogleDrive(get_auth())
+except:
+    logger.warning("Google Drive authentication failed")
+    drive = None
+    gdrive_root_dir = None
+else:
+    gdrive_root_dir = drive.ListFile({
+        "q": "title = 'Intan Ephys Data'"
+    }).GetList()[0]
 
 
 def download_file(gdrive_file, download_to_path):
@@ -36,9 +60,19 @@ def download_folder(gdrive_folder, download_to_path):
 
 
 def gdrive_look_in(dir, filename):
+    """Look for a filename in google drive directory
+
+    Args:
+        dir: a str name of the Google Drive directory to search in
+        filename: the str name of the file or directory to search for
+
+    Returns:
+        PyDrive object representing the file being searched for
+    """
     time.sleep(0.1)
     file_list = drive.ListFile({
-        "q": "title = '{}' and '{}' in parents and trashed = false".format(filename, dir["id"])
+        "q": "title = '{}' and '{}' in parents and "
+             "trashed = false".format(filename, dir["id"])
     }).GetList()
     if not len(file_list):
         raise Exception("{}/{} not found".format(dir["title"], filename))
@@ -60,9 +94,12 @@ def download_session(session_id, save_to=None, pyoperant_files=tuple()):
     and save rhd and pyoperant files here
 
     Params
-    session_id (str): Recording session id in normal format (e.g. "GreYel3594M___170914_121518")
-    pyoperant_files (list of str):
-        Each element is a name of a pyoperant file (e.g. "GreYel3594M_trialdata_20170912164335.csv")
+        session_id (str): Recording session id in normal format
+            (e.g. "GreYel3594M___170914_121518")
+        save_to (str): Path of directory to download session to
+        pyoperant_files (list of str):
+            Each element is a name of a pyoperant file
+            (e.g. "GreYel3594M_trialdata_20170912164335.csv")
     """
     if session_id.endswith(".rhd"):
         session_id = os.path.splitext(session_id)[0]
@@ -90,9 +127,10 @@ def download_session(session_id, save_to=None, pyoperant_files=tuple()):
         os.makedirs(stimuli_dir)
 
     if os.path.exists(os.path.join(raw_dir, "{}.rhd".format(session_id))):
-        print("Warning, {} already downloaded. Not downloading...".format(rhd_file["title"]))
+        logger.info("{} already downloaded. "
+                    "Not downloading...".format(rhd_file["title"]))
     else:
-        print("Downloading {} to {}".format(rhd_file["title"], raw_dir))
+        logger.info("Downloading {} to {}".format(rhd_file["title"], raw_dir))
         download_file(rhd_file, os.path.join(raw_dir, rhd_file["title"]))
 
     csv_string = ""
@@ -104,10 +142,11 @@ def download_session(session_id, save_to=None, pyoperant_files=tuple()):
         try:
             csv_file = gdrive_look_in(gdrive_pyoperant_dir, pyoperant_file)
         except:
-            print("Warning: file {} not found, skipping...".format(pyoperant_file))
+            logger.warning("File {} not found! "
+                           "Skipping...".format(pyoperant_file))
             continue
 
-        print("Downloading {} to {}".format(csv_file["title"], raw_dir))
+        logger.info("Downloading {} to {}".format(csv_file["title"], raw_dir))
         download_file(csv_file, os.path.join(raw_dir, csv_file["title"]))
         with open(os.path.join(raw_dir, csv_file["title"]), "rb") as csvfile:
             csv_string += csvfile.read().decode("utf-8")
@@ -119,6 +158,11 @@ def download_session(session_id, save_to=None, pyoperant_files=tuple()):
         for stimuli_folder in stimuli_folders:
             # TODO (check if this is needed)
             if stimuli_folder["title"] in csv_string:
-                download_to = os.path.join(stimuli_dir, stimuli_folder["title"])
-                print("Downloading {} to {}".format(stimuli_folder["title"], download_to))
+                download_to = os.path.join(
+                        stimuli_dir,
+                        stimuli_folder["title"])
+                logger.info("Downloading {} to {}".format(
+                    stimuli_folder["title"],
+                    download_to
+                ))
                 download_folder(stimuli_folder, download_to)

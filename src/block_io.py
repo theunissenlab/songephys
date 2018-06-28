@@ -11,6 +11,7 @@ def save_block(filename, block):
 
 
 def load_block(filename):
+    """Load a neo block from a picklefile whilst generating proper object links"""
     with open(filename, "rb") as datafile:
         block = pickle.load(datafile)
     block.create_relationship(force=True, append=True, recursive=True)
