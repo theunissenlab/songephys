@@ -1,20 +1,16 @@
-try:
-    import cPickle as pickle
-except ImportError:
-    import pickle
-
 import numpy as np
 import os
-import time
 
 import luigi
 
 import block_io
-from detect_sound_segments import DetectSoundSegments
-from spike_sorting import SortSite
 from merge_sessions import MergeVocalPeriods
-from segmentation.audio_segment import segment, merge_segments, join_continuous_segments
-from utils import session_basename
+from segmentation.audio_segment import (
+        join_continuous_segments,
+        merge_segments,
+        segment,
+)
+from spike_sorting import SortSite
 
 
 class ResegmentSite(luigi.Task):

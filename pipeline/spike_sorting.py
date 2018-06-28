@@ -1,34 +1,22 @@
 from __future__ import print_function
 
-try:
-    import cPickle as pickle
-except ImportError:
-    import pickle
 import os
 
-import numpy as np
-import scipy.stats
 import luigi
-import matplotlib.pyplot as plt
 import neo.core
 import quantities as pq
-
-from merge_sessions import MergeSessionBlocks, MergeVocalPeriods
-# from spike_detection import ExtractSpikes
-from preproephys import fix_chIndex, extract_spikes
-from spikes.sorting.preprocess import collect_waveforms, sort_spikes_on_unit
 
 import suss.io
 from suss.core import SpikeDataset
 try:
     from suss.sort import sort_v3 as sort
-except:
+except ImportError:
     from suss.sort import default_sort as sort
 
 import block_io
 import config
-
-from utils import session_basename
+from merge_sessions import MergeSessionBlocks
+from spikes.sorting.preprocess import collect_waveforms
 
 
 class CollectWaveforms(luigi.Task):
@@ -42,10 +30,13 @@ class CollectWaveforms(luigi.Task):
 
         return [
             luigi.LocalTarget(
-                os.path.join(sorting_dir, "spike_waveforms-e{}.pkl".format(electrode))
+                os.path.join(
+                    sorting_dir,
+                    "spike_waveforms-e{}.pkl".format(electrode)
+                )
             ) for electrode in range(16)
         ]
-            
+
     def requires(self):
         return MergeSessionBlocks(self.site_dir)
 
@@ -88,7 +79,7 @@ class SortSpikes(luigi.Task):
             sorting_dir,
             "sorted-e{}.pkl".format(self.electrode)
         ))
-            
+
     def requires(self):
         return CollectWaveforms(self.site_dir)
 
@@ -99,8 +90,8 @@ class SortSpikes(luigi.Task):
 
 
 class ManualCuration(luigi.Task):
-    """Placeholder task for manual step
-    """
+    """Placeholder task for manual step"""
+
     site_dir = luigi.Parameter()
     electrode = luigi.parameter.NumericalParameter(
         var_type=int, min_value=0, max_value=16)
@@ -114,12 +105,12 @@ class ManualCuration(luigi.Task):
             sorting_dir,
             "curated-e{}.pkl".format(self.electrode)
         ))
-            
+
     def requires(self):
         return SortSpikes(site_dir=self.site_dir, electrode=self.electrode)
 
     def run(self):
-        ## sorting
+        # Manual sorting here
         pass
 
 
@@ -138,9 +129,11 @@ class SortSite(luigi.Task):
     def run(self):
         block = block_io.load_block(self.input()[0].path)
 
-        elec_channels = [channel_index
-                for channel_index in block.channel_indexes
-                if channel_index.name.startswith("Amp Elec")]
+        elec_channels = [
+            channel_index
+            for channel_index in block.channel_indexes
+            if channel_index.name.startswith("Amp Elec")
+        ]
 
         # remove old spiketrains from segments
         # remove old units from channel indexes
@@ -150,7 +143,6 @@ class SortSite(luigi.Task):
         for channel_index in elec_channels:
             channel_index.units = []
 
-        results = []
         for elec_id, clustered in enumerate(self.input()[1:]):
             sorted_data = suss.io.read_pickle(clustered.path)
 

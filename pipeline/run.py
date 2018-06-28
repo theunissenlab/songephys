@@ -14,11 +14,19 @@ class RunSite(luigi.Task):
     site_dir = luigi.Parameter()
 
     def requires(self):
-        self.session_info = load_yaml(os.path.join(self.site_dir, "sessions.yaml"))
+        self.session_info = load_yaml(
+                os.path.join(self.site_dir, "sessions.yaml")
+        )
 
         for session in self.session_info["sessions"]:
             yield DownloadSession(
-                    os.path.join(self.site_dir, "..", "..", "sessions", session["id"]),
+                    os.path.join(
+                        self.site_dir,
+                        "..",
+                        "..",
+                        "sessions",
+                        session["id"]
+                    ),
                     session.get("playbacks", []),
                     session.get("notes", ""))
 
