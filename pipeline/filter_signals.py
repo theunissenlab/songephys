@@ -50,6 +50,7 @@ class FilterElectrodeSignals(luigi.Task):
             print("Filtering Segment {}/{} in {:.0f} min... Est. remaining: {:.0f} min".format(i, len(block.segments), elapsed / 60.0, remaining / 60.0))
             clean_signal, predicted_signal = filter_segment(seg)
             noise_epochs = detect_noisy_epochs(clean_signal, predicted_signal)
+            # TODO: save noise epochs in a separate file
             epoch = convert_to_epoch_obj(noise_epochs)
             epoch.segment = seg
             seg.epochs.append(epoch)

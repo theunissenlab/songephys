@@ -79,7 +79,20 @@ def save_pyoperant_db(df, dest_path):
     df.to_pickle(dest_path)
 
 
-def convert_pyoperant_csvs(pyoperant_csvs, stim_dirs, dest_path):
+def group_digital_code_trials(digital_codes):
+    result = []
+    last_trial = np.inf
+    for code in digital_codes:
+        trial = code[1]["trial"]
+        if trial < last_trial:
+            result.append([])
+        result[-1].append(trial)
+        last_trial = trial
+
+    return [np.array(r) for r in result]
+
+
+def convert_pyoperant_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, dest_path):
     """Convert one or more pyoperant csvs to a pickled dataframe
 
     1. Combine csvs by time column, and reindex column
@@ -90,16 +103,31 @@ def convert_pyoperant_csvs(pyoperant_csvs, stim_dirs, dest_path):
     stim_dirs (list of str): list of paths to directories containing
         the new wavs for each pyoperant csv
     """
+    trial_set = group_digital_code_trials(stimulus_codes)
+
     pyoperant_dataframes = [
         read_pyoperant_csv(filename, stim_dir)
         for filename, stim_dir in zip(pyoperant_csvs, stim_dirs)
     ]
 
+    if not (len(pyoperant_dataframes) == len(trial_set)):
+        raise Exception("Different number of pyoperant csvs ({}) than in digital signal ({})".format(len(pyoperant_dataframes), len(trial_set)))
+
+    pyoperant_dataframes = [
+        df.loc[np.isin(df["trial"], trials)]
+        for df, trials in zip(pyoperant_dataframes, trial_set)
+    ]
+
+    pyoperant_lengths = [len(df) for df in pyoperant_dataframes]
+    digital_lengths = [len(trials) for trials in trial_set]
+
+    if not all([a == b for a, b in zip(pyoperant_lengths, digital_lengths)]):
+        raise Exception("Wrong number of trials detected in pyoperants and digital signal: {} and {}".format(pyoperant_lengths, digital_lengths))
+
+
     new_df = pd.concat(pyoperant_dataframes)
     new_df = new_df.sort_values("time")
     new_df.index = np.arange(len(new_df))
-    # TODO (kevin): explain what this column is used for
-    new_df["trial"] = new_df.index + 1
 
     save_pyoperant_db(new_df, dest_path)
 

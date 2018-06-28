@@ -252,7 +252,10 @@ def fix_chIndex(block):
         if ie == 0:
             for sig in chIndex.analogsignals:
                 sig.channel_index = None
-        chx = ChannelIndex(index = np.array([ie]), name = 'Amp Elec %d' % ie, channel_names=np.array(['ch %d'% chIndex.index[ie]]))
+        chx = ChannelIndex(
+                index = np.array([ie]),
+                name = 'Amp Elec %d' % int(chIndex.index[ie].split("-")[1]),  # i.e. "A-008" -> 8
+                channel_names=np.array(['ch %d'% chIndex.index[ie]]))
         chx.block = block
         chx.analogsignals = chIndex.analogsignals
         # chx.create_relationship()  # This is commented out because it creates a sig.channel_index?

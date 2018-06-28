@@ -16,36 +16,6 @@ from utils import session_basename
 from setup import DownloadSession
 
 
-'''
-class ValidateInputData(luigi.Task):
-
-    session_dir = luigi.Parameter()
-
-    def output(self):
-        input_directory = os.path.join(self.session_dir, "raw")
-
-        if not os.path.exists(input_directory):
-            raise Exception("Input directory {} not found".format(input_directory))
-
-        rhd_files = glob.glob(os.path.join(input_directory, "*.rhd"))
-
-        if len(rhd_files) == 0:
-            raise Exception("No RHD file found in {}".format(input_directory))
-
-        if len(rhd_files) > 1:
-            raise Exception("Multiple RHD files found in {}".format(input_directory))
-
-        # TODO: look for pyoperant file
-
-        return [
-            luigi.LocalTarget(rhd_files[0])
-        ]
-
-    def run(self):
-        pass
-'''
-
-
 class Rhd2Nix(luigi.Task):
 
     session_dir = luigi.Parameter()
