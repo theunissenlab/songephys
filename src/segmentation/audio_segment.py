@@ -503,6 +503,9 @@ def segment(block, segment_dicts):
             try:
                 sliced_signal = signal.time_slice(start_time, stop_time)
             except:
+                # FIXME (kevin): sometimes the start_time can be negative
+                # i guess if the vocal period occurs within a pad length
+                # of the start time of the file
                 import pdb
                 pdb.set_trace()
 
