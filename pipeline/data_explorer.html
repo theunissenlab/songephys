@@ -8,7 +8,8 @@
     <th>Downloaded</th>
     <th>Segmented</th>
     <th>Filtered</th>
-    <th>Sorted</th>
+    <th>Auto Sorted</th>
+    <th>Manually Curated</th>
     <th>Session Path</th>
 		<th>Notes</th>
 		<th>Units</th>
@@ -25,6 +26,7 @@
       <td class="{{ 'green' if file.segmented_date and file.segmented_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.segmented_date | datetime("date") }}</td>
       <td class="{{ 'green' if file.filtered_date and file.filtered_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.filtered_date | datetime("date") }}</td>
       <td class="{{ 'green' if file.sorted_date and file.sorted_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.sorted_date | datetime("date") }}</td>
+      <td class="{{ 'green' if file.curated_date and file.curated_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.curated_date | datetime("date") }}{% if file.curated_count %}: {{file.curated_count}}/16{% endif %}</td>
       <td>{{ file.path }}</td>
       <td>{{ file.notes }}</td>
       <td class="{{ 'green' if file.units > 0 }}">{{ file.units }}</td>

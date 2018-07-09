@@ -62,20 +62,23 @@ def check_filtered(session):
     else:
         return modified_at(matches[0])
 
-'''
-def check_sorted(session):
-    matches = glob.glob(os.path.join(session, "spikes", "*-sorted.pkl"))
-    if not len(matches):
-        return None
-    else:
-        return modified_at(matches[0])
-'''
+
 def check_sorted(site):
-    matches = glob.glob(os.path.join(site, "sorted.pkl"))
+    matches = glob.glob(os.path.join(site, "sort_results", "sorted-e*.pkl"))
+
     if not len(matches):
         return None
     else:
-        return modified_at(matches[0])
+        return np.min([modified_at(match) for match in matches])
+
+
+def check_curated(site):
+    matches = glob.glob(os.path.join(site, "manually_curated", "curated-e*.pkl"))
+
+    if not len(matches):
+        return None, None
+    else:
+        return len(matches), np.min([modified_at(match) for match in matches])
 
 
 def check_summaries(session):
@@ -115,6 +118,7 @@ def fetch_files():
                 file_info["segmented_date"] = check_segmented(session)
                 file_info["filtered_date"] = check_filtered(session)
                 file_info["sorted_date"] = check_sorted(site_dir)
+                file_info["curated_count"], file_info["curated_date"] = check_curated(site_dir)
                 file_info["path"] = session
                 file_info["units"] = check_summaries(site_dir)
 
