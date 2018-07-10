@@ -8,6 +8,7 @@ import quantities as pq
 
 import suss.io
 from suss.core import SpikeDataset
+from suss.tag import ClusterTag
 try:
     from suss.sort import sort_v3 as sort
 except ImportError:
@@ -148,9 +149,13 @@ class SortSite(luigi.Task):
 
             for cluster_idx, cluster in enumerate(sorted_data.nodes):
                 cluster = cluster.flatten()
+                tag_annotations = {}
+                for tag in ClusterTag:
+                    tag_annotations[tag] = tag in cluster.tags
                 new_unit = neo.core.Unit(
                     name="e{}u{}".format(elec_id, cluster_idx),
-                    source=clustered.path
+                    source=clustered.path,
+                    **tag_annotations
                 )
 
                 for segment in block.segments:
