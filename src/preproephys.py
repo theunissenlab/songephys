@@ -254,7 +254,7 @@ def fix_chIndex(block):
                 sig.channel_index = None
         chx = ChannelIndex(
                 index = np.array([ie]),
-                name = 'Amp Elec %d' % int(chIndex.index[ie].split("-")[1]),  # i.e. "A-008" -> 8
+                name = 'Amp Elec %d' % chIndex.index[ie],
                 channel_names=np.array(['ch %d'% chIndex.index[ie]]))
         chx.block = block
         chx.analogsignals = chIndex.analogsignals
@@ -400,6 +400,7 @@ def extract_spikes(block):
             seg = sig.segment
             sig_magnitude = sig.magnitude[:, elec_id]
 
+            ''' (skip the bad noise check)
             if len(seg.epochs):
                 epoch = seg.epochs[0]
                 t_starts = epoch.times[epoch.labels == elec_id]
@@ -409,6 +410,9 @@ def extract_spikes(block):
             else:
                 noise_mask = np.zeros(len(sig_magnitude)).astype(np.bool)
                 noise_indices = set()
+            '''
+            noise_mask = np.zeros(len(sig_magnitude)).astype(np.bool)
+            noise_indices = set()
 
             # Get the threshold
             # Get the spike width in number of points
@@ -419,7 +423,7 @@ def extract_spikes(block):
             spike_indices, spike_waveforms = extract_spikes_from_signal(
                     sig_magnitude,
                     threshold_std=config.Z_THRESHOLD,
-                    limit_std=30,
+                    limit_std=20,
                     min_spacing=config.MIN_SPIKE_THRESHOLD_SPACING,
                     spike_width=spikewd,
                     noise_mask=noise_mask

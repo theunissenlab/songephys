@@ -8,11 +8,8 @@ import quantities as pq
 
 import suss.io
 from suss.core import SpikeDataset
-from suss.tag import ClusterTag
-try:
-    from suss.sort import sort_v3 as sort
-except ImportError:
-    from suss.sort import default_sort as sort
+from suss.tags import ClusterTag
+from suss.sort import denoise, sort
 
 import block_io
 import config
@@ -35,7 +32,7 @@ class CollectWaveforms(luigi.Task):
                     sorting_dir,
                     "spike_waveforms-e{}.pkl".format(electrode)
                 )
-            ) for electrode in range(16)
+            ) for electrode in config.ELECTRODES
         ]
 
     def requires(self):
@@ -44,12 +41,12 @@ class CollectWaveforms(luigi.Task):
     def run(self):
         block = block_io.load_block(self.input().path)
 
-        for i, output in enumerate(self.output()):
+        for i, (elec_id, output) in enumerate(zip(config.ELECTRODES, self.output())):
             # a hack to get the electrode with index i
             unit = next(
                 channel_index.units[0]
                 for channel_index in block.channel_indexes
-                if channel_index.name == "Amp Elec {}".format(i)
+                if channel_index.name == "Amp Elec {}".format(elec_id)
             )
 
             waveforms, times = collect_waveforms(
@@ -69,7 +66,7 @@ class SortSpikes(luigi.Task):
 
     site_dir = luigi.Parameter()
     electrode = luigi.parameter.NumericalParameter(
-        var_type=int, min_value=0, max_value=16)
+        var_type=int, min_value=config.ELECTRODES[0], max_value=config.ELECTRODES[-1] + 1)
 
     def output(self):
         sorting_dir = os.path.join(self.site_dir, "sort_results")
@@ -85,8 +82,10 @@ class SortSpikes(luigi.Task):
         return CollectWaveforms(self.site_dir)
 
     def run(self):
-        dataset = suss.io.read_pickle(self.input()[self.electrode].path)
-        result = sort(dataset.times, dataset.waveforms, dataset.sample_rate)
+        idx = config.ELECTRODES.index(self.electrode)
+        dataset = suss.io.read_pickle(self.input()[idx].path)
+        denoised = denoise(dataset.times, dataset.waveforms)
+        result = sort(denoised)
         suss.io.save_pickle(self.output().path, result)
 
 
@@ -95,7 +94,7 @@ class ManualCuration(luigi.Task):
 
     site_dir = luigi.Parameter()
     electrode = luigi.parameter.NumericalParameter(
-        var_type=int, min_value=0, max_value=16)
+        var_type=int, min_value=config.ELECTRODES[0], max_value=config.ELECTRODES[-1] + 1)
 
     def output(self):
         sorting_dir = os.path.join(self.site_dir, "manually_curated")
@@ -124,7 +123,7 @@ class SortSite(luigi.Task):
 
     def requires(self):
         yield MergeSessionBlocks(self.site_dir)
-        for electrode in range(16):
+        for electrode in config.ELECTRODES:
             yield ManualCuration(site_dir=self.site_dir, electrode=electrode)
 
     def run(self):
@@ -144,33 +143,34 @@ class SortSite(luigi.Task):
         for channel_index in elec_channels:
             channel_index.units = []
 
-        for elec_id, clustered in enumerate(self.input()[1:]):
+        for elec_id, clustered in zip(config.ELECTRODES, self.input()[1:]):
             sorted_data = suss.io.read_pickle(clustered.path)
 
-            for cluster_idx, cluster in enumerate(sorted_data.nodes):
-                cluster = cluster.flatten()
+            for cluster_idx, (cluster_label, cluster) in enumerate(zip(sorted_data.labels, sorted_data.nodes)):
+                cluster_flat = cluster.flatten()
                 tag_annotations = {}
                 for tag in ClusterTag:
-                    tag_annotations[tag] = tag in cluster.tags
+                    tag_annotations[tag.name] = tag in cluster.tags
                 new_unit = neo.core.Unit(
                     name="e{}u{}".format(elec_id, cluster_idx),
                     source=clustered.path,
-                    **tag_annotations
+                    label=cluster_label,
+                    tags=tag_annotations
                 )
 
                 for segment in block.segments:
                     is_within_segment = (
-                            (cluster.times >= segment.t_start) &
-                            (cluster.times < segment.t_stop)
+                            (cluster_flat.times >= segment.t_start) &
+                            (cluster_flat.times < segment.t_stop)
                     )
                     spike_train = neo.core.SpikeTrain(
-                        cluster.times[is_within_segment],
+                        cluster_flat.times[is_within_segment],
                         # TODO (kevin): this is where we can define the start
                         # and stop of a unit?
                         t_start=segment.t_start,
                         t_stop=segment.t_stop,
                         units=pq.s,
-                        waveforms=cluster.waveforms[is_within_segment]
+                        waveforms=cluster_flat.waveforms[is_within_segment]
                     )
                     new_unit.spiketrains.append(spike_train)
                     segment.spiketrains.append(spike_train)

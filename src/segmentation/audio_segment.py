@@ -286,6 +286,7 @@ def _join_continuous_segments(block):
     # merge spiketrains
 
     breaks = _find_segment_breaks(block)
+    print(breaks)
 
     new_segments = []
     for start_idx, stop_idx in zip(breaks[:-1], breaks[1:]):
@@ -325,7 +326,7 @@ def _join_continuous_segments(block):
 
         wfs = [
             np.concatenate([
-                st.waveforms for st in sts
+                st.waveforms for st in sts if len(st.waveforms)
             ], axis=0)
             for sts in zip(*[seg.spiketrains for seg in old_segments])
         ]

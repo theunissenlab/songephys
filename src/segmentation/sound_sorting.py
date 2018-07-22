@@ -71,6 +71,13 @@ def entropy(spec):
 
 
 class Syllable(object):
+    """
+    Defines a syllable by its position in a segment
+
+    Attrs
+        start_idx, stop_idx: indices delimiting the syllable
+
+    """
     def __init__(self, segment, start_idx, stop_idx):
         self.segment = segment
         self._start = start_idx

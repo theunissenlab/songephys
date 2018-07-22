@@ -27,8 +27,8 @@ class RunSite(luigi.Task):
                         "sessions",
                         session["id"]
                     ),
-                    session.get("playbacks", []),
-                    session.get("notes", ""))
+                    session.get("playbacks", [])
+            )
 
         yield ResegmentSite(self.site_dir)
 

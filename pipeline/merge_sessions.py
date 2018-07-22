@@ -89,7 +89,6 @@ class MergeSessionBlocks(luigi.Task):
             for session in self.session_info["sessions"]
         ]
         blocks = [load_block(s.path) for s in self.input()]
-
         new_block = merge_blocks(blocks, block_offsets)
 
         save_block(self.output().path, new_block)
