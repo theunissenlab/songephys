@@ -298,7 +298,7 @@ def _join_continuous_segments(block):
                 times=old_segments[0].t_start
         )
 
-        for sig_idx in range(len(seg.analogsignals)):
+        for sig_idx in range(len(old_segments[0].analogsignals)):
             sigs = [seg.analogsignals[sig_idx] for seg in old_segments]
             new_analogsignal = AnalogSignal(
                     np.concatenate([s.as_array() for s in sigs]) * sigs[0].units,
