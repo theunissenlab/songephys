@@ -80,6 +80,8 @@ class CombineTrialMetadata(luigi.Task):
         for csv_file in csv_files:
             logger.info("Looking for stim dir for {}".format(csv_file))
             stimulus_names = pd.read_csv(csv_file)["stimulus_name"]
+            if not len(stimulus_names):
+                continue
 
             stim_dir_used = None
             for stim_dir in possible_stim_dirs:
