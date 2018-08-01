@@ -298,16 +298,17 @@ def _join_continuous_segments(block):
                 times=old_segments[0].t_start
         )
 
-        sigs = [seg.analogsignals[0] for seg in old_segments]
-        new_analogsignal = AnalogSignal(
-                np.concatenate([s.as_array() for s in sigs]) * sigs[0].units,
-                name="full_segment_analogsignal",
-                sampling_rate=sigs[0].sampling_rate,
-                t_start=sigs[0].t_start,
-                units=sigs[0].units,
-                **sigs[0].annotations)
-        new_analogsignal.segment = new_segment
-        new_segment.analogsignals.append(new_analogsignal)
+        for sig_idx in range(len(old_segments[0].analogsignals)):
+            sigs = [seg.analogsignals[sig_idx] for seg in old_segments]
+            new_analogsignal = AnalogSignal(
+                    np.concatenate([s.as_array() for s in sigs]) * sigs[0].units,
+                    name="full_segment_analogsignal",
+                    sampling_rate=sigs[0].sampling_rate,
+                    t_start=sigs[0].t_start,
+                    units=sigs[0].units,
+                    **sigs[0].annotations)
+            new_analogsignal.segment = new_segment
+            new_segment.analogsignals.append(new_analogsignal)
 
         epochs = [seg.epochs[0] for seg in old_segments]
         new_epoch = Epoch(
