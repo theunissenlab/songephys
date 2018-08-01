@@ -8,13 +8,23 @@ import quantities as pq
 
 import suss.io
 from suss.core import SpikeDataset
-from suss.tags import ClusterTag
+from suss.gui.tags import ClusterTag
 from suss.sort import denoise, sort
 
 import block_io
 import config
 from merge_sessions import MergeSessionBlocks
 from spikes.sorting.preprocess import collect_waveforms
+
+
+def correct_ch_idxs(block):
+    ch_idxs = [ch_idx for ch_idx in block.channel_indexes if ch_idx.name.startswith("Amp Elec")]
+    sorted_ch_idxes = sorted(ch_idxs, key=lambda c: int(c.name.split()[-1]))
+    assert len(sorted_ch_idxes) == len(config.ELECTRODES)
+    for ch_idx, true_elec in zip(sorted_ch_idxes, config.ELECTRODES):
+        ch_idx.name = "Amp Elec {}".format(true_elec)
+
+    return block
 
 
 class CollectWaveforms(luigi.Task):
@@ -40,6 +50,7 @@ class CollectWaveforms(luigi.Task):
 
     def run(self):
         block = block_io.load_block(self.input().path)
+        correct_ch_idxs(block)
 
         for i, (elec_id, output) in enumerate(zip(config.ELECTRODES, self.output())):
             # a hack to get the electrode with index i
