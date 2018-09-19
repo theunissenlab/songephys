@@ -231,11 +231,11 @@ def plot_playback_responses(block, width=5):
     return figures
 
 
-def _get_channel_index(block, electrode_idx):
+def _get_channel_index(block, electrode_number):
     return next(
         channel_index
         for channel_index in block.channel_indexes
-        if channel_index.index == electrode_idx
+        if channel_index.name.startswith("e{}".format(electrode_number))
     )
 
 

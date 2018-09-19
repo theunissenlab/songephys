@@ -45,15 +45,29 @@ class FilterElectrodeSignals(luigi.Task):
     def run(self):
         block = block_io.load_block(self.input().path)
 
+        def convert_mins(t_sec):
+            if t_sec == np.inf:
+                return "a long ass time"
+            if t_sec / 60.0 > 60:
+                hours = np.floor(t_sec / (60.0 * 60.0))
+                minutes = (t_sec / 60.0) - (60.0 * int(hours))
+                return "{:.0f}h{:.0f}m".format(hours, minutes)
+            else:
+                minutes = (t_sec / 60.0)
+                return "{:.0f}m".format(minutes)
+
         start = time.time()
         for i, seg in enumerate(block.segments):
             elapsed, remaining = estimate_time_remaining(
                     start, float(i) / len(block.segments)
             )
             print(
-                "Filtering Segment {}/{} in {:.0f} min... "
-                "Est. remaining: {:.0f} min".format(
-                    i, len(block.segments), elapsed / 60.0, remaining / 60.0
+                "Filtering Segment {}/{} in {}... "
+                "Est. remaining: {}".format(
+                    i,
+                    len(block.segments),
+                    convert_mins(elapsed),
+                    convert_mins(remaining)
                 )
             )
             clean_signal, predicted_signal = filter_segment(seg)

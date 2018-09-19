@@ -252,10 +252,14 @@ def fix_chIndex(block):
         if ie == 0:
             for sig in chIndex.analogsignals:
                 sig.channel_index = None
+
+        # FIXME (kevin): the channel indexes we create here should be numbered 8-23
+        # not 0-15. however, the chIndex.index should be 0-15 to properly access the
+        # individual channels in the analog signal
         chx = ChannelIndex(
                 index = np.array([ie]),
-                name = 'Amp Elec %d' % chIndex.index[ie],
-                channel_names=np.array(['ch %d'% chIndex.index[ie]]))
+                name = 'Amp Elec %d' % np.arange(8, 24)[ie],
+                channel_names=np.array(['ch %d' % np.arange(8, 24)[ie]]))
         chx.block = block
         chx.analogsignals = chIndex.analogsignals
         # chx.create_relationship()  # This is commented out because it creates a sig.channel_index?
@@ -340,6 +344,10 @@ def extract_spikes_from_signal(signal,
         signal >= 2 * threshold,
         np.invert(noise_mask)
     ))[0]
+    if len(downward_mask):
+        downward_mask = np.concatenate([downward_mask, [len(signal)]])
+    if len(upward_mask):
+        upward_mask = np.concatenate([upward_mask, [len(signal)]])
 
     downward_edges = np.where(np.diff(downward_mask) > min_spacing)[0]
     upward_edges = np.where(np.diff(upward_mask) > min_spacing)[0]

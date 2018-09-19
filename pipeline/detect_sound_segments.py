@@ -63,7 +63,7 @@ class CombineTrialMetadata(luigi.Task):
         input_directory = os.path.join(self.session_dir, "raw")
         stimuli_directory = os.path.join(self.session_dir, "stimuli")
 
-        csv_files = glob.glob(os.path.join(input_directory, "*.csv"))
+        csv_files = sorted(glob.glob(os.path.join(input_directory, "*.csv")))
 
         if not len(csv_files):
             # no playback csvs -> create a dummy dataframe
@@ -172,7 +172,6 @@ class DetectSoundSegments(luigi.Task):
         # FIXME: We hardcoded 1 for the microphone analogsignal.
         # This index could conceivably change, so shouldn't be hardcoded
         sound = nix.load_lazy_object(block.segments[0].analogsignals[1])
-        nix.close()
 
         sound_arr = sound.as_array()[:, 0]
         sampling_rate = sound.sampling_rate.item()
@@ -212,7 +211,7 @@ class DetectSoundSegments(luigi.Task):
             playback_dicts = []
             segment_dicts = live_dicts
         else:
-            digital_signals = block.segments[0].events[0]
+            digital_signals = nix.load_lazy_object(block.segments[0].events[0])
             playback_dicts = generate_stim_dicts(
                     digital_signals,
                     playbacks_db
@@ -221,6 +220,8 @@ class DetectSoundSegments(luigi.Task):
                 len(playback_dicts))
             )
             segment_dicts = merge_segments(playback_dicts, live_dicts)
+
+        nix.close()
 
         ####################################
         ### Save identified time periods ###

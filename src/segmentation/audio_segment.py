@@ -327,7 +327,7 @@ def _join_continuous_segments(block):
 
         wfs = [
             np.concatenate([
-                st.waveforms for st in sts if len(st.waveforms)
+                st.waveforms for st in sts
             ], axis=0)
             for sts in zip(*[seg.spiketrains for seg in old_segments])
         ]
