@@ -9,6 +9,10 @@ from segmentation.audio_segment import join_continuous_segments
 import config
 
 
+def time_to_index(x, sampling_rate):
+    return int(round(x * sampling_rate))
+
+
 class LoadedTimeSliceDict(dict):
     def __init__(self, t0, t1, *args, **kwargs):
         self._t0 = t0
@@ -132,8 +136,8 @@ class LazySignal(object):
         >>> signal = LazySignal(...)
         >>> t_arr, elec_data = signal.time_slice(30.0, 30.1)
         """
-        start_idx = int(np.floor(t_start * self.sampling_rate))
-        stop_idx = int(np.floor(t_stop * self.sampling_rate))
+        start_idx = time_to_index(t_start, self.sampling_rate)
+        stop_idx = time_to_index(t_stop, self.sampling_rate)
         n = stop_idx - start_idx
         t_arr = np.arange(start_idx, stop_idx) / self.sampling_rate
 
