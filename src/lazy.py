@@ -192,9 +192,24 @@ class LazySignal(object):
         start_idx = time_to_index(t_start, self.sampling_rate)
         stop_idx = time_to_index(t_stop, self.sampling_rate)
         n = stop_idx - start_idx
+        # If you request past the end of the slice, just pad with zeros
+        # The calling function should deal with completing the rest of the slice
         t_arr = np.arange(start_idx, stop_idx) / self.sampling_rate
 
-        return LoadedTimeSlice(t=t_arr, data=self._load_samples(n, start_idx))
+        pad_zeros_before = max(0 - start_idx, 0)
+        pad_zeros_after = max(stop_idx - self.N, 0)
+        
+        data = self._load_samples(
+            n - (pad_zeros_after + pad_zeros_before),
+            start_idx + pad_zeros_before
+        )
+        data = np.vstack([
+            np.zeros((pad_zeros_before, data.shape[1])),
+            data,
+            np.zeros((pad_zeros_after, data.shape[1]))
+        ])
+
+        return LoadedTimeSlice(t=t_arr, data=data)
     
     def batches(self, step):
         """Create a generator that iterates over the data
@@ -263,6 +278,17 @@ class LazySite(object):
         signals = dict((key, val[session_idx]) for key, val in self._signals.items())
         return self.signal_times[session_idx], signals
 
+    def max_time(self):
+        """Return the largest timestamp across all signals in site
+        """
+        N = 0
+        max_duration = 0.0
+        for sigs in self._signals.values():
+            if sigs[-1].N > N:
+                N = sigs[-1].N
+                max_duration = N / sigs[-1].sampling_rate
+        return self.signal_times[-1] + max_duration
+
     def add_signals(self, signal_name, signals):
         """Add a new signal to the LazySite
 
@@ -319,6 +345,7 @@ class LazySite(object):
 
         """
         t_signal, lazy_signals = self._get_lazy_signals(t_start)
+        t_signal_leftover, lazy_signals_leftover = self._get_lazy_signals(t_stop)
 
         # Floating point errors is worst thing in the world. Must convert
 
@@ -327,12 +354,29 @@ class LazySite(object):
                     t_start - t_signal,
                     t_stop - t_signal)
             result.t += t_signal
+
+            if t_signal != t_signal_leftover:
+                leftover_signal = lazy_signals_leftover[signal].time_slice(
+                    t_start - t_signal_leftover,
+                    t_stop - t_signal_leftover
+                )
+                leftover_signal.t += t_signal_leftover
+                result.data[result.t >= t_signal_leftover] = leftover_signal.data[leftover_signal.t >= t_signal_leftover]
+
             return result
 
         signals = LoadedTimeSliceDict(t_start, t_stop)
         for key, lazy_signal in lazy_signals.items():
             signals[key] = lazy_signal.time_slice(t_start - t_signal, t_stop - t_signal)
             signals[key].t += t_signal  # Offset by the start time of the session
+
+            if t_signal != t_signal_leftover:
+                leftover_signal = lazy_signals_leftover[key].time_slice(
+                    t_start - t_signal_leftover,
+                    t_stop - t_signal_leftover
+                )
+                leftover_signal.t += t_signal_leftover
+                signals[key].data[signals[key].t >= t_signal_leftover] = leftover_signal.data[signals[key].t >= t_signal_leftover]
 
         return signals
 
