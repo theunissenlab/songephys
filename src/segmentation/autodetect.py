@@ -731,11 +731,13 @@ def populate_dataframe(audio_streams, points, fs=30000.0, minfreq=150, maxfreq=4
     return pca_df, spectro_list, big_df, spect_pca, df_pca #spectrogram list, for plotting spectrograms
 
 
-def get_amp_thresh(audio_stream_in, fs=None, lowpass = None, highpass = None):
+def get_amp_thresh(audio_stream_in, fs=None, lowpass = None, highpass = None, mode=None):
     """
     Calculate amplitude waveform over a large recording and calculate the mean. That's all.
     I use to calculate an amplitude threshold for a whole recording period, and then pass it to each individual segment.
     """
+    if mode is None:
+        mode = "median"
     if fs is None:
         print("Warning, no sampling rate passed, fs set to 30kHz")
         fs = 30000
@@ -749,12 +751,14 @@ def get_amp_thresh(audio_stream_in, fs=None, lowpass = None, highpass = None):
     # Simply threshold against the mean of the signal. This works surprisingly well.
     # If you think about it, all of the noises that get made during a session drag
     # the mean to be slightly above background noise. 
-    amp_thresh = np.mean(audio_stream) 
+    if mode == "median":
+        amp_thresh = 2 * np.median(audio_stream) 
+    elif mode == "mean":
+        amp_thresh = np.mean(audio_stream)
 
     return amp_thresh
 
 def get_amplitude_envelope(sound, fs=30000.0, lowpass = 5000.0, highpass = 2000.0):
-    streams_filtered_env = np.zeros(np.shape(sound))
     streams_filtered_env = highpass_filter(sound.T, fs, highpass).T
     streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env.T, fs, lowpass).T) # Rectify and lowpass filter
     streams_filtered_env = lowpass_filter(streams_filtered_env.T, fs, 100).T # We essentially have an amplitude trace now # was 100
@@ -824,7 +828,7 @@ def get_color(labels):
     print(labels/n_labels)
     return colors
 
-def find_syllables(audio_stream_in, fs=None, amp_thresh=None):
+def find_syllables(audio_stream_in, fs=None, amp_thresh=None, shortest_duration=0.2):
     """Calls find_vocal_periods with set paramaters for returning syllables
     syllables, thresh = autodetect.find_vocal_periods(audio_stream_in, fs=fs, fuse_duration=.005, shortest_duration=.02,verbose=False)
 
@@ -833,7 +837,7 @@ def find_syllables(audio_stream_in, fs=None, amp_thresh=None):
     if fs==None:
         print("Warning it's best to pass the sampling rate, FS set to 30kHz")
         fs = 30000
-    syllables, thresh = find_vocal_periods(audio_stream_in, fs=fs, fuse_duration=.005, shortest_duration=.02,verbose=False, amp_thresh=amp_thresh)
+    syllables, thresh = find_vocal_periods(audio_stream_in, fs=fs, fuse_duration=.005, shortest_duration=shortest_duration,verbose=False, amp_thresh=amp_thresh)
     return syllables, thresh
 
 def find_vocal_periods(audio_stream_in, fs=None, fuse_duration=0.5, shortest_duration=0.5, verbose=True, amp_thresh=None, normalize_sound=False, normalize_thresh=0.006, lowpass = 5000, highpass = 2000):
@@ -939,7 +943,7 @@ def find_vocal_periods(audio_stream_in, fs=None, fuse_duration=0.5, shortest_dur
             print("After fusing and cutting shortest, {} vocal periods remain".format(len(vocal_periods)))
     else:
         vocal_periods = []
-    return vocal_periods, amp_thresh
+    return np.array(vocal_periods), amp_thresh
     
 
 

@@ -121,7 +121,7 @@ class LazySignal(object):
         return "LazySignal(N={} <{:.1f}s>, file={}, sampling_rate={}, mode={})".format(
             self.N, self.N / self.sampling_rate, self.file, self.sampling_rate, self.mode)
         
-    def _load_samples(self, n, offset):
+    def _load_samples(self, n, offset, mode=None):
         """Load subset of array into memory
 
         Loads a numpy memmmap object of 32-bit floating points numbers into memory

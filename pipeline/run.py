@@ -53,7 +53,10 @@ class RunSite(luigi.Task):
                     session.get("playbacks", [])
             )
 
-        yield ResegmentSite(self.site_dir)
+        # yield ResegmentSite(self.site_dir)
+        # commented out because sort sit eis now made to do both
+        yield SortSite(self.site_dir)
+        yield GenerateLazyFiles(self.site_dir)
 
     def run(self):
         pass

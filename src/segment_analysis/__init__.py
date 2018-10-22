@@ -58,7 +58,9 @@ class MultiSegmentPlotter(object):
         if ax is None:
             ax = plt.gca()
 
-        psths = self._segments.psths(mean=False, mode=mode, convolve_params=convolve_params)[:, :, unit].T
+        unit_idx = unit
+
+        psths = self._segments.psths(mean=False, mode=mode, convolve_params=convolve_params)[:, :, unit_idx].T
         t_arr = self._segments.t_arr(align_to_segment=align_to_segment)
 
         if single_segment is not None:
@@ -68,13 +70,13 @@ class MultiSegmentPlotter(object):
                 seg_idx = self._segments.index_of(single_segment)
             else:
                 raise Exception("single_segment must be int or neo.core.Segment")
-            ax.plot(t_arr, psths[:, seg_idx], linewidth=2, color=color)
+            ax.plot(t_arr, psths[:, seg_idx], linewidth=1, color=color)
         else:
             if alpha:
                 ax.plot(t_arr, psths, alpha=alpha, color=color)
             ax.plot(t_arr, np.mean(psths, axis=1), linewidth=2, alpha=mean_alpha, color=color)
 
-    def plot_spectrogram(self, seg, signal=0, channel=0, ax=None, align_to_segment=None):
+    def plot_spectrogram(self, seg, signal=0, channel=0, ax=None, align_to_segment=None, threshold=50):
         """Plot the spectrogram of a given segment's analogsignal
 
         Params
@@ -96,7 +98,7 @@ class MultiSegmentPlotter(object):
         """
         t_spec, f_spec, spec, _ = self._segments.get_spectrogram(
                 seg, signal=signal, channel=channel, align_to_segment=align_to_segment)
-        plot_spectrogram(t_spec, f_spec, spec, colormap="gray_r", ax=ax, colorbar=False)
+        plot_spectrogram(t_spec, f_spec, spec, colormap="gray_r", ax=ax, colorbar=False, dBNoise=threshold)
 
     def plot_raster(self, unit, ax=None, align_to_segment=None, mark_noise_epochs=False, elec_idx=None):
         """Plot the raster of the given unit over all trials in MultiSegment
@@ -124,6 +126,7 @@ class MultiSegmentPlotter(object):
             self._segments.spike_times(unit=unit, aligned=True),
             min_time=self._segments.t_start,
             max_time=self._segments.t_stop,
+            linewidth=2,
             ax=ax
         )
 
@@ -185,7 +188,19 @@ class MultiSegment(object):
         self.segments = segments
 
         self.annotations = MultiSegment._read_annotations(segments)
-        self.units = range(len(segments[0].spiketrains))
+
+        # Get all units from all spiketrains
+        units = set([
+            spiketrain.unit.name
+            for segment in segments 
+            for spiketrain in segment.spiketrains])
+        self.units = [
+            spiketrain.unit.name
+            for spiketrain in segments[0].spiketrains
+        ]
+
+        # self.units = sorted(list(units), key=lambda s: int(s.split("u")[0][1:]))
+
         self.offsets = np.array(offsets) if offsets is not None else np.zeros(len(segments))
         self._stops = np.array([seg.t_stop.item() for seg in segments])
         self._starts = np.array([seg.t_start.item() for seg in segments])
@@ -226,7 +241,10 @@ class MultiSegment(object):
         new_multisegment (segment_analysis.MultiSegment):
             Returns a new instance of MultiSegment with the filtered list of segments
         """
-        return MultiSegment(list(filter(fn, self.segments)))
+        return MultiSegment(
+            list(filter(fn, self.segments)),
+            offsets=[offset for offset, seg in zip(self.offsets, self.segments) if fn(seg)]
+        )
 
     def set_t_start(self, t_start=None):
         """Set a new t_start time"""
@@ -259,6 +277,26 @@ class MultiSegment(object):
         self.set_t_start(self._t_start)
         self.set_t_stop(self._t_stop)
 
+    def _get_unit_idx(self, unit_name):
+        i = 0
+        for spiketrain in self.segments[0].spiketrains:
+            if spiketrain.unit.name == unit_name:
+                break
+            i += 1
+
+        return i
+
+    def _get_unit_spiketrain(self, spiketrains, unit_name):
+        """Get unit by an electrode, unit_idx string (i.e. "e14u0")
+        """
+        for spiketrain in spiketrains:
+            if spiketrain.unit.name == unit_name:
+                break
+        else:
+            raise Exception("Unit {} not found in spiketrains".format(unit_name))
+
+        return spiketrain
+
     def spike_times(self, unit=None, aligned=False):
         """Return arrays of spike times for a specific unit or all units
 
@@ -280,6 +318,9 @@ class MultiSegment(object):
                     An array with dimensions n_segments.
                     The element i is an array of spike times for trial i
         """
+        if unit and not isinstance(unit, str):
+            raise Exception("Unit must be a string of form e_u_")
+
         results = []
         for seg, offset in zip(self.segments, self.offsets):
             if aligned:
@@ -293,7 +334,8 @@ class MultiSegment(object):
                     subresult.append(spiketrain.as_array() - total_offset)
                 results.append(subresult)
             else:
-                results.append(seg.spiketrains[unit].as_array() - total_offset)
+                spiketrain = self._get_unit_spiketrain(seg.spiketrains, unit)
+                results.append(spiketrain.as_array() - total_offset)
 
         return np.array(results)
 
@@ -373,14 +415,19 @@ class MultiSegment(object):
 
     def waveforms(self, unit=None):
         """Return waveforms for all units, or a given unit"""
+        if not isinstance(unit, str):
+            raise Exception("Unit must be a string of form e_u_")
+
         wfs = []
         units = [unit] if unit is not None else self.units
 
-        for unit_idx in units:
+        for unit_name in units:
             unit_wfs = []
             for seg in self.segments:
-                if len(seg.spiketrains[unit_idx].waveforms):
-                    unit_wfs += list(seg.spiketrains[unit_idx].waveforms)
+                # TODO (get the unit better)
+                spiketrain = self._get_unit_spiketrain(seg.spiketrains, unit_name)
+                if len(spiketrain.waveforms):
+                    unit_wfs += list(spiketrain.waveforms)
             wfs.append(np.array(unit_wfs))
 
         return np.array(wfs)
@@ -466,10 +513,12 @@ class MultiSegment(object):
 
         return t_arr, result, sampling_rate
 
-    def get_amplitude_envelope(self, seg_idx, signal=0, channel=None, original_times=False):
+    def get_amplitude_envelope(self, seg_idx, signal=0, channel=None, t_start=None, t_stop=None, original_times=False):
         t_arr, result, sampling_rate = self.get_analogsignal(seg_idx,
                 signal=signal,
                 channel=channel,
+                t_start=t_start,
+                t_stop=t_stop,
                 original_times=original_times)
 
         result = result - np.mean(result, axis=0)
@@ -543,15 +592,16 @@ class MultiSegment(object):
                 50.0,
                 min_freq=250,
                 max_freq=10000,
+                cmplx=False,
                 nstd=6)
 
         if t_start is not None:
             t_spec += t_start
-
-        if not original_times:
-            t_spec -= self.offsets[seg_idx]
         else:
-            t_spec += self._starts[seg_idx]
+            if not original_times:
+                t_spec -= self.offsets[seg_idx]
+            else:
+                t_spec += self._starts[seg_idx]
 
         return t_spec, f_spec, spec, rms
 

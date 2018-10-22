@@ -6,6 +6,7 @@
   <tr>
     <th>File</th>
     <th>Downloaded</th>
+    <th>Lazy Loading Ready</th>
     <th>Segmented</th>
     <th>Filtered</th>
     <th>Auto Sorted</th>
@@ -15,7 +16,7 @@
 		<th>Units</th>
   </tr>
 
-  {% for site, sessions in files.items() %}
+  {% for site, sessions in files %}
   <tr>
     <td class="sitetitle"> {{ site }} </td>
   </tr>
@@ -23,6 +24,7 @@
     <tr>
       <td>{{ file.str }}</td>
       <td class="{{ 'green' if file.downloaded_date and file.downloaded_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.downloaded_date | datetime("date") }}</td>
+      <td class="{{ 'green' if file.lazy and file.lazy > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.lazy | datetime("date") }}</td>
       <td class="{{ 'green' if file.segmented_date and file.segmented_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.segmented_date | datetime("date") }}</td>
       <td class="{{ 'green' if file.filtered_date and file.filtered_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.filtered_date | datetime("date") }}</td>
       <td class="{{ 'green' if file.sorted_date and file.sorted_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.sorted_date | datetime("date") }}</td>

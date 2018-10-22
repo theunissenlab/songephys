@@ -64,7 +64,7 @@ def check_filtered(session):
 
 
 def check_sorted(site):
-    matches = glob.glob(os.path.join(site, "sort_results", "sorted-e*.pkl"))
+    matches = glob.glob(os.path.join(site, "sort_results", "sorted-*.pkl"))
 
     if not len(matches):
         return None
@@ -84,6 +84,12 @@ def check_curated(site):
 def check_summaries(session):
     matches = glob.glob(os.path.join(session, "unit_summaries", "*.png"))
     return len(matches)
+
+
+def check_lazy_exists(site):
+    if not os.path.exists(os.path.join(site, "lazy_data.pkl")):
+        return None
+    return modified_at(os.path.join(site, "lazy_data.pkl"))
 
 
 def fetch_files():
@@ -121,6 +127,7 @@ def fetch_files():
                 file_info["curated_count"], file_info["curated_date"] = check_curated(site_dir)
                 file_info["path"] = session
                 file_info["units"] = check_summaries(site_dir)
+                file_info["lazy"] = check_lazy_exists(site_dir)
 
                 try:
                     with open(os.path.join(session, "notes")) as notefile:
@@ -130,7 +137,7 @@ def fetch_files():
 
                 site_files[os.path.basename(site_dir)].append(file_info)
 
-    return site_files
+    return sorted(site_files.items(), key=lambda s: s[0])
 
 
 @app.route("/")
