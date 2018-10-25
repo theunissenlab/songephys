@@ -50,6 +50,7 @@ VOCALIZATION_AMPLITUDE_THRESHOLD = 1.5
 ############################
 
 Z_THRESHOLD = 4.0       # number of standard deviations to threshold initial spike detection
+Z_SPIKE_LIMIT = 30.0    # upper bound of spikes to detect (because larger are probably noise...)
 WF_START = 10           # start index to slice waveforms at
 WF_STOP = 50            # stop index to slice waveforms at
 # WF_START = 8  # these are values for the 25kHz sampled data

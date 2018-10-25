@@ -5,6 +5,7 @@ import numpy as np
 
 
 from soundsig.sound import plot_spectrogram, spectrogram
+from soundsig.signal import bandpass_filter
 
 from sklearn.model_selection import train_test_split
 
@@ -42,18 +43,22 @@ def prepare_data(
     ):
     spike_bins = []
     spec_bins = []
+    using_events = []
 
     for event in events:
-        t1 = event["start_time"].item() + config.PAD_SONG_BEFORE + pad_before
+        t1 = event["start_time"].item() + pad_before
         t2 = (
             event["start_time"].item() + 
-            event["duration"].item() -
-            config.PAD_SONG_AFTER
+            event["duration"].item()
         )
         times = spike_times[(spike_times >= t1) & (spike_times <= t2)]
+        if not len(times):
+            continue
 
         channel = 0 if not channel_map else channel_map(event)
         mic_data = data_loader.time_slice(t1, t2, signal="mic").data[:, channel]
+        mic_data = mic_data - np.mean(mic_data)
+        mic_data = bandpass_filter(mic_data, 30000, 500, 8000)
 
         t, freq, timefreq, rms = spectrogram(
                 mic_data,
@@ -64,13 +69,14 @@ def prepare_data(
                 cmplx=False)
 
         binned_spikes = bin_spikes(times, t1, dt=1/spec_sample_rate, n_bins=len(t), convolve_width=convolve_width)
+        using_events.append(event)
         spike_bins.append(binned_spikes)
         spec_bins.append(timefreq)
 
     if not len(spike_bins):
         raise ValueError("No events")
 
-    return freq, spike_bins, spec_bins
+    return freq, spike_bins, spec_bins, using_events
 
 
 def concat(spec_bins, spike_bins):
@@ -128,7 +134,7 @@ def collect_data_for_strf(
 
         return (check_time and check_filter)
 
-    freq_arr, Y_spikes, X_specs = prepare_data(
+    freq_arr, Y_spikes, X_specs, _ = prepare_data(
         filter(_filter_fn, events),
         spike_times,
         data_loader,
@@ -194,7 +200,7 @@ def fit_strf(
 
         return (check_time and check_filter)
 
-    freq_arr, Y_spikes, X_specs = prepare_data(
+    freq_arr, Y_spikes, X_specs, _ = prepare_data(
         filter(_filter_fn, events),
         spike_times,
         data_loader,

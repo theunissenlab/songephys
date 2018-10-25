@@ -1,11 +1,12 @@
 import os
-
+import pickle
 import luigi
 
 from block_io import load_yaml
 from lazy import create_lazy_site
 
 from resegment import ResegmentSite
+from spike_sorting import SortSite
 from filter_signals import FilterElectrodeSignals
 from setup import DownloadSession
 
@@ -28,8 +29,13 @@ class GenerateLazyFiles(luigi.Task):
                 "sessions",
                 session["id"]))
 
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir, "lazy_data.pkl"))
+
     def run(self):
-        create_lazy_site(self.site_dir)
+        new_site = create_lazy_site(self.site_dir)
+        with open(self.output().path, "wb") as picklefile:
+            pickle.dump(new_site, picklefile)
 
 
 class RunSite(luigi.Task):

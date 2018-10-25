@@ -431,7 +431,7 @@ def extract_spikes(block):
             spike_indices, spike_waveforms = extract_spikes_from_signal(
                     sig_magnitude,
                     threshold_std=config.Z_THRESHOLD,
-                    limit_std=20,
+                    limit_std=config.Z_SPIKE_LIMIT,
                     min_spacing=config.MIN_SPIKE_THRESHOLD_SPACING,
                     spike_width=spikewd,
                     noise_mask=noise_mask

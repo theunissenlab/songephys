@@ -5,23 +5,41 @@ import matplotlib
 import numpy as np
 
 
-def plot(spike_times, min_time=0.0, max_time=1.0, color="k", linewidth=0.5, alpha=1.0, ax=None):
+def plot(
+        spike_times,
+        min_time=0.0,
+        max_time=1.0,
+        color="k",
+        linewidth=0.5,
+        alpha=1.0,
+        ax=None,
+        cmap="Greys",
+        mode=("scatter", "vlines", "pcolormesh")
+    ):
     """Raster plot based on spike arrival times
 
     Inputs:
     spike_times (list (length N_units) of arrays of spike arrival times)
     """
+    if not isinstance(mode, basestring):
+        mode = "scatter"
+
     ax = ax or plt.gca()
 
     for i, spikes in enumerate(spike_times):
-        ax.vlines(
-                spikes,
-                i + 0.2,
-                i + 0.8,
-                linewidth=linewidth,
-                color=color,
-                alpha=alpha
-        )
+        if mode == "scatter":
+            ax.scatter(spikes, i * np.ones(len(spikes)), s=linewidth, marker="s", color=color, alpha=alpha)
+        elif mode == "vlines":
+            ax.vlines(
+                    spikes,
+                    i + 0.2,
+                    i + 0.8,
+                    linewidth=linewidth,
+                    color=color,
+                    alpha=alpha
+            )
+        elif mode == "pcolormesh":
+            ax.pcolormesh(spikes, cmap=cmap)
 
     ax.set_ylim(0.0, len(spike_times))
     ax.set_xlim(min_time, max_time)

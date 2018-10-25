@@ -2,6 +2,7 @@ import os
 import pickle
 
 import numpy as np
+from numpy.lib.format import open_memmap
 from neo.io import NixIO
 from block_io import load_block, load_yaml
 from segmentation.audio_segment import join_continuous_segments
@@ -100,22 +101,56 @@ class LazySignal(object):
 
     """
 
-    def __init__(self, N, M, file, sampling_rate, mode="r"):
+    def __init__(
+                self,
+                N,
+                M,
+                file,
+                sampling_rate,
+                mode="r",
+                dtype="float32",
+                channel_names=None,
+                metadata=None
+            ):
         """Initialize the LazySignal reader
 
         Params
 
             N: integer length of the array in number of samples
+            M: integer number of channels
             file: string path to the memmap file
             sampling_rate: float number of samples per second
-            mode (r, w, w+): read or write mode
+            mode (r, w+, r+): read or write mode, default is "r"
+            dtype: datatype, default and only valid option is "float32"
+            metadata: dictionary of additional information to keep
+            channel_names: array like list of channel names, len must
+                equal M (default is None)
         """
-
         self.N = N
         self.M = M
+        self.dtype = dtype
         self.file = os.path.abspath(file)
         self.sampling_rate = sampling_rate
         self.set_mode(mode)
+        self.metadata = {} if not metadata else metadata
+
+        if channel_names is not None and len(channel_names) != self.M:
+            raise ValueError("LazySignal channel_names must be same length as"
+                    " number of channels, M")
+        self.channel_names = (
+            np.arange(self.M) if not channel_names else channel_names
+        )
+
+        if self.dtype != "float32":
+            raise Exception("I haven't accounted for non-float32 data yet")
+
+        if not os.path.exists(self.file):
+            placeholder = open_memmap(
+                    self.file,
+                    mode="w+",
+                    dtype=self.dtype,
+                    shape=(self.N, self.M))
+            del placeholder
 
     def __repr__(self):
         return "LazySignal(N={} <{:.1f}s>, file={}, sampling_rate={}, mode={})".format(
@@ -135,14 +170,25 @@ class LazySignal(object):
 
         Returns a numpy.memmap object
         """
+        if mode is None:
+            mode = self.mode
         return np.memmap(self.file,
-            mode=self.mode,
+            mode=mode,
             dtype="float32",
             shape=(n, self.M),
             offset=int(offset * self.M * (32 // 8))
         )
 
-    def write(self, new_array, n=None, offset=0):
+    def read_samples(self, n, offset):
+        memmap_file = self._load_samples(n, offset, mode="r")
+        data = np.array(memmap_file)
+        del memmap_file
+        return data
+
+    def touch(self):
+        pass
+
+    def _write(self, new_array, n=None, offset=0):
         """(Over)write a section of the numpy array at a particular location
 
         Parameters:
@@ -158,11 +204,20 @@ class LazySignal(object):
         if offset + len(new_array) > self.N:
             raise ValueError("Array update of size {} at location {} "
                 "would extend beyond original size {}".format(len(new_array), offset, self.N))
-        if "w" not in self.mode:
+        if self.mode not in ("w+", "r+"):
             raise ValueError("Cannot write to array in mode {}".format(self.mode))
 
-        arr = self._load_samples(new_array.shape[0], offset)
+        arr = self._load_samples(new_array.shape[0], offset, mode="r+")
         arr[:] = new_array[:]
+        del arr
+
+    def write(self, new_array, n=None, offset=0, batch_size=None):
+        if batch_size is None:
+            self._write(new_array, n=n, offset=offset)
+        else:
+            for i in np.arange(0, len(new_array), batch_size):
+                chunk = new_array[i:i+batch_size]
+                self._write(chunk, n=chunk.shape[0], offset=offset + i)
 
     def set_mode(self, mode):
         if mode not in ["r", "r+", "w", "w+"]:
@@ -198,8 +253,8 @@ class LazySignal(object):
 
         pad_zeros_before = max(0 - start_idx, 0)
         pad_zeros_after = max(stop_idx - self.N, 0)
-        
-        data = self._load_samples(
+       
+        data = self.read_samples(
             n - (pad_zeros_after + pad_zeros_before),
             start_idx + pad_zeros_before
         )
@@ -220,7 +275,7 @@ class LazySignal(object):
                 each window being iterated over
         """
         for start_idx in range(0, self.N - 1, step):
-            yield self._load_samples(step, start_idx)
+            yield start_idx, self.read_samples(step, start_idx)
 
     
 class LazySite(object):
@@ -405,31 +460,52 @@ def create_lazy_signal_elec(session_dir):
     lazy_signal.set_mode("r")
     return lazy_signal
 
-
-def create_lazy_signal_mic(session_dir):
+def _mosnter():
     session_name = os.path.basename(session_dir)
     nix = NixIO(os.path.join(session_dir, "segmentation", "{}.nix".format(session_name)))
     block = nix.read_block(lazy=True)
     segment = block.segments[0]
 
+def create_lazy_signals_from_nix(nix_file):
+    nix = NixIO(nix_file)
+    block = nix.read_block(lazy=True)
+    segment = block.segments[0]
+
+    signals_created = {}
+
     for sig in segment.analogsignals:
         if sig.name.startswith("Board ADC"):
-            break
+            sig = nix.load_lazy_object(sig)
 
-    sig = nix.load_lazy_object(sig)
+            lazy_signal = LazySignal(
+                sig.shape[0],
+                sig.shape[1],
+                os.path.join(session_dir, "raw", "mic.memmap"),
+                sig.sampling_rate.item(),
+                mode="w+"
+            )
 
-    lazy_signal = LazySignal(
-        sig.shape[0],
-        sig.shape[1],
-        os.path.join(session_dir, "raw", "mic.raw.memmap"),
-        sig.sampling_rate.item(),
-        mode="w+"
-    )
-    print("Saving {} signal to {}".format(session_dir, lazy_signal.file))
-    lazy_signal.write(sig)
-    print("Saved.")
-    lazy_signal.set_mode("r")
-    return lazy_signal
+            print("Saving {} signal to {}".format(session_dir, lazy_signal.file))
+            lazy_signal.write(sig, batch_size)
+            print("Saved.")
+            lazy_signal.set_mode("r")
+            signals_created["mic"] = lazy_signal
+
+        elif sig.name.startswith("Amplifier"):
+            sig = nix.load_lazy_object(sig)
+
+            lazy_signal = LazySignal(
+                sig.shape[0],
+                sig.shape[1],
+                os.path.join(session_dir, "raw", "raw.memmap"),
+                sig.sampling_rate.item(),
+                mode="w+"
+            )
+            print("Saving {} signal to {}".format(session_dir, lazy_signal.file))
+            lazy_signal.write(sig)
+            print("Saved.")
+            lazy_signal.set_mode("r")
+            return lazy_signal
 
 
 def create_lazy_signal_raw(session_dir):

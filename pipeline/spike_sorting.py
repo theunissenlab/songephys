@@ -5,16 +5,32 @@ import os
 import luigi
 import neo.core
 import quantities as pq
+import numpy as np
 
 import suss.io
 from suss.core import SpikeDataset
 from suss.gui.tags import ClusterTag
-from suss.sort import denoise, sort
+# from suss.sort import denoise, sort
+from suss.sort3 import sort as sort3
+
+from sort import sort_set as sort4
 
 import block_io
 import config
-from merge_sessions import MergeSessionBlocks
+from merge_sessions import MergeSessionBlocks, MergeVocalPeriods
+from segmentation.audio_segment import (
+        join_continuous_segments,
+        merge_segments,
+)
+from segmentation.audio_segment import segment as segment_block
 from spikes.sorting.preprocess import collect_waveforms
+
+
+def sort(dataset):
+    return list(sort3(dataset))
+    # for result in sort3(dataset):
+    #     pass
+    # return result
 
 
 def correct_ch_idxs(block):
@@ -54,6 +70,7 @@ class CollectWaveforms(luigi.Task):
 
         for i, (elec_id, output) in enumerate(zip(config.ELECTRODES, self.output())):
             # a hack to get the electrode with index i
+            print("this is its", [ch.name for ch in block.channel_indexes])
             unit = next(
                 channel_index.units[0]
                 for channel_index in block.channel_indexes
@@ -95,9 +112,10 @@ class SortSpikes(luigi.Task):
     def run(self):
         idx = config.ELECTRODES.index(self.electrode)
         dataset = suss.io.read_pickle(self.input()[idx].path)
-        denoised = denoise(dataset.times, dataset.waveforms)
-        result = sort(denoised)
-        suss.io.save_pickle(self.output().path, result)
+        # denoised = denoise(dataset.times, dataset.waveforms)
+        result = [sort4(dataset)]
+        # suss.io.save_pickle(os.path.join(os.path.dirname(self.output().path), "ungrouped-e{}.pkl".format(self.electrode)), result[-2])
+        suss.io.save_pickle(self.output().path, result[-1])
 
 
 class ManualCuration(luigi.Task):
@@ -130,14 +148,26 @@ class SortSite(luigi.Task):
     site_dir = luigi.Parameter()
 
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir, "sorted.pkl"))
+        # sorted.pkl
+        return luigi.LocalTarget(os.path.join(self.site_dir, "sorted-resegmented.pkl"))
 
     def requires(self):
         yield MergeSessionBlocks(self.site_dir)
         for electrode in config.ELECTRODES:
             yield ManualCuration(site_dir=self.site_dir, electrode=electrode)
+        # Save memory
+        yield MergeVocalPeriods(self.site_dir)
+        # End memory
 
     def run(self):
+        # Save memory
+        segments_data = np.load(self.input()[-1].path)[()]
+        segment_dicts = merge_segments(
+            segments_data["playback"],
+            segments_data["live"]
+        )
+        # End Save memory
+
         block = block_io.load_block(self.input()[0].path)
 
         elec_channels = [
@@ -154,7 +184,8 @@ class SortSite(luigi.Task):
         for channel_index in elec_channels:
             channel_index.units = []
 
-        for elec_id, clustered in zip(config.ELECTRODES, self.input()[1:]):
+        for elec_idx, (elec_id, clustered) in enumerate(zip(config.ELECTRODES, self.input()[1:-1])):
+            print("Creating spiketrains for electrode {}".format(elec_id))
             sorted_data = suss.io.read_pickle(clustered.path)
 
             for cluster_idx, (cluster_label, cluster) in enumerate(zip(sorted_data.labels, sorted_data.nodes)):
@@ -163,7 +194,7 @@ class SortSite(luigi.Task):
                 for tag in ClusterTag:
                     tag_annotations[tag.name] = tag in cluster.tags
                 new_unit = neo.core.Unit(
-                    name="e{}u{}".format(elec_id, cluster_idx),
+                    name="e{}u{}".format(elec_id, cluster_label),
                     source=clustered.path,
                     label=cluster_label,
                     tags=tag_annotations
@@ -189,7 +220,16 @@ class SortSite(luigi.Task):
                     spike_train.segment = segment
                     spike_train.unit = new_unit
 
-                elec_channels[elec_id].units.append(new_unit)
-                new_unit.channel_index = elec_channels[elec_id]
+                elec_channels[elec_idx].units.append(new_unit)
+                new_unit.channel_index = elec_channels[elec_idx]
 
-        block_io.save_block(self.output().path, block)
+        print("Saving data to {}".format(self.output().path))
+
+        # Save memory
+        block = join_continuous_segments(block)
+        new_block = segment_block(block, segment_dicts)
+
+        block_io.save_block(self.output().path, new_block)
+        # End Save memory
+
+        # block_io.save_block(self.output().path, block)

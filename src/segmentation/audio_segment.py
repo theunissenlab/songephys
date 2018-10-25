@@ -510,6 +510,7 @@ def segment(block, segment_dicts):
                 # of the start time of the file
                 import pdb
                 pdb.set_trace()
+                # sliced_signal = signal.time_slice(0 * start_time, stop_time)
 
             for channel_index in block.channel_indexes:
                 # TODO: preserve the channel number (e.g. 8 instead of 0)

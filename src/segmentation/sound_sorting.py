@@ -213,27 +213,34 @@ class SpectrogramCollection(object):
         )
 
 
-def collect_syllable_objects(multiseg, signal=0, channel=1):
-    syllable_times = find_syllables(multiseg.segments, signal=signal, channel=channel)
+def collect_syllable_objects(multiseg, signal=0, channel=1, threshold=None):
+    syllable_times = find_syllables(multiseg.segments, signal=signal, channel=channel, threshold=threshold)
     syllables = []
+    i = 0
     for seg_idx, syllable_idxs in enumerate(syllable_times):
         for start_idx, stop_idx in syllable_idxs:
-            syllables.append(
-                Syllable(
-                    multiseg.segments[seg_idx],
-                    start_idx,
-                    stop_idx
+            i += 1
+            try:
+                syllables.append(
+                    Syllable(
+                        multiseg.segments[seg_idx],
+                        start_idx,
+                        stop_idx,
+                        is_playback=(signal == "playback")
+                    )
                 )
-            )
+            except ValueError as e:
+                print("dodgin error {}".format(e))
+                continue
 
     return np.array(syllables)
 
 
-def plot_syllable(syllable, dur=3000):
+def plot_syllable(syllable, ax=None, dur=3000, channel=0):
     """
     Dur (duration) in samples
     """
-    t_arr, sig = syllable.get_sig(dur=3000)
+    t_arr, sig = syllable.get_sig(dur=dur, channel=channel)
     t_spec, f_spec, spec, rms = spectrogram(
         sig - sig.mean(),
         30000.0,
@@ -270,10 +277,19 @@ def plot_syllable(syllable, dur=3000):
 # select noise clusters
 # filter spectrograms
 # repeat
-def collect_spectrograms(syllables, channel=1, dur=3000):
+def collect_spectrograms(syllables, channel=0, dur=3000):
     spectrograms = []
+    bad_index = []
     for syl_idx, syl in enumerate(syllables):
-        t_arr, sig = syl.get_sig(channel=channel, dur=dur)
+        # if syl.segment.annotations.get("bird") == "tutor":
+        #     channel = 0
+        # elif syl.segment.annotations.get("bird") == "subject":
+        #     channel = 1
+        try:
+            t_arr, sig = syl.get_sig(channel=channel, dur=dur)
+        except ValueError:
+            bad_index.append(syl_idx)
+            continue
         t_spec, f_spec, spec, _ = spectrogram(
                 sig - sig.mean(),
                 30000.0,
@@ -281,12 +297,13 @@ def collect_spectrograms(syllables, channel=1, dur=3000):
                 50.0,
                 min_freq=250,
                 max_freq=10000,
-                nstd=6
+                nstd=6,
+                cmplx=False,
         )
         t_spec += t_arr[0]
         spectrograms.append(spec)
 
-    return SpectrogramCollection(t_spec, f_spec, np.array(spectrograms))
+    return np.array(syllables)[np.logical_not(np.isin(np.arange(len(syllables)), bad_index))], SpectrogramCollection(t_spec, f_spec, np.array(spectrograms))
 
 
 def collect_spectrogram_diffs(syllables, dur=3000):
