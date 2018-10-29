@@ -5,6 +5,7 @@ Perform vector (auto)regression to remove correlations within and across electro
 
 """
 from __future__ import print_function
+import time
 
 import numpy as np
 import quantities as pq
@@ -14,12 +15,12 @@ from neo.core import AnalogSignal, Epoch
 from sklearn.cluster import KMeans
 import quantities as pq
 
-from preproephys import get_mask
+from preproephys import get_mask, extract_spikes_from_signal
 from soundsig.signal import lowpass_filter, highpass_filter
 
 import config
 from .timeseries import filter_data_by_blocks, target_slice
-from util import float_x
+from util import float_x, convert_mins, estimate_time_remaining
 
 
 class Filterer(object):
@@ -279,3 +280,218 @@ def convert_to_epoch_obj(noise_epochs):
         times=np.array(times) * pq.s,
         durations=np.array(durations) * pq.s,
         labels=np.array(labels))
+
+
+filterer = Filterer(block_width=config.FILTER_BLOCK)
+
+config.SPIKE_THRESHOLD_STD = 4
+config.REFILTER_EVENTS_RATE = 10
+
+
+def spike_correlation(
+	signals,
+        channel_index,
+        spike_index,
+        spike_width):
+    """Compute correlation in spike window over all channels
+
+    Params:
+        signals: (N x C) array, N samples, C channels
+        channel_idx: integer index of channel with the spike on it
+        spike_index: integer between 1 and N corresponding to
+            index of spike sample
+        spike_width: width (radius) of spike in samples
+    
+    Returns correlation between channel_index and other channels
+    """
+    snippet = signals[spike_index - spike_width: spike_index + spike_width]
+    corr = np.corrcoef(snippet.T)
+    np.fill_diagonal(corr, 0)
+    corr = corr[:, channel_index:channel_index + 1]
+    return corr
+
+
+def consolidate_intervals(intervals):
+    """Combine overlapping intervals into non-overlapping intervals
+
+    Ex. [(0, 4), (2, 7), (9, 11)] -> [(0, 7), (9, 11)]
+    """
+    intervals = sorted(intervals)
+    new_intervals = []
+    last_start = None
+    for idx, (i1, i2) in enumerate(intervals):
+        if last_start is None:
+            last_start = i1
+        
+        if idx + 1 >= len(intervals):
+            new_intervals.append((last_start, i2))
+            break
+        elif intervals[idx + 1][0] >= i2:
+            new_intervals.append((last_start, i2))
+            last_start = None
+
+    return new_intervals
+
+
+def filter_and_detect_spikes(
+        signal_loader,
+        output_signal,
+        sampling_rate,
+        batch_size):
+    """Jointly filter electrode signals and detect spikes
+    
+    Runs an algorithm that filters an electrode signal and
+    collects spikes that cross a threshold value. Invokes a simple filtering
+    method (highpass and mean subtraction) as well as complex filtering
+    (time-lagged filter across all channels). The complex version is much
+    slower and so is only invoked when spikes with high correlation values
+    across channels are detected.
+    """
+    _spike_count = 0
+    _start_time = time.time()
+
+    all_spike_ind = []
+    all_spike_wf = []
+    all_noise_events = []
+    spike_width = int(config.SPIKE_WIDTH * sampling_rate)
+    
+    for batch_idx, chunk in signal_loader.batches(batch_size):
+        # (1) Highpass filter
+        base_signal = highpass_filter(
+            chunk.T,
+            sampling_rate,
+            config.HIGHPASS_CUTOFF
+        ).T
+
+        # (2) Subtract mean across channels
+        #     this should work for most cases!
+        highpass_signals = base_signal - np.mean(base_signal, axis=1)[:, None]
+
+        # (3) First round of spike detections
+        # Store times + channels of spikes with high correlations as noise,
+        # and and non-noisy events as spike indices
+        noise_intervals = []
+        noise_events = np.array([])
+        spike_ind = []
+        for ch_idx, sig in enumerate(highpass_signals.swapaxes(0, 1)):
+            _, spike_indexes, spike_wfs = extract_spikes_from_signal(
+                sig, 
+                threshold_std=0.75 * config.SPIKE_THRESHOLD_STD,
+                spike_width=spike_width,
+                upward_gain=1
+            )
+           
+            # Count how many channels have a correlation over threshold
+            # If there are enough over that threshold, call it a noise event
+            is_noise_event = np.array([
+                len(np.where(
+                    np.abs(
+                        spike_correlation(highpass_signals, ch_idx, ind, spike_width)
+                    ) > 0.8
+                )[0]) > 6
+                for ind in spike_indexes
+            ]).astype(np.bool)
+            
+            if len(spike_indexes):
+                noise_events = np.concatenate([noise_events, spike_indexes[is_noise_event]])
+            spike_ind.append(spike_indexes[~is_noise_event])
+
+        if len(noise_events):
+            # (4) Turn the noise events into blocks to filter
+            noise_intervals = []
+            buffer = 5 * spike_width
+            for event in noise_events:
+                i1 = int(max(0, event - buffer))
+                i2 = int(event + buffer)
+                noise_intervals.append((i1, i2))
+
+            noise_intervals = consolidate_intervals(noise_intervals)
+            
+            # (5) Build up array of noise intervals to learn filter on
+            noisy_snippets = None
+            offsets = []
+            for i1, i2 in noise_intervals:
+                if noisy_snippets is None:
+                    noisy_snippets = base_signal[i1:i2]
+                else:
+                    noisy_snippets = np.concatenate([noisy_snippets, base_signal[i1:i2]])
+                offsets.append((
+                    len(noisy_snippets) - len(base_signal[i1:i2]),
+                    len(noisy_snippets)
+                ))
+
+            if len(noisy_snippets) > (config.FILTER_BLOCK + config.N_LAGS):
+                cut_size = len(noisy_snippets) // 2
+                noisy_snippets = np.concatenate([
+                    noisy_snippets[-cut_size:],
+                    noisy_snippets,
+                    noisy_snippets[:cut_size]
+                ])
+
+                # (6) Fit the time-lagged filter to the noise periods
+                # TODO (kevin): i don't know why, but the filterer errors when this condition matches
+                if noisy_snippets.shape[0] % config.FILTER_BLOCK == config.N_LAGS:
+                    noisy_snippets = np.vstack([noisy_snippets, noisy_snippets[:1]])
+
+                clean_signal, _ = filterer.filter(noisy_snippets, config.N_LAGS)
+                clean_signal = clean_signal[cut_size:-cut_size]
+
+                for (i1, i2), (j1, j2) in zip(noise_intervals, offsets):
+                    for idx, clean_sig in enumerate(clean_signal[j1:j2].T):
+                        if np.std(clean_sig) > np.std(highpass_signals[i1:i2, idx]):
+                            continue
+
+                        baseline_std = np.std(
+                            highpass_signals[max(0, i1 - 100): i2 + 100, idx]
+                        )
+                        if np.std(clean_sig) > baseline_std * 2:
+                            highpass_signals[i1:i2, idx] = 0.0
+                            continue
+
+                        highpass_signals[i1:i2, idx] = clean_sig
+
+        # (7) Re-identify spikes in the window with new parameters
+        spike_ind = []
+        spike_wf = []
+        for ch_idx, sig in enumerate(highpass_signals.swapaxes(0, 1)):
+            _, spike_indexes, spike_wfs = extract_spikes_from_signal(
+                sig,
+                limit_std=config.Z_SPIKE_LIMIT,
+                threshold_std=config.Z_THRESHOLD,
+                spike_width=spike_width,
+                upward_gain=1
+            )
+
+            # (8) # Don't forget to correct the index to the batch offset!
+            spike_ind.append(spike_indexes + batch_idx)
+            if len(spike_wfs):
+                spike_wf.append(spike_wfs.astype(np.float32))
+            else:
+                spike_wf.append(np.zeros((0, 2 * spike_width), dtype=np.float32))
+
+        output_signal.write(highpass_signals, highpass_signals.shape[0], batch_idx)
+
+        all_spike_ind.append(spike_ind)
+        all_spike_wf.append(spike_wf)
+        all_noise_events += [(i1 + batch_idx, i2 + batch_idx) for i1, i2 in noise_intervals]
+
+        _spike_count += np.sum([len(x) for x in spike_ind])
+
+        elapsed, remaining = estimate_time_remaining(_start_time, batch_idx / signal_loader.N)
+        print(
+            "Filtering {}/{} in {}... "
+            "Est. remaining: {}. {} spikes so far.".format(
+                batch_idx,
+                signal_loader.N,
+                convert_mins(elapsed),
+                convert_mins(remaining),
+                _spike_count
+            ),
+            end="\r"
+        )
+
+    all_spike_ind = np.array([np.concatenate(x) for x in list(zip(*all_spike_ind))])
+    all_spike_wf = np.array([np.concatenate(x) for x in list(zip(*all_spike_wf))])
+    
+    return all_spike_ind, all_spike_wf, all_noise_events
+

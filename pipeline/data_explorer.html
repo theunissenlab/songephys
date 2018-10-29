@@ -9,6 +9,8 @@
     <th>Lazy Loading Ready</th>
     <th>Segmented</th>
     <th>Filtered</th>
+    <th>Filtered (Lazy)</th>
+    <th>Spikes Extracted (Site)</th>
     <th>Auto Sorted</th>
     <th>Manually Curated</th>
     <th>Session Path</th>
@@ -26,6 +28,8 @@
       <td class="{{ 'green' if file.downloaded_date and file.downloaded_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.downloaded_date | datetime("date") }}</td>
       <td class="{{ 'green' if file.lazy and file.lazy > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.lazy | datetime("date") }}</td>
       <td class="{{ 'green' if file.segmented_date and file.segmented_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.segmented_date | datetime("date") }}</td>
+      <td class="{{ 'green' if file.filtered_date_lazy and file.filtered_date_lazy > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.filtered_date_lazy | datetime("date") }}</td>
+      <td class="{{ 'green' if file.spikes_extracted and file.spikes_extracted > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.spikes_extracted | datetime("date") }}</td>
       <td class="{{ 'green' if file.filtered_date and file.filtered_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.filtered_date | datetime("date") }}</td>
       <td class="{{ 'green' if file.sorted_date and file.sorted_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.sorted_date | datetime("date") }}</td>
       <td class="{{ 'green' if file.curated_date and file.curated_date > datetime.datetime.now() + datetime.timedelta(days=14) }}">{{ file.curated_date | datetime("date") }}{% if file.curated_count %}: {{file.curated_count}}/16{% endif %}</td>

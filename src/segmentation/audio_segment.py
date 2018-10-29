@@ -4,7 +4,7 @@ import pandas as pd
 import quantities as pq
 
 from neo.core import AnalogSignal, SpikeTrain, Segment, Epoch
-from .autodetect import find_vocal_periods
+from .autodetect import find_vocal_periods, find_vocal_periods_from_lazy
 
 import config
 
@@ -50,6 +50,7 @@ def convert_digital_to_metadata(digital_signal, code_length=384, bits_per_char=8
             metadata["repetition"] = int(code[8:12])
         except ValueError:
             print("Repetition is not an integer! Setting to 0.")
+            raise Exception
             metadata["repetition"] = 0
         try:
             metadata["trial"] = int(code[12:16])
@@ -162,6 +163,31 @@ def generate_stim_dicts(digital_signals, playbacks_db):
         })
 
     return stim_dicts
+
+
+def generate_vocal_periods_dicts_from_lazy(lazy_mic):
+    vocal_intervals = find_vocal_periods_from_lazy(lazy_mic)
+
+    total_duration = lazy_mic.N / lazy_mic.sampling_rate
+
+    seg_dicts = []
+    for start_time, stop_time in vocal_intervals:
+        if stop_time > total_duration:
+            print("Warning: segment from {} to {} extends beyond {}".format(start_time, stop_time, total_duration))
+            continue
+
+        seg_dicts.append({
+            "name": "live_unknown",
+            "description": "",
+            "sound_type": "live",
+            "vocalization_type": "unknown",
+            "vocalizer": "unknown",
+            "playback_file": None,
+            "start_time": (start_time - config.PAD_SONG_BEFORE) * pq.s,
+            "duration": (stop_time - start_time + config.PAD_SONG_BEFORE + config.PAD_SONG_AFTER) * pq.s
+        })
+
+    return seg_dicts
 
 
 def generate_vocal_periods_dicts(audio, sampling_rate):

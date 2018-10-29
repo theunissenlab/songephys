@@ -11,7 +11,7 @@ from neo.io import NixIO
 
 import block_io
 import config
-from rhd2nix import Rhd2Nix
+from rhd2nix import Rhd2Nix, GenerateLazyFiles
 from segmentation.audio_segment import (
     convert_digital_to_metadata,
     segment,
@@ -19,6 +19,7 @@ from segmentation.audio_segment import (
     generate_all_segment_dicts,
     generate_vocal_periods_dicts,
     merge_segments,
+    generate_vocal_periods_dicts_from_lazy
 )
 from stimuli import convert_pyoperant_csvs
 from utils import session_basename
@@ -173,6 +174,7 @@ class DetectSoundSegments(luigi.Task):
         # This index could conceivably change, so shouldn't be hardcoded
         sound = nix.load_lazy_object(block.segments[0].analogsignals[1])
 
+        # FIXME: doens't seem right to pick this channel by default...
         sound_arr = sound.as_array()[:, 0]
         sampling_rate = sound.sampling_rate.item()
 
@@ -206,6 +208,99 @@ class DetectSoundSegments(luigi.Task):
 
         try:
             playbacks_db = pd.read_pickle(self.input()[1].path)
+        except:
+            logger.warning("No pyoperant file found (no playbacks)")
+            playback_dicts = []
+            segment_dicts = live_dicts
+        else:
+            digital_signals = nix.load_lazy_object(block.segments[0].events[0])
+            playback_dicts = generate_stim_dicts(
+                    digital_signals,
+                    playbacks_db
+            )
+            logger.info("Identified {} playback periods".format(
+                len(playback_dicts))
+            )
+            segment_dicts = merge_segments(playback_dicts, live_dicts)
+
+        nix.close()
+
+        ####################################
+        ### Save identified time periods ###
+        ####################################
+        
+        logger.info("Identified {} segments, ({} playback, {} live)".format(
+                len(segment_dicts),
+                len(playback_dicts),
+                len(segment_dicts) - len(playback_dicts)
+        ))
+
+        np.save(
+            self.output().path,
+            {
+                "live": live_dicts,
+                "playback": playback_dicts
+            }
+        )
+
+
+class DetectSoundSegmentsLazy(luigi.Task):
+    """Locate time periods containing either live or playback sounds
+    
+    Represents each time period by a dictionary with a start and stop
+    time. Saves a list of live periods and playback periods.
+    """
+
+    session_dir = luigi.Parameter()
+
+    def requires(self):
+        return [
+            Rhd2Nix(self.session_dir),
+            GenerateLazyFiles(self.session_dir),
+            CombineTrialMetadata(self.session_dir)
+        ]
+
+    def output(self):
+        segmentation_dir = os.path.join(self.session_dir, "segmentation")
+        segment_data_file = "{}-segments.npy".format(
+                session_basename(self.session_dir)
+        )
+        return luigi.LocalTarget(
+                os.path.join(segmentation_dir, segment_data_file)
+        )
+
+    def run(self):
+        nix = NixIO(self.input()[0].path)
+        block = nix.read_block(lazy=True)
+
+        ######################################################
+        ### First search for periods of live vocalizations ###
+        ######################################################
+
+        mic = np.load(self.input()[1].path)[()]["mic"]
+        live_dicts = generate_vocal_periods_dicts_from_lazy(mic)
+        live_dicts = [
+            seg_dict for seg_dict in live_dicts
+            if (
+                config.MIN_SEGMENT_LENGTH <=
+                seg_dict["duration"].item() <=
+                config.MAX_SEGMENT_LENGTH
+            )
+        ]
+
+        logger.info("Found {} live vocalizations".format(len(live_dicts)))
+        logger.info("{} between {} and {}".format(
+            len(live_dicts),
+            config.MIN_SEGMENT_LENGTH,
+            config.MAX_SEGMENT_LENGTH
+        ))
+
+        #################################
+        ### Identify playback periods ###
+        #################################
+
+        try:
+            playbacks_db = pd.read_pickle(self.input()[2].path)
         except:
             logger.warning("No pyoperant file found (no playbacks)")
             playback_dicts = []

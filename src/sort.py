@@ -184,6 +184,12 @@ def generate_similarity_matrix(wf, labels, unique_labels):
     return similarity, snrs
 
 def combined_disposed(disposed):
+    if not len(disposed):
+        return Waveforms(
+                np.array([]),
+                np.array([]),
+                np.array([])
+        )
     return Waveforms(
             np.concatenate([d.ind for d in disposed]),
             np.vstack([d.wf for d in disposed]),
@@ -433,10 +439,16 @@ def hdb_fit_near(data, n_clusters=10, try_range=(2,)):
     good_labels = good_labels_list[np.argmin(np.abs(cluster_count - n_clusters))]
     print(cluster_count, good_labels_list)
 
-    return KNeighborsClassifier(n_neighbors=5).fit(
-            data[good_labels != -1],
-            good_labels[good_labels != -1]
-    ).predict(data)
+    if np.sum(data[good_labels != -1]) < 6:
+        return KNeighborsClassifier(n_neighbors=5).fit(
+                data,
+                good_labels
+        ).predict(data)
+    else:
+        return KNeighborsClassifier(n_neighbors=5).fit(
+                data[good_labels != -1],
+                good_labels[good_labels != -1]
+        ).predict(data)
 
 
 def sort_set(spike_dataset):

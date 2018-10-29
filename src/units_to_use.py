@@ -1,4 +1,5 @@
 import numpy as np
+import os
 
 
 units_to_use = {
@@ -34,6 +35,7 @@ units_to_use = {
         (21, 74, [(11000, 19000)]), # good strf!!!!!!!!!!! and very different tutor vs bo
         (21, 75, [(0, np.inf)]),    # decent strf!!!!!!!!! and very differnet tutor vs bos
     ],
+
     "BroGre4497M_180610_114535": [
         (10, 34, [(0, 1200)]),    # well isolated but pb only
         (10, 39, [(0, 5000)]),    # bad, changes too much late to be able to tell... but could compare earlier tut live to playbacks
@@ -53,6 +55,7 @@ units_to_use = {
         (23, 27, [(0, np.inf)]),  # similar responses bos and tutor
         (23, 28, [(0, np.inf)]),  # simlar responses bos and tutor
     ],
+
     "GreYel3594M___170915_082724": [
         (9, 1, [(13000, 15000), (18000, 20000)]),  # split up, noisy recording, PB only
         (12, 66, [(0, 8000)]),                     # SU, good wf shape, PB only
@@ -77,6 +80,7 @@ units_to_use = {
         (23, 54, [(0, 5000)]),
         (23, 56, [(0, 16000)]),
     ],
+
     "GreYel3594M___170919_094646": [
         (8, 1, [(0, np.inf)]), 
         (9, 1, [(0, np.inf)]), 
@@ -99,6 +103,7 @@ units_to_use = {
         (23, 19, [(1000, 4000)]), 
         (23, 20, [(0, np.inf)]),
     ],
+
     "RedGre7705M__171214_102641": [
         (8, 43, [(1000, 14000)]),
         (8, 44, [(0, np.inf)]), 
@@ -108,18 +113,55 @@ units_to_use = {
         (22, 26, [(0, np.inf)]),     # stereotyped response in tutor live, not in tutor pb
         (22, 27, [(0, np.inf)]),     # another baisc one, probably L
     ],
+
     "RedGre7705M__171214_145611": [
         (15, 1, [(0, np.inf)]), 
         (22, 1, [(0, np.inf)]),
         (22, 4, [(0, 2000)]),                     
         (22, 5, [(0, np.inf)]),    
     ],
+
     "RedGre7705M__171217_142728": [
         (10, 1, [(0, np.inf)]), 
         (15, 1, [(500, 2000)]),                     
         (21, 1, [(0, np.inf)]),    
         (22, 50, [(0, np.inf)]),
         (22, 51, [(0, np.inf)]),
+    ],
+
+    "LbY6074__161215_094456": [
+        (12, 28, [(12000, 28000)]),   # these two might be pretty much the same... consider merging
+        (12, 29, [(10000, 25000)]),                     
+        (12, 30, [(10000, 30000)]),    
+        (12, 31, [(33000, np.inf)]),     # only su?
+        (13, 1, [(8000, 30000)]),
+        (15, 60, [(13000, np.inf)]),  # merge with below?
+        (15, 61, [(10000, 29000)]),  # SU
+        (20, 2, [(13000, 18000)]),  # SU
+        (21, 57, [(9000, np.inf)]), #MU
+        (21, 62, [(9000, np.inf)]), #MU
+        (21, 65, [(11000, 29000)]), #SU
+        (21, 69, [(9000, 35000)]), #SU
+        (22, 26, [(9000, np.inf)]), #MU
+        (22, 28, [(28000, np.inf)]), #SU
+        (22, 29, [(9000, np.inf)]), #MU
+    ],
+
+    "LBlYel0923___160901_103806": [
+        (8, 4, [(0, 5000)]),  # MU
+        (8, 5, [(6000, np.inf)]), #MU
+        (9, 67, [(0, 9000)]),     # SU *
+        (9, 68, [(0, np.inf)]),     # SU  *
+        (9, 70, [(0, np.inf)]),    # MU bad
+        (12, 70, [(0, 10000)]),  # SU * 
+        (12, 71, [(10000, np.inf)]),  # SU * essentially continuation of previous
+        (14, 16, [(0, 12000)]),  # MU + 
+        (14, 20, [(0, np.inf)]), # MU +
+        (17, 1, [(0, np.inf)]), #MU + 
+        (19, 1, [(0, np.inf)]), # SU +
+        (20, 1, [(0, np.inf)]), # MU
+        (21, 1, [(0, np.inf)]), # MU
+        (22, 1, [(0, np.inf)]), # MU
     ],
 }
 
@@ -132,6 +174,8 @@ channel_map = {
     "RedGre7705M__171214_102641": 0,
     "RedGre7705M__171214_145611": 0,
     "RedGre7705M__171217_142728": 0,
+    "LbY6074__161215_094456": 0,
+    "LBlYel0923___160901_103806": 0
 }
 
 
@@ -268,6 +312,41 @@ putative_brain_regions = {
         (22, 50): CM_L,
         (22, 51): CM_L,
     },
+
+    "LbY6074__161215_094456": {
+        (12, 28): NON,
+        (12, 29): NON,
+        (12, 30): NON,
+        (12, 31): NON,
+        (13, 1): NON,
+        (15, 60): NON,
+        (15, 61): NON,
+        (20, 2): NON,
+        (21, 57): NON,
+        (21, 62): NON,
+        (21, 65): NON,
+        (21, 69): NON,
+        (22, 26): NON,
+        (22, 28): NON,
+        (22, 29): NON,
+    },
+
+    "LBlYel0923___160901_103806": {
+        (8, 4): NON,
+        (8, 5): NON,
+        (9, 67): NON,
+        (9, 68): NON,
+        (9, 70): NON,
+        (12, 70): NON,
+        (12, 71): NON,
+        (14, 16): NON,
+        (14, 20): NON,
+        (17, 1): NON,
+        (19, 1): NON,
+        (20, 1): NON,
+        (21, 1): NON,
+        (22, 1): NON,
+    },
 }
 
 
@@ -396,4 +475,86 @@ is_single_unit = {
         (22, 50): 1,
         (22, 51): 0,
     },
+
+    "LbY6074__161215_094456": {
+        (12, 28): 0,
+        (12, 29): 0,
+        (12, 30): 0,
+        (12, 31): 1,
+        (13, 1): 0,
+        (15, 60): 0,
+        (15, 61): 1,
+        (20, 2): 1,
+        (21, 57): 0,
+        (21, 62): 0,
+        (21, 65): 1,
+        (21, 69): 1,
+        (22, 26): 0,
+        (22, 28): 1,
+        (22, 29): 0,
+    },
+
+    "LBlYel0923___160901_103806": {
+        (8, 4): 0,  # MU
+        (8, 5): 0,  #MU
+        (9, 67): 1,  # SU *
+        (9, 68): 1,  # SU  *
+        (9, 70): 0,  # MU bad
+        (12, 70): 1,  # SU * 
+        (12, 71): 1,  # SU * essentially continuation of previous
+        (14, 16): 0,  # MU
+        (14, 20): 0,  # MU
+        (17, 1): 0,  #MU + 
+        (19, 1): 1,  # SU +
+        (20, 1): 0,  # MU
+        (21, 1): 0,  # MU
+        (22, 1): 0,  # MU
+    },
 }
+
+
+def custom_correction(sound_events, site):
+    for e in sound_events:
+        if e["sound_type"] == "playback":
+            if "_So" in e["playback_file"]:
+                e["vocalization_type"] = "So"
+
+        if e["sound_type"] == "live" and "GreYel3594M___" in site:
+            if e["vocalizer"] == "tutor":
+                e["vocalizer"] = "con_male_familiar"
+
+        if e["sound_type"] == "playback" and "GreYel3594M___" in e["playback_file"]:
+            pb_file = os.path.basename(e["playback_file"])
+            if "MAT" in pb_file:
+                e["vocalizer"] = "con_male_familiar"
+            elif "MAF" in pb_file:
+                e["vocalizer"] = "tutor"
+            elif "MJF" in pb_file:
+                e["vocalizer"] = "juvenile"
+
+        if e["sound_type"] == "playback" and "RedGre7705M__" in e["playback_file"]:
+            pb_file = os.path.basename(e["playback_file"])
+            if "MJP" in pb_file:
+                e["vocalizer"] = "subject"
+            elif e["vocalizer"] == "con_male":
+                e["vocalizer"] = "con_male_familiar"
+
+        if e["sound_type"] == "playback" and "BroGre4497M_" in e["playback_file"]:
+            pb_file = os.path.basename(e["playback_file"])
+            if "MJB" in pb_file:
+                e["vocalizer"] = "juvenile"
+            elif "MAF" in pb_file:
+                e["vocalizer"] = "con_male_familiar"
+
+        if e["sound_type"] == "playback" and ("LBlYel0923_" in e["playback_file"] or "LblYel0923_" in e["playback_file"]):
+            pb_file = os.path.basename(e["playback_file"])
+            if "MAF" in pb_file:
+                e["vocalizer"] = "con_male_familiar"
+
+        if e["sound_type"] == "playback" and "LbY6074_" in e["playback_file"]:
+            pb_file = os.path.basename(e["playback_file"])
+            if "MAF" in pb_file:
+                e["vocalizer"] = "con_male_familiar"
+
+    return sound_events
+

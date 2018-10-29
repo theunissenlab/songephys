@@ -17,7 +17,7 @@ from sort import sort_set as sort4
 
 import block_io
 import config
-from merge_sessions import MergeSessionBlocks, MergeVocalPeriods
+from merge_sessions import MergeSessionBlocks, MergeVocalPeriods, MergeDetectedSpikes
 from segmentation.audio_segment import (
         join_continuous_segments,
         merge_segments,
@@ -107,7 +107,8 @@ class SortSpikes(luigi.Task):
         ))
 
     def requires(self):
-        return CollectWaveforms(self.site_dir)
+        return MergeDetectedSpikes(self.site_dir)
+        # return CollectWaveforms(self.site_dir)
 
     def run(self):
         idx = config.ELECTRODES.index(self.electrode)
@@ -140,6 +141,18 @@ class ManualCuration(luigi.Task):
 
     def run(self):
         # Manual sorting here
+        pass
+
+
+class PrepareForSorting(luigi.Task):
+
+    site_dir = luigi.Parameter()
+
+    def requires(self):
+        for electrode in config.ELECTRODES:
+            yield SortSpikes(site_dir=self.site_dir, electrode=electrode)
+
+    def run(self):
         pass
 
 

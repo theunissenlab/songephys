@@ -4,7 +4,7 @@ try:
     import cPickle as pickle
 except ImportError:
     import pickle
-from soundsig.signal import lowpass_filter, highpass_filter
+from soundsig.signal import lowpass_filter, highpass_filter, bandpass_filter
 import matplotlib.mlab as mlab
 import matplotlib.pyplot as plt
 import numpy as np
@@ -21,6 +21,8 @@ from scipy.stats import zscore
 from scipy.signal import decimate
 import sys
 from neo.io import NixIO, RHDIO
+
+import config
 
 
 
@@ -1123,3 +1125,101 @@ def normalize_sound_by_the_second(audio_streams, fs):
             audio_streams[m:n,i] = audio_streams[m:n,i] - np.mean(audio_streams[m:n,i])
     return audio_streams
 
+
+def find_vocal_periods_from_lazy(mic):
+    """Takes a lazy site and finds time periods of signal
+
+    mic: instance of lazy.LazySignal for the microphone data
+    """
+    last_interval_to_check = None  # Marker in case the vocal period goes over end of window
+    all_intervals = []
+
+    THRESHOLD_WINDOW = 60  # window over which to compute amplitude thresholds (seconds)
+
+    for t in np.arange(0, mic.N / mic.sampling_rate, THRESHOLD_WINDOW):
+        end_time = min(t + THRESHOLD_WINDOW, mic.N / mic.sampling_rate)
+        sig = mic.time_slice(t, end_time).data
+        sig = sig - np.mean(sig, axis=0)
+        sig = bandpass_filter(sig.T, mic.sampling_rate, 1000, 8000).T
+        amp_env = get_amplitude_envelope(sig, mic.sampling_rate, highpass=2000, lowpass=8000)
+        amp_env = np.mean(amp_env, axis=1)
+        threshold = np.median(amp_env) * config.VOCALIZATION_AMPLITUDE_THRESHOLD
+        
+        intervals = threshold_events(
+            amp_env,
+            threshold,
+            polarity=1,
+            sampling_rate=mic.sampling_rate,
+            ignore_width=0.01,
+            min_size=0.1,
+            fuse_duration=config.AUTODETECT_FUSE_DURATION
+        )
+        
+        if last_interval_to_check is not None:
+            if not len(intervals):
+                all_intervals.append(last_interval_to_check)
+            elif intervals[0][0] < (config.AUTODETECT_FUSE_DURATION * mic.sampling_rate):
+                all_intervals.append((
+                    last_interval_to_check[0], 
+                    intervals[0][1] / mic.sampling_rate + t
+                ))
+                intervals = intervals[1:]
+            else:
+                all_intervals.append(last_interval_to_check)
+                all_intervals.append((
+                    intervals[0][0] / mic.sampling_rate + t,
+                    intervals[0][1] / mic.sampling_rate + t
+                ))
+                intervals = intervals[1:]
+            last_interval_to_check = None
+            
+        for i0, i1 in intervals:
+            if i1 == len(sig):
+                last_interval_to_check = (i0 / mic.sampling_rate + t, i1 / mic.sampling_rate + t)
+                break
+            all_intervals.append((i0 / mic.sampling_rate + t, i1 / mic.sampling_rate + t))
+        
+    return all_intervals
+
+
+def threshold_events(signal, threshold, polarity=1, sampling_rate=1, ignore_width=None, min_size=1, fuse_duration=0):
+    """Detect intervals crossing a threshold
+    
+    TODO: leave the possiblity of open ended intervals....?
+    """
+    if polarity not in (-1, 1):
+        raise ValueError("Polarity must equal +/- 1")
+
+    starts_on = (polarity * signal[0] >= polarity * threshold)
+    
+    crossings = np.diff((polarity * signal >= polarity * threshold).astype(np.int))
+    interval_starts = np.where(crossings > 0)[0] + 1
+    interval_stops = np.where(crossings < 0)[0] + 1
+    
+    if starts_on:
+        interval_starts = np.concatenate([[0], interval_starts])
+    
+    if len(interval_stops) < len(interval_starts):
+        interval_stops = np.concatenate([interval_stops, [len(signal)]])
+        
+    # Ignore events that are too short
+    intervals = np.array([
+        (i, j) for i, j in zip(interval_starts, interval_stops)
+        if (not ignore_width or ((j - i) / sampling_rate) > ignore_width)
+    ])
+    if not len(intervals):
+        return np.array([])
+
+    gaps = (intervals[1:, 0] - intervals[:-1, 1]) / sampling_rate
+    gaps = np.concatenate([gaps, [np.inf]])
+
+    fused_intervals = []
+    current_interval_start = None
+    for (i, j), gap in zip(intervals, gaps):
+        if current_interval_start is None:
+            current_interval_start = i
+        if gap > fuse_duration:
+            fused_intervals.append((current_interval_start, j))
+            current_interval_start = None
+    
+    return np.array([(i, j) for i, j in fused_intervals if ((j - i) / sampling_rate) >= min_size])

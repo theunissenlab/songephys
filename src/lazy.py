@@ -246,10 +246,17 @@ class LazySignal(object):
         """
         start_idx = time_to_index(t_start, self.sampling_rate)
         stop_idx = time_to_index(t_stop, self.sampling_rate)
+
         n = stop_idx - start_idx
+
         # If you request past the end of the slice, just pad with zeros
         # The calling function should deal with completing the rest of the slice
         t_arr = np.arange(start_idx, stop_idx) / self.sampling_rate
+
+        if start_idx > self.N:
+            return LoadedTimeSlice(
+                t=t_arr,
+                data=np.zeros((n, self.M)))
 
         pad_zeros_before = max(0 - start_idx, 0)
         pad_zeros_after = max(stop_idx - self.N, 0)
@@ -258,6 +265,7 @@ class LazySignal(object):
             n - (pad_zeros_after + pad_zeros_before),
             start_idx + pad_zeros_before
         )
+
         data = np.vstack([
             np.zeros((pad_zeros_before, data.shape[1])),
             data,
@@ -275,7 +283,7 @@ class LazySignal(object):
                 each window being iterated over
         """
         for start_idx in range(0, self.N - 1, step):
-            yield start_idx, self.read_samples(step, start_idx)
+            yield start_idx, self.read_samples(min(step, self.N - start_idx), start_idx)
 
     
 class LazySite(object):
@@ -413,7 +421,7 @@ class LazySite(object):
             if t_signal != t_signal_leftover:
                 leftover_signal = lazy_signals_leftover[signal].time_slice(
                     t_start - t_signal_leftover,
-                    t_stop - t_signal_leftover
+                    t_stop - t_signal_leftover,
                 )
                 leftover_signal.t += t_signal_leftover
                 result.data[result.t >= t_signal_leftover] = leftover_signal.data[leftover_signal.t >= t_signal_leftover]
@@ -428,7 +436,7 @@ class LazySite(object):
             if t_signal != t_signal_leftover:
                 leftover_signal = lazy_signals_leftover[key].time_slice(
                     t_start - t_signal_leftover,
-                    t_stop - t_signal_leftover
+                    t_stop - t_signal_leftover,
                 )
                 leftover_signal.t += t_signal_leftover
                 signals[key].data[signals[key].t >= t_signal_leftover] = leftover_signal.data[signals[key].t >= t_signal_leftover]
@@ -436,37 +444,7 @@ class LazySite(object):
         return signals
 
 
-def create_lazy_signal_elec(session_dir):
-    """Copy data from the neo block to a memmapped array for lazy loading"""
-    print("Loading {}".format(session_dir))
-    session_name = os.path.basename(session_dir)
-    block = load_block(os.path.join(session_dir, "segmentation", "{}-filtered.pkl".format(session_name)))
-    block = join_continuous_segments(block)
-    segment = block.segments[0]
-    for sig in segment.analogsignals:
-        if sig.name.startswith("Amplifier"):
-            break
-    
-    lazy_signal = LazySignal(
-        sig.shape[0],
-        sig.shape[1],
-        os.path.join(session_dir, "raw", "filtered.raw.memmap"),
-        sig.sampling_rate.item(),
-        mode="w+"
-    )
-    print("Saving {} signal to {}".format(session_dir, lazy_signal.file))
-    lazy_signal.write(sig)
-    print("Saved.")
-    lazy_signal.set_mode("r")
-    return lazy_signal
-
-def _mosnter():
-    session_name = os.path.basename(session_dir)
-    nix = NixIO(os.path.join(session_dir, "segmentation", "{}.nix".format(session_name)))
-    block = nix.read_block(lazy=True)
-    segment = block.segments[0]
-
-def create_lazy_signals_from_nix(nix_file):
+def create_lazy_signals_from_nix(nix_file, output_mic, output_elec, batch_size):
     nix = NixIO(nix_file)
     block = nix.read_block(lazy=True)
     segment = block.segments[0]
@@ -474,20 +452,24 @@ def create_lazy_signals_from_nix(nix_file):
     signals_created = {}
 
     for sig in segment.analogsignals:
+        if not sig.name:
+            if not sig.annotations:
+                raise Exception("noi annotations {}".format(sig.annotations))
+            print("Warning... signal has no name. using sig.annotations.nix_name: {nix_name}".format(**sig.annotations))
+            sig.name = sig.annotations["nix_name"]
+
         if sig.name.startswith("Board ADC"):
             sig = nix.load_lazy_object(sig)
 
             lazy_signal = LazySignal(
                 sig.shape[0],
                 sig.shape[1],
-                os.path.join(session_dir, "raw", "mic.memmap"),
+                output_mic,
                 sig.sampling_rate.item(),
                 mode="w+"
             )
 
-            print("Saving {} signal to {}".format(session_dir, lazy_signal.file))
             lazy_signal.write(sig, batch_size)
-            print("Saved.")
             lazy_signal.set_mode("r")
             signals_created["mic"] = lazy_signal
 
@@ -497,63 +479,13 @@ def create_lazy_signals_from_nix(nix_file):
             lazy_signal = LazySignal(
                 sig.shape[0],
                 sig.shape[1],
-                os.path.join(session_dir, "raw", "raw.memmap"),
+                output_elec,
                 sig.sampling_rate.item(),
                 mode="w+"
             )
-            print("Saving {} signal to {}".format(session_dir, lazy_signal.file))
-            lazy_signal.write(sig)
-            print("Saved.")
+            lazy_signal.write(sig, batch_size)
             lazy_signal.set_mode("r")
-            return lazy_signal
+            signals_created["raw"] = lazy_signal
 
+    return signals_created
 
-def create_lazy_signal_raw(session_dir):
-    session_name = os.path.basename(session_dir)
-    nix = NixIO(os.path.join(session_dir, "segmentation", "{}.nix".format(session_name)))
-    block = nix.read_block(lazy=True)
-    segment = block.segments[0]
-
-    for sig in segment.analogsignals:
-        if sig.name.startswith("Amplifier"):
-            break
-
-    sig = nix.load_lazy_object(sig)
-
-    lazy_signal = LazySignal(
-        sig.shape[0],
-        sig.shape[1],
-        os.path.join(session_dir, "raw", "raw.raw.memmap"),
-        sig.sampling_rate.item(),
-        mode="w+"
-    )
-    print("Saving {} signal to {}".format(session_dir, lazy_signal.file))
-    lazy_signal.write(sig)
-    print("Saved.")
-    lazy_signal.set_mode("r")
-    return lazy_signal
-
-
-
-def create_lazy_site(site_dir):
-    """
-    Prepare all signals for sessions in the site to be loaded by LazySignal and LazySite
-    """
-    site_config = load_yaml(os.path.join(site_dir, "sessions.yaml"))
-    lazy_signals_elec = []
-    lazy_signals_mic = []
-    lazy_signals_raw = []
-    signal_times = []
-    for session in site_config["sessions"]:
-        print("Processing {}".format(session))
-        session_dir = os.path.join(site_dir, "..", "..", "sessions", session["id"])
-        lazy_signals_elec.append(create_lazy_signal_elec(session_dir))
-        lazy_signals_mic.append(create_lazy_signal_mic(session_dir))
-        lazy_signals_raw.append(create_lazy_signal_raw(session_dir))
-
-        signal_times.append(session["t"])
-        
-    return LazySite(signal_times,
-            mic=lazy_signals_mic,
-            filtered=lazy_signals_elec,
-            raw=lazy_signals_raw)

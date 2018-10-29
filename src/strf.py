@@ -65,7 +65,8 @@ def prepare_data(
                 sampling_rate,
                 spec_sample_rate, 
                 freq_spacing,
-                max_freq=8000.0,
+                min_freq=500,
+                max_freq=8000,
                 cmplx=False)
 
         binned_spikes = bin_spikes(times, t1, dt=1/spec_sample_rate, n_bins=len(t), convolve_width=convolve_width)

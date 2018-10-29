@@ -53,6 +53,14 @@ def check_segmented(session):
         return None
     else:
         return modified_at(matches[0])
+
+
+def check_filtered_lazy(session):
+    matches = glob.glob(os.path.join(session, "spikes", "filtering_finished"))
+    if not len(matches):
+        return None
+    else:
+        return modified_at(matches[0])
     
 
 def check_filtered(session):
@@ -61,6 +69,15 @@ def check_filtered(session):
         return None
     else:
         return modified_at(matches[0])
+
+
+def check_spikes_extracted(site):
+    matches = glob.glob(os.path.join(site, "spikes", "spike_waveforms-*.pkl"))
+
+    if not len(matches):
+        return None
+    else:
+        return np.min([modified_at(match) for match in matches])
 
 
 def check_sorted(site):
@@ -123,7 +140,9 @@ def fetch_files():
                 file_info["downloaded_date"] = check_downloaded(session)
                 file_info["segmented_date"] = check_segmented(session)
                 file_info["filtered_date"] = check_filtered(session)
+                file_info["filtered_date_lazy"] = check_filtered_lazy(session)
                 file_info["sorted_date"] = check_sorted(site_dir)
+                file_info["spikes_extracted"] = check_spikes_extracted(site_dir)
                 file_info["curated_count"], file_info["curated_date"] = check_curated(site_dir)
                 file_info["path"] = session
                 file_info["units"] = check_summaries(site_dir)
