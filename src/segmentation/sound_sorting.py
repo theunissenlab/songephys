@@ -38,9 +38,7 @@ def get_threshold(segments, signal=0, channel=0):
         return autodetect.get_amp_thresh(all_sounds, fs=fs, mode="mean")
 
 
-def find_syllables(segments, signal=0, channel=1, threshold=None):
     sample_start = np.floor(config.PAD_SONG_BEFORE * 30000.0).astype(np.int)
-    sample_stop = np.ceil(config.PAD_SONG_AFTER * 30000.0).astype(np.int)
     
     # FIXME: pick threshold better?
     # this allows for manual threshold override

@@ -850,7 +850,7 @@ def find_vocal_periods(audio_stream_in, fs=None, fuse_duration=0.5, shortest_dur
     Parameters
     ----------
     audio_stream_in: np.array of floats.
-        The audio stream. Will be immediately squeezed.
+        The audio stream. Mono only.
     fs: float.
         The sampling rate of audio_stream, in Hz.
     fuse_duration: float.
@@ -894,7 +894,7 @@ def find_vocal_periods(audio_stream_in, fs=None, fuse_duration=0.5, shortest_dur
     # If you think about it, all of the noises that get made during a session drag
     # the mean to be slightly above background noise. 
     if amp_thresh is None:
-        amp_thresh = np.mean(streams_filtered_env) * 1
+        amp_thresh = np.median(streams_filtered_env) * 2
     # sound onsets: 1 is an onset, -1 is an offset
     vd_crosses = np.zeros(len(streams_filtered_env))
     for i in range(len(streams_filtered_env)):
