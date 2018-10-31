@@ -382,7 +382,7 @@ def extract_spikes_from_signal(signal,
         spike_waveforms.append(spike_wf)
     spike_waveforms = np.array([np.array(x) for x in spike_waveforms])
 
-    return spike_indices, spike_waveforms
+    return threshold, spike_indices, spike_waveforms
 
 
 def extract_spikes(block):

@@ -4,7 +4,7 @@ import pickle
 import numpy as np
 import scipy.stats
 import hdbscan
-from units_to_use import units_to_use, channel_map
+from units_to_use import units_to_use, channel_map, custom_correction
 
 from soundsig.sound import plot_spectrogram
 from sklearn import preprocessing
@@ -40,41 +40,6 @@ from isosplit5 import isosplit5
 from strf import fit_strf
 
 
-def custom_correction(sound_events, site):
-    for e in sound_events:
-        if e["sound_type"] == "playback":
-            if "_So" in e["playback_file"]:
-                e["vocalization_type"] = "So"
-                
-        if e["sound_type"] == "live" and "GreYel3594M___" in site:
-            if e["vocalizer"] == "tutor":
-                e["vocalizer"] = "con_male_familiar"
-
-        if e["sound_type"] == "playback" and "GreYel3594M___" in e["playback_file"]:
-            pb_file = os.path.basename(e["playback_file"])
-            if "MAT" in pb_file:
-                e["vocalizer"] = "con_male_familiar"
-            elif "MAF" in pb_file:
-                e["vocalizer"] = "tutor"
-            elif "MJF" in pb_file: 
-                e["vocalizer"] = "juvenile"
-
-        if e["sound_type"] == "playback" and "RedGre7705M__" in e["playback_file"]:
-            pb_file = os.path.basename(e["playback_file"])
-            if "MJP" in pb_file:
-                e["vocalizer"] = "subject"
-            elif e["vocalizer"] == "con_male":
-                e["vocalizer"] = "con_male_familiar"
-
-        if e["sound_type"] == "playback" and "BroGre4497M_" in e["playback_file"]:
-            pb_file = os.path.basename(e["playback_file"])
-            if "MJB" in pb_file:
-                e["vocalizer"] = "juvenile"
-            elif "MAF" in pb_file:
-                e["vocalizer"] = "con_male_familiar"
-
-    return sound_events
-
 
 def filter_events(events, **kwargs):
     return [
@@ -88,18 +53,20 @@ def filter_events(events, **kwargs):
 def compute_strfs(SITE, elec, label, t_ranges, sound_events, loader, site, sorted_data):
     computed_units = {}
 
-    save_file = "strfs/{}_e{}u{}.npy".format(SITE, elec, label)
+    save_file = "strfs2/{}_e{}u{}.npy".format(SITE, elec, label)
     if os.path.exists(save_file):
         print("skipping", save_file)
         return
+    print("RUNNING for", save_file)
 
     if label not in sorted_data.labels:
         print("ERROR, {} ELEC {} MISSING LABEL {}".format(SITE, elec, label))
         return
     node = dict(sorted_data.labeled_nodes)[label]
     event_filters = [
-        ("song_playback", sound_events, lambda event: event["sound_type"] == "playback" and event["vocalization_type"] == "So"),
-        ("song_live", sound_events, lambda event: event["sound_type"] == "live" and event["vocalization_type"] == "So"),
+        # ("song_playback", sound_events, lambda event: event["sound_type"] == "playback" and event["vocalization_type"] == "So"),
+        # ("song_live", sound_events, lambda event: event["sound_type"] == "live" and event["vocalization_type"] == "So"),
+        ("fam_live", sound_events, lambda event: event["sound_type"] == "live" and event["vocalizer"] == "con_male_familiar" and event["vocalization_type"] == "So"),
         ("bos_live", sound_events, lambda event: event["sound_type"] == "live" and event["vocalizer"] == "subject" and event["vocalization_type"] == "So"),
         ("tut_live", sound_events, lambda event: event["sound_type"] == "live" and event["vocalizer"] == "tutor" and event["vocalization_type"] == "So"),
         ("tut_playback", sound_events, lambda event: event["sound_type"] == "playback" and event["vocalizer"] == "tutor" and event["vocalization_type"] == "So"),
@@ -114,10 +81,12 @@ def compute_strfs(SITE, elec, label, t_ranges, sound_events, loader, site, sorte
     ]
 
     for group_name, events, filter_fn in event_filters:
+        print("Max length = ", np.max([e["duration"] for e in events]))
+        print(len(events))
         all_models = []
         all_scores = []
         all_widths = []
-        for convolve_width in [2]:
+        for convolve_width in [1, 2, 3]:
             try:
                 models, scores, freq, X_specs, Y_spikes = fit_strf(
                     node.flatten().times,
@@ -129,7 +98,7 @@ def compute_strfs(SITE, elec, label, t_ranges, sound_events, loader, site, sorte
                     freq_spacing=100,
                     strf_width=0.1,
                     time_ranges=t_ranges,
-                    alphas=[0.1, 1.0, 5.0],
+                    alphas=[0.1, 1.0, 5.0, 10.0, 50.0],
                     convolve_width=convolve_width
                 )
             except ValueError:
@@ -168,7 +137,12 @@ with Pool(8) as pool:
             "sites")
         site = os.path.join(site_dir, SITE)
         loader = read_pickle(os.path.join(site, "lazy_data.pkl"))
-        sound_events = np.load(os.path.join(site, "disjoint_vocal_periods.npy"))[()]
+        recut_path = os.path.join(site, "recut_disjoint_vocal_periods.npy")
+        if os.path.exists(recut_path):
+            sound_events = np.load(recut_path)
+        else:
+            sound_events = np.load(os.path.join(site, "disjoint_vocal_periods.npy"))[()]
+
         sound_events = custom_correction(sound_events, SITE)
 
         prev_elec = None
@@ -181,7 +155,7 @@ with Pool(8) as pool:
             results.append(pool.apply_async(compute_strfs,
                 (SITE, elec, label, t_ranges, sound_events, loader, site, sorted_data)
             ))
-    print([result.get(timeout=60.0 * 60.0) for result in results])
+    print([result.get() for result in results])
 
 print("Finished: {:.2f}".format(time.time() - start_time))
 

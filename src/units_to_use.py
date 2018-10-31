@@ -38,7 +38,7 @@ units_to_use = {
 
     "BroGre4497M_180610_114535": [
         (10, 34, [(0, 1200)]),    # well isolated but pb only
-        (10, 39, [(0, 5000)]),    # bad, changes too much late to be able to tell... but could compare earlier tut live to playbacks
+        (10, 39, [(0, 4000)]),    # bad, changes too much late to be able to tell... but could compare earlier tut live to playbacks
         (11, 1, [(0, 8000)]),   # *** bos and tutor appears different
         (12, 17, [(0, 3000)]),
         (12, 18, [(4000, np.inf)]),  # ******* BOS AND TUTOR VERY DIFEERN AND BNOS AND LIVE VERY DIFFERENT, compare to second half of playbacks? ... but need to re-split this one up
@@ -314,38 +314,38 @@ putative_brain_regions = {
     },
 
     "LbY6074__161215_094456": {
-        (12, 28): NON,
-        (12, 29): NON,
-        (12, 30): NON,
-        (12, 31): NON,
-        (13, 1): NON,
-        (15, 60): NON,
-        (15, 61): NON,
-        (20, 2): NON,
-        (21, 57): NON,
-        (21, 62): NON,
-        (21, 65): NON,
-        (21, 69): NON,
-        (22, 26): NON,
-        (22, 28): NON,
-        (22, 29): NON,
+        (12, 28): L,
+        (12, 29): L,
+        (12, 30): L,
+        (12, 31): L,
+        (13, 1): L,
+        (15, 60): NCM,
+        (15, 61): NCM,
+        (20, 2): CM,
+        (21, 57): L,
+        (21, 62): L,
+        (21, 65): L,
+        (21, 69): L,
+        (22, 26): L,
+        (22, 28): L,
+        (22, 29): L,
     },
 
     "LBlYel0923___160901_103806": {
-        (8, 4): NON,
-        (8, 5): NON,
-        (9, 67): NON,
-        (9, 68): NON,
-        (9, 70): NON,
-        (12, 70): NON,
-        (12, 71): NON,
-        (14, 16): NON,
-        (14, 20): NON,
-        (17, 1): NON,
-        (19, 1): NON,
-        (20, 1): NON,
+        (8, 4): NCM,
+        (8, 5): NCM,
+        (9, 67): NCM,
+        (9, 68): NCM,
+        (9, 70): NCM,
+        (12, 70): L,
+        (12, 71): L,
+        (14, 16): CM,
+        (14, 20): CM,
+        (17, 1): NCM,
+        (19, 1): L,
+        (20, 1): L,
         (21, 1): NON,
-        (22, 1): NON,
+        (22, 1): CM,
     },
 }
 
@@ -544,6 +544,8 @@ def custom_correction(sound_events, site):
             if "MJB" in pb_file:
                 e["vocalizer"] = "juvenile"
             elif "MAF" in pb_file:
+                e["vocalizer"] = "con_male_familiar"
+            elif "FAM" in pb_file and e["vocalization_type"] == "So":
                 e["vocalizer"] = "con_male_familiar"
 
         if e["sound_type"] == "playback" and ("LBlYel0923_" in e["playback_file"] or "LblYel0923_" in e["playback_file"]):

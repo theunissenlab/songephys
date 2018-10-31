@@ -1,8 +1,9 @@
 import matplotlib
 matplotlib.use("TkAgg")
-from units_to_use import units_to_use, channel_map
+from units_to_use import units_to_use, channel_map, custom_correction
 import numpy as np
 import scipy.stats
+import scipy.io
 import scipy.signal
 import cv2
 import os
@@ -16,6 +17,8 @@ from matplotlib.patches import Rectangle
 from itertools import cycle
 from functools import partial
 import time
+import quantities as pq
+import config
 
 
 plt.rcParams['keymap.fullscreen'] = ''
@@ -91,6 +94,7 @@ class App(object):
 
     def __init__(self, events, loader, savepath=None, loadpath=None, figsize=(8, 8)):
         self.events = events
+        self.fs = loader._signals["mic"][0].sampling_rate
 
         if savepath is None:
             self.savepath = loadpath or "temp_syllable_labeling.npy"
@@ -165,6 +169,7 @@ class App(object):
 
     @property
     def current_event(self):
+        print(self.i, len(self.events))
         return self.events[self.i]
     
     def jump_to(self, i):
@@ -242,12 +247,18 @@ class App(object):
                 self.templates[mode].pop(label, None)
             self.draw()
             return
-        
+      
+        if event.key == " ":
+            self.run_autolabel(None)
+            return
+
         if event.key == "right":
             self.next(None)
+            return
             
         if event.key == "left":
             self.prev(None)
+            return
             
         if event.key == "ctrl+z":
             return self.undo()
@@ -311,6 +322,7 @@ class App(object):
             "t_stop": self.highlighted[1] + self.current_event["start_time"].item(),
             "label": label
         })
+        self.labels[self.mode][label] = sorted(self.labels[self.mode][label], key=lambda e: e["t_start"])
         
         self._action_stack.append({
             "action": "create",
@@ -351,8 +363,8 @@ class App(object):
                 self.debug("Loading templates {} {}/{}".format(label, i, len(syls)))
 
                 data = self.loader.time_slice(syl["t_start"], syl["t_stop"], signal="mic").data[:, self.channel]
-                data = bandpass_filter(data - np.mean(data), 30000, 500, 10000)
-                t_spec, f_spec, spec, _ = spectrogram(data, 30000, 1000, 50, min_freq=250, max_freq=10000, cmplx=False)
+                data = bandpass_filter(data - np.mean(data), self.fs, 500, 10000)
+                t_spec, f_spec, spec, _ = spectrogram(data, self.fs, 1000, 50, min_freq=250, max_freq=10000, cmplx=False)
                 specs.append(spec)
                 durs.append(len(t_spec))
             
@@ -385,29 +397,38 @@ class App(object):
         
     def setup_labels(self):
         """Draw labels above the spectrograms"""
-        start = time.time()
         self.labels_ax.clear()
         self.labels_ax.axis("off")
         self.labels_ax.set_xlim(*self.spec_ax.get_xlim())
 
         for label in sorted(self.labels[self.mode]):
+            start = time.time()
+            n = 0
+            
             syls = self.labels[self.mode][label]
-            for syl in syls:
+            idx = np.searchsorted([s["t_start"] for s in syls], self.current_event["start_time"].item() - self.OFFSET_BEFORE)
+            for syl in syls[idx:]:
+                n += 1
                 t0 = syl["t_start"] - self.current_event["start_time"].item()
                 duration = syl["t_stop"] - syl["t_start"]
 
-                if -self.OFFSET_BEFORE < t0 < (self.current_event["start_time"] + self.current_event["duration"]).item()  + self.OFFSET_AFTER:
-                    rect = Rectangle(
-                        (t0 + 0.005, 0), 
-                        duration - 0.01, 
-                        1, 
-                        picker=True,
-                        edgecolor="Black", 
-                        facecolor=self.assigned_colors[self.mode][label],
-                        alpha=0.5)
-                    rect.syllable_ = (self.mode, label, syl)
-                    self.labels_ax.text(t0 + (duration / 2), 1.1, label, horizontalalignment="center")
-                    self.labels_ax.add_patch(rect)
+                if syl["t_start"] > (self.current_event["start_time"] + self.current_event["duration"]).item() + self.OFFSET_AFTER:
+                    print("breaking after {}".format(n))
+                    break
+
+                rect = Rectangle(
+                    (t0 + 0.005, 0), 
+                    duration - 0.01, 
+                    1, 
+                    picker=True,
+                    edgecolor="Black", 
+                    facecolor=self.assigned_colors[self.mode][label],
+                    alpha=0.5)
+                rect.syllable_ = (self.mode, label, syl)
+                self.labels_ax.text(t0 + (duration / 2), 1.1, label, horizontalalignment="center")
+                self.labels_ax.add_patch(rect)
+            print("Finsihed {} in {:.2f}".format(label, time.time() - start))
+
         self.fig.canvas.draw_idle()
         
     def _update_template(self, n, template, addition):
@@ -541,6 +562,7 @@ class App(object):
                 }
                 occupied_intervals.append((new_syl["t_start"], new_syl["t_stop"]))
                 self.labels[self.mode][label].append(new_syl)
+                self.labels[self.mode][label] = sorted(self.labels[self.mode][label], key=lambda e: e["t_start"])
 
 #             self.debug("Found {} for {}".format(count, label))
 
@@ -569,10 +591,20 @@ class App(object):
         if not spec_changed:
             t_spec, f_spec, spec = self.last_spec
         else:
-            data = self.loader.time_slice(t0 - self.OFFSET_BEFORE, t1 + pad_after, signal="mic").data[:, self.channel]
-            data = bandpass_filter(data - np.mean(data), 30000, 500, 10000)
+            if self.current_event["sound_type"] == "playback":
+                fs, data = scipy.io.wavfile.read(self.current_event["playback_file"])
+                data = data - np.mean(data)
+                data = np.concatenate([
+                    np.zeros(int(self.OFFSET_BEFORE * fs)),
+                    data,
+                    np.zeros(int(pad_after * fs))
+                ])
+            else:
+                data = self.loader.time_slice(t0 - self.OFFSET_BEFORE, t1 + pad_after, signal="mic").data[:, self.channel]
+                data = bandpass_filter(data - np.mean(data), self.fs, 500, 10000)
+                fs = self.fs
 
-            t_spec, f_spec, spec, _ = spectrogram(data, 30000, 1000, 50, min_freq=250, max_freq=10000, cmplx=False)
+            t_spec, f_spec, spec, _ = spectrogram(data, fs, 1000, 50, min_freq=250, max_freq=10000, cmplx=False)
             t_spec -= self.OFFSET_BEFORE
 
             # Stash these so that they can be scooped up later by assidefgn_label
@@ -583,10 +615,10 @@ class App(object):
         print("C: {:.2f}".format(time.time() - begin))
 
         if spec_changed:
-            plot_spectrogram(t_spec, f_spec, spec, dBNoise=self.noise_level, ax=self.spec_scroll_ax, colormap="Greys", colorbar=False)
+            plot_spectrogram(t_spec, f_spec, spec, dBNoise=self.noise_level, ax=self.spec_scroll_ax, colormap="viridis", colorbar=False)
             self.spec_scroll_ax.set_xlabel("")
             self.spec_scroll_ax.set_xlim(-self.OFFSET_BEFORE, (t1 - t0) + pad_after)
-            plot_spectrogram(t_spec, f_spec, spec, dBNoise=self.noise_level, ax=self.spec_ax, colormap="Greys", colorbar=False)
+            plot_spectrogram(t_spec, f_spec, spec, dBNoise=self.noise_level, ax=self.spec_ax, colormap="viridis", colorbar=False)
             self.fig.canvas.draw_idle()
         print("D: {:.2f}".format(time.time() - begin))
 
@@ -779,24 +811,38 @@ class App(object):
 
 if __name__ == "__main__":
     import sys
-    if not len(sys.argv[1:]) == 3:
-        raise Exception("call it with 'python syllable_labeling.py [username] [SITE] ['subject' or 'tutor']")
+    if not len(sys.argv[1:]) in [3, 4]:
+        raise Exception("call it with 'python syllable_labeling.py [username] [SITE] ['subject' or 'tutor'] [live or playback]")
 
-    USER, SITE, VOCALIZER = sys.argv[1:]
+    if len(sys.argv[1:]) == 3:
+        USER, SITE, VOCALIZER = sys.argv[1:]
+        LIVE = "live"
+    else:
+        USER, SITE, VOCALIZER, LIVE  = sys.argv[1:]
 
     site_dir = os.path.join(
         ("/auto/fhome/kevin/Projects/songephys/data/birds/"),
         SITE.split("_")[0],
         "sites")
     site = os.path.join(site_dir, SITE)
-    sound_events = np.load(os.path.join(site, "disjoint_vocal_periods.npy"))[()]
+    if LIVE == "live":
+        sound_events = np.load(os.path.join(site, "disjoint_vocal_periods.npy"))[()]
+        sound_events = custom_correction(sound_events, SITE)
+    elif LIVE == "playback":
+        sound_events = np.load(os.path.join(site, "vocal_periods.npy"))[()]["playback"]
+        sound_events = custom_correction(sound_events, SITE)
+        for event in sound_events:
+            event["start_time"] += config.PAD_SONG_BEFORE * pq.s
+            event["duration"] -= (config.PAD_SONG_BEFORE + config.PAD_SONG_AFTER) * pq.s
+
     loader = read_pickle(os.path.join(site, "lazy_data.pkl"))
     save_path = os.path.join(
         site,
         "manual_syllable_labeling",
-        "{}_{}.npy".format(
+        "{}_{}{}.npy".format(
             VOCALIZER,
-            USER
+            USER,
+            "" if LIVE == "live" else "_{}".format(LIVE)
         )
     )
 
@@ -807,7 +853,7 @@ if __name__ == "__main__":
         [
             e for e in sound_events if
             e.get("vocalization_type") == "So" and
-            e["sound_type"] == "live" and
+            e["sound_type"] == LIVE and
             e.get("vocalizer") == VOCALIZER
         ],
         loader,

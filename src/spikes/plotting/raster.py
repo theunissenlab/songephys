@@ -21,7 +21,7 @@ def plot(
     Inputs:
     spike_times (list (length N_units) of arrays of spike arrival times)
     """
-    if not isinstance(mode, basestring):
+    if not isinstance(mode, str):
         mode = "scatter"
 
     ax = ax or plt.gca()
