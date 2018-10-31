@@ -71,6 +71,8 @@ def _transform_pyoperant_csv(df, stim_loc):
 def read_pyoperant_csv(path, stim_loc):
     """Basically just load the csv"""
     df = pd.read_csv(path)
+    print(path)
+    print(len(df))
     return _transform_pyoperant_csv(df, stim_loc=stim_loc)
 
 

@@ -58,8 +58,10 @@ def filter_segment(seg):
         sig for sig in seg.analogsignals
         if sig.name.startswith("Amplifier")
     )
+    # Load the elec signal lazily for the segment using the time bounds
 
     # Generate high pass
+    # this line is erroring for LblYel
     sig_highpass = highpass_filter(
             elec_signal.T,
             elec_signal.sampling_rate,

@@ -16,6 +16,10 @@ from spikes.psth import conv, exponential_convolver, gaussian_convolver
 import config
 
 
+# Filter signal
+# Exclude to only ones with spikes
+
+
 def bin_spikes(spike_times, t_start, dt, n_bins, binarized=False, convolve_width=1):
     binned = np.zeros(n_bins)
     for spike in spike_times:

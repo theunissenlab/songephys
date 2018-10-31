@@ -57,6 +57,8 @@ def bin_spikes(
             if hasattr(time, "item"):
                 time = time.item()
             bin_idx = int(np.floor((time - min_time) / dt))
+            if not (0 < bin_idx < len(spikes)):
+                continue
             spikes[bin_idx, unit_idx] += 1
 
     if binary:
