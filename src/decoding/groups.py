@@ -14,7 +14,7 @@ syllable_groups = {
                 ("juvenile", "playback", "B"),
 
             ],
-            "duration": 0.3
+            "duration": 0.25
         }, {
             "classes": [ # Weird intermediate one #.2
                 ("tutor", "playback", "B"),
@@ -23,7 +23,7 @@ syllable_groups = {
                 # ("juvenile", "playback", "C"),
                 # ("subject", "live", "C"),
             ],
-            "duration": .2
+            "duration": .15
         }, {
             "classes": [
                 # Intro #.1
@@ -68,7 +68,7 @@ syllable_groups = {
                 ("con_male_familiar", "playback", "B"),
                 ("juvenile", "playback", "B"),
             ],
-            "duration": 0.3
+            "duration": 0.25
         }, {
             "classes": [ # Weird intermediate one #.2
                 ("tutor", "playback", "B"),
@@ -77,7 +77,7 @@ syllable_groups = {
                 # ("juvenile", "playback", "C"),
                 # ("subject", "live", "C"),
             ],
-            "duration": .2
+            "duration": .15
         }, {
             "classes": [
                 # Intro #.1
