@@ -1,0 +1,336 @@
+import os
+
+import numpy as np
+import pandas as pd
+import quantities as pq
+
+from soundsig.signal import highpass_filter, lowpass_filter, bandpass_filter
+
+from preprocess.sound.playback_utils import (
+    convert_digital_to_metadata,
+    get_vocalizer_relation
+)
+
+import config
+
+
+def get_amplitude_envelope(sound, fs=30000.0, lowpass=5000.0, highpass=2000.0):
+    streams_filtered_env = highpass_filter(sound.T, fs, highpass).T
+
+    # Rectify and lowpass filter
+    streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env.T, fs, lowpass).T)
+    streams_filtered_env = lowpass_filter(streams_filtered_env.T, fs, 100).T
+    return streams_filtered_env
+
+
+def threshold_events(
+        signal,
+        threshold,
+        polarity=1,
+        sampling_rate=1,
+        ignore_width=None,
+        min_size=1,
+        fuse_duration=0
+    ):
+    """Detect intervals crossing a threshold
+
+    TODO: leave the possiblity of open ended intervals....?
+    """
+    if polarity not in (-1, 1):
+        raise ValueError("Polarity must equal +/- 1")
+
+    starts_on = (polarity * signal[0] >= polarity * threshold)
+
+    crossings = np.diff((polarity * signal >= polarity * threshold).astype(np.int))
+    interval_starts = np.where(crossings > 0)[0] + 1
+    interval_stops = np.where(crossings < 0)[0] + 1
+
+    if starts_on:
+        interval_starts = np.concatenate([[0], interval_starts])
+
+    if len(interval_stops) < len(interval_starts):
+        interval_stops = np.concatenate([interval_stops, [len(signal)]])
+
+    # Ignore events that are too short
+    intervals = np.array([
+        (i, j) for i, j in zip(interval_starts, interval_stops)
+        if (not ignore_width or ((j - i) / sampling_rate) > ignore_width)
+    ])
+    if not len(intervals):
+        return np.array([])
+
+    gaps = (intervals[1:, 0] - intervals[:-1, 1]) / sampling_rate
+    gaps = np.concatenate([gaps, [np.inf]])
+
+    fused_intervals = []
+    current_interval_start = None
+    for (i, j), gap in zip(intervals, gaps):
+        if current_interval_start is None:
+            current_interval_start = i
+        if gap > fuse_duration:
+            fused_intervals.append((current_interval_start, j))
+            current_interval_start = None
+
+    return np.array([(i, j) for i, j in fused_intervals if ((j - i) / sampling_rate) >= min_size])
+
+#
+# def _fill_in_missing_digital_codes(mic, playbacks_db):
+
+
+def find_vocal_periods_from_lazy(mic, window_duration, threshold):
+    """Finds periods where amplitude envelope is crossed using lazy signal
+
+    Args
+    ----
+    mic: format.lazy.LazySignal
+        Instance of LazySignal from which to load microphone data
+
+    Returns list of intervals (start_time, stop_time) which represent intervals
+    during which a theshold was crossed.
+    """
+    last_interval_to_check = None  # Marker in case the vocal period goes over end of window
+    all_intervals = []
+
+    THRESHOLD_WINDOW = window_duration  # window over which to compute amplitude thresholds (seconds)
+
+    for t in np.arange(0, mic.N / mic.sampling_rate, THRESHOLD_WINDOW):
+        end_time = min(t + THRESHOLD_WINDOW, mic.N / mic.sampling_rate)
+        sig = mic.time_slice(t, end_time).data
+        sig = sig - np.mean(sig, axis=0)
+        sig = bandpass_filter(sig.T, mic.sampling_rate, 1000, 8000).T
+        amp_env = get_amplitude_envelope(sig, mic.sampling_rate, highpass=2000, lowpass=8000)
+        amp_env = np.mean(amp_env, axis=1)
+        threshold = np.median(amp_env) * threshold # config.VOCALIZATION_AMPLITUDE_THRESHOLD
+
+        intervals = threshold_events(
+            amp_env,
+            threshold,
+            polarity=1,
+            sampling_rate=mic.sampling_rate,
+            ignore_width=0.01,
+            min_size=0.1,
+            fuse_duration=config.AUTODETECT_FUSE_DURATION
+        )
+
+        if last_interval_to_check is not None:
+            if not len(intervals):
+                all_intervals.append(last_interval_to_check)
+            elif intervals[0][0] < (config.AUTODETECT_FUSE_DURATION * mic.sampling_rate):
+                all_intervals.append((
+                    last_interval_to_check[0],
+                    intervals[0][1] / mic.sampling_rate + t
+                ))
+                intervals = intervals[1:]
+            else:
+                all_intervals.append(last_interval_to_check)
+                all_intervals.append((
+                    intervals[0][0] / mic.sampling_rate + t,
+                    intervals[0][1] / mic.sampling_rate + t
+                ))
+                intervals = intervals[1:]
+            last_interval_to_check = None
+
+        for i0, i1 in intervals:
+            if i1 == len(sig):
+                last_interval_to_check = (i0 / mic.sampling_rate + t, i1 / mic.sampling_rate + t)
+                break
+            all_intervals.append((i0 / mic.sampling_rate + t, i1 / mic.sampling_rate + t))
+
+    return all_intervals
+
+
+def generate_vocal_periods_dicts_from_lazy(lazy_mic):
+    vocal_intervals = find_vocal_periods_from_lazy(
+        lazy_mic,
+        60,  # 60 second windows
+        config.VOCALIZATION_AMPLITUDE_THRESHOLD
+    )
+
+    total_duration = lazy_mic.N / lazy_mic.sampling_rate
+
+    seg_dicts = []
+    for start_time, stop_time in vocal_intervals:
+        if stop_time > total_duration:
+            print("Warning: segment from {} to {} extends beyond {}".format(
+                start_time, stop_time, total_duration))
+            continue
+
+        seg_dicts.append({
+            "name": "live_unknown",
+            "description": "",
+            "sound_type": "live",
+            "vocalization_type": "unknown",
+            "vocalizer": "unknown",
+            "playback_file": None,
+            "start_time": (start_time - config.PAD_SONG_BEFORE) * pq.s,
+            "duration": (
+                stop_time - start_time + config.PAD_SONG_BEFORE + config.PAD_SONG_AFTER
+            ) * pq.s
+        })
+
+    return seg_dicts
+
+
+def generate_stim_dicts(digital_codes, sample_rate, playbacks_db):
+    """Generate segment data from digital signal data and sound (stim) database
+
+    Args:
+    digital_signals : neo.core.Events
+    playbacks_db : pandas.DataFrame
+        dataframe of stimuli played
+
+    Returns a list of dicts: List of segment information
+        Each element is a dict defining segment start and end,
+        and metadata to include in Segment annotations
+        See docstring for audio_segment.segment() for required fields
+    """
+
+    if not all([code[1]["action"] == "queu" for code in digital_codes]):
+        raise Exception("There are corrupted bits in the digital signals."
+                "Should look into it before proceeding")
+        # digital_codes = [
+        #   code for code in digital_codes
+        #   if code[1]["action"] == "queu"]
+
+    # Some data files have the digital pulses missing; in this case, we want
+    # to carefully align the stimuli to the envelope (based on timestamp)
+
+    stim_dicts = []
+
+    if len(playbacks_db) != len(digital_codes):
+        raise Exception("Number of stimuli in database "
+            "does not match number of digital pulses during sesssion")
+
+    # Iterate through the digital codes received during this session.
+    # The playbacks_db should have one row for each stimulus played,
+    # IN THE SAME ORDER as the digital pulses are received.
+    #  Note that the metadata contains additional information (trial no,
+    #  stimulus hash) that can be cross referenced with the events file
+    #  generated by pyoperant to verify that the digital codes are always
+    #  being paired with the correct stimulus in playbacks_db...
+    for stimulus_index, (start_time, metadata) in enumerate(digital_codes):
+        start_time = float(start_time) / sample_rate
+
+        # Query the database for the correct trial
+        stim = playbacks_db[playbacks_db.index == stimulus_index]
+        if len(stim) == 0:
+            raise Exception("Trial not found in playback databaset file")
+        else:
+            # TODO (kevin): check what stim_id ends up being
+            stim_id = stim.index[0]
+            stim = dict(stim.iloc[0])
+
+        vocalizer_relation = get_vocalizer_relation(stim)
+
+        stim_dicts.append({
+            "name": "playback_{}".format(stim["emitter"]),
+            "description": "Created by "
+                "segmentation.audio_segment.generate_stim_dicts",
+            "sound_type": "playback",
+            "vocalization_type": stim.get("callid", "UV"),
+            "vocalizer": vocalizer_relation,
+            "playback_file": stim.get("stimulus_name"),
+            "stim_id": stim_id,
+            "start_time": start_time.rescale(pq.s) -
+                config.PAD_SONG_BEFORE * pq.s,
+            "duration": (
+                stim["duration"] +
+                config.PAD_SONG_AFTER +
+                config.PAD_SONG_BEFORE
+            ) * pq.s
+        })
+
+    return stim_dicts
+
+
+def shave_silences(event, loader):
+    """Use amplitude envelope to shave off any silent padding"""
+    event = dict(event)
+    fs = loader._signals["mic"][0].sampling_rate
+
+    if event.get("sound_type") == "silence":
+        return event
+
+    # elif event.get("vocalization_type") == "So":
+    elif event.get("sound_type") == "live":
+        t0 = max(0, event["start_time"].item())
+        t1 = min(loader.max_time(), (event["start_time"] + event["duration"]).item())
+        if t1 < t0:
+            return event
+
+        sig = loader.time_slice(t0, t1, signal="mic").data
+        sig = sig - np.mean(sig, axis=0)
+        sig = bandpass_filter(sig.T, fs, 1000, 8000).T
+        amp_env = get_amplitude_envelope(sig, fs)
+        amp_env = np.mean(amp_env, axis=1)
+
+        threshold = 1.3 * np.median(
+            np.concatenate([
+                amp_env[:int(fs * config.PAD_SONG_BEFORE)],
+                amp_env[-int(fs * config.PAD_SONG_AFTER):]
+            ])
+        )
+
+        intervals = threshold_events(amp_env, threshold, sampling_rate=fs,
+            ignore_width=0.01, min_size=0.1, fuse_duration=0.2)
+        if len(intervals):
+            idx0, idx1 = intervals[0][0], intervals[-1][1]
+            event["start_time"] += (idx0 / fs) * pq.s
+            event["duration"] = ((idx1 - idx0) / fs) * pq.s
+            return event
+
+    event["start_time"] += config.PAD_SONG_BEFORE * pq.s
+    event["duration"] -= (config.PAD_SONG_AFTER + config.PAD_SONG_BEFORE) * pq.s
+
+    return event
+
+
+def get_surrounding_silence(
+        all_events,
+        loader,
+        channel=0,
+        min_duration=1.0,
+        min_sound=0.002,
+        max_duration=20.0,
+        sampling_rate=30000
+        ):
+    """Return time periods corresponding to silence around given vocal events"""
+    silence_events = []
+
+    sr = loader._signals["mic"][0].sampling_rate
+
+    for i in np.arange(len(all_events) - 1):
+        e1 = all_events[i]
+        e2 = all_events[i + 1]
+
+        t0 = (e1["start_time"] + e1["duration"]).item() - config.PAD_SONG_AFTER
+        t1 = min(t0 + max_duration, e2["start_time"].item() + config.PAD_SONG_BEFORE)
+
+        if t1 - t0 < min_duration:
+            continue
+
+        time_slice = loader.time_slice(t0, t1, signal="mic")
+        sig = time_slice.data[:, channel]
+        t_arr = time_slice.t
+        ampenv = get_amplitude_envelope(sig - np.mean(sig))
+        threshold = 3.0 * np.median(ampenv)
+
+        intervals = threshold_events(
+            ampenv,
+            threshold,
+            polarity=-1,
+            sampling_rate=sr,
+            min_size=min_duration
+        )
+
+        for start_idx, stop_idx in intervals:
+            silence_start = t_arr[start_idx]
+            silence_stop = t_arr[-1] if stop_idx == len(t_arr) else t_arr[stop_idx]
+            new_event = {
+                "start_time": (silence_start) * pq.s,
+                "duration": (silence_stop - silence_start) * pq.s,
+                "sound_type": "silence",
+            }
+            silence_events.append(new_event)
+
+    return silence_events

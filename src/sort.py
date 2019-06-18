@@ -1,24 +1,20 @@
+import time
+
+import hdbscan
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.stats
-from suss.io import read_pickle, save_pickle
-from preproephys import extract_spikes_from_signal
-from sklearn.decomposition import PCA
-from sklearn.mixture import BayesianGaussianMixture, GaussianMixture
+import umap
+from MulticoreTSNE import MulticoreTSNE as TSNE
+from isosplit5 import isosplit5
+from sklearn import preprocessing
 from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from sklearn.mixture import BayesianGaussianMixture, GaussianMixture
 from sklearn.neighbors import KNeighborsClassifier
 
-import hdbscan
-
-from isosplit5 import isosplit5
-
-import umap
-import time
-
-from sklearn.cluster import KMeans
-from sklearn import preprocessing
-from MulticoreTSNE import MulticoreTSNE as TSNE
+from suss.io import read_pickle, save_pickle
 
 
 PCS = 12
@@ -467,11 +463,8 @@ def sort_set(spike_dataset):
                 dpoints=500,
                 sr=spike_dataset.sample_rate)
 
-        print("wf", wf)
         projected = umap.UMAP(n_components=6, repulsion_strength=2.0).fit_transform(wf)
-        print("projected1", projected)
         projected = umap.UMAP(n_components=2, repulsion_strength=2.0).fit_transform(projected)
-        print("projected2", projected)
         labels = hdb_fit_near(projected, n_clusters=16, try_range=np.arange(10, 40, 1))
 
         reclustered = clustered.select(index).cluster(labels)
