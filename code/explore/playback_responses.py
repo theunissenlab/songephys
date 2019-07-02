@@ -1,0 +1,270 @@
+import os
+import time
+import suss.io
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import quantities as pq
+from IPython.display import clear_output
+
+from sklearn.neighbors import KernelDensity
+
+from preprocess.sound.playback_utils import _parse_julie_filename_metadata
+
+from .adaptive_kde import ssvkernel
+
+
+def kde2(data, x):
+    # TODO (kevin) not sure what units this is... but its a probability density
+    return (
+        np.exp(KernelDensity(bandwidth=0.1, kernel="exponential").fit(data[:, None]).score_samples(x[:, None]))
+    ), None
+
+
+def full_responses(EVENTS):
+    # Columns playback file name, vocalizer, vocalization_type, start time, duration
+    rows = []
+    for event in EVENTS:
+        metadata = _parse_julie_filename_metadata(os.path.basename(event["playback_file"]))
+        relation = None
+        if metadata["source_sex"]:
+            relation = os.path.basename(event["playback_file"]).split("_")[1]
+        else:
+            relation = metadata["emitter"]
+        
+        rows.append((
+            os.path.basename(event["playback_file"]),
+            relation,
+            event["vocalizer"],
+            metadata["type"][:2].upper() if not metadata.get("callid") else metadata["callid"][:2].upper(),
+            event["start_time"].item() + 0.5,
+            event["duration"].item() - 1.0,
+            event["start_time"].item() + event["duration"].item(),
+        ))
+    return pd.DataFrame(data=rows,
+        columns=["file", "relation_short", "relation", "call_type", "start_time", "duration", "stop_time"])
+
+
+def _get_layout(n, max_columns=None):
+    w = 1
+    h = 1
+
+    increment_width = False
+    while w * h < n:
+        if increment_width and (not max_columns or w < max_columns):
+            w += 1
+        else:
+            h += 1
+        increment_width = not increment_width
+
+    return w, h
+
+
+def fig_grid(n, ax_size=(3, 2), max_columns=None):
+    # dimension
+    w, h = _get_layout(n, max_columns=max_columns)
+
+    fig = plt.figure(figsize=ax_size)
+    axes = []
+
+    curr_x = 0
+    curr_y = 0
+    for i in range(n):
+        axes.append(fig.add_axes([curr_x + 0.1, curr_y + 0.1, 0.8, 0.8]))
+        curr_x += 1
+        if curr_x == w:
+            curr_x = 0
+            curr_y += 1
+
+    return fig, axes
+   
+
+def inject_spikes(df, spikes, buffer=1.0):
+    spike_times = []
+    
+    for t_start, t_stop in zip(df["start_time"], df["stop_time"]):
+        idx0 = np.searchsorted(spikes, t_start - buffer)
+        idx1 = np.searchsorted(spikes, t_stop + buffer)
+
+        spike_times.append(spikes[idx0:idx1])
+    
+    df["spikes"] = pd.Series(spike_times, index=df.index)
+    return df 
+
+
+def filter_dataframe(df, selector):
+    subset = df.where(selector & df["spikes"].apply(len) > 0).dropna()
+    return subset
+
+
+def get_spikes_in_window(df, selector):
+    subset = filter_dataframe(df, selector)
+    spike_times = []
+    for i, row in subset.iterrows():
+        spike_times.append(row["spikes"] - row["start_time"])
+    return spike_times
+
+
+def plot_raw(events, loader, channels, dt=0.2, t_start=-0.5, t_stop=0.5, ylim=None, mic=False, ax_size=(7, 3), max_columns=3):
+    print("Make sure you are using channel number by 8-23, not 0-16")
+    try:
+        iter(channels)
+    except TypeError:
+        channels = [channels]
+
+    try:
+        for _, event in events.iterrows():
+            fig, axes = fig_grid(len(channels), ax_size=ax_size, max_columns=max_columns)
+
+            for idx, channel in enumerate(channels):
+                ax = axes[idx]
+                if mic:
+                    sig = loader.time_slice(event["start_time"] + t_start, event["start_time"] + t_stop, signal="mic")
+                    ax.plot(sig.t, sig.data[:, 0], linewidth=1)
+                else:
+                    sig = loader.time_slice(event["start_time"] + t_start, event["start_time"] + t_stop, signal="filtered")
+                    ax.plot(sig.t, sig.data[:, channel - 8], linewidth=1)
+                if ylim is not None:
+                    ax.set_ylim(*ylim)
+
+                ax.set_xlim(sig.t[0], sig.t[-1])
+                ax.text(
+                    0.01,
+                    0.99,
+                    "Ch {}".format(channel),
+                    horizontalalignment="left",
+                    verticalalignment="top",
+                    fontsize=14,
+                    transform=ax.transAxes)
+
+                ax.text(
+                    0.99,
+                    0.99,
+                    "{}".format(event["call_type"]),
+                    horizontalalignment="right",
+                    verticalalignment="top",
+                    fontsize=14,
+                    transform=ax.transAxes)
+
+                ax.vlines([event["start_time"]], *ax.get_ylim(), linestyle="--")
+
+            clear_output(wait=True)
+            plt.show()
+            plt.close(fig)
+            time.sleep(dt)
+    except KeyboardInterrupt:
+        plt.close(fig)
+    
+    return
+
+
+def view_spike_waveforms_on_channel(SITE, channel):
+    print("Use channel numbers 8-23")
+    SPIKES = suss.io.read_pickle(os.path.join(SITE, "manually_curated", "curated-e{}.pkl".format(channel)))
+    step = 500
+    try:
+        for i in range(step):
+            fig, axes = fig_grid(len(SPIKES.labeled_nodes), (4, 3))
+            for node_idx, (label, node) in enumerate(SPIKES.labeled_nodes):
+                ax = axes[node_idx]
+                ax.plot(node.flatten().waveforms[i::step].T, color="Blue", alpha=0.2)
+                ax.plot(np.mean(node.flatten().waveforms, axis=0), linewidth=4)
+                ax.set_ylim(-200, 100)
+                ax.text(
+                    0.01,
+                    0.99,
+                    "Unit {} (index {})".format(label, node_idx),
+                    horizontalalignment="left",
+                    verticalalignment="top",
+                    fontsize=14,
+                    transform=ax.transAxes)
+                ax.grid(linestyle=":")
+
+            clear_output(wait=True)
+            plt.show()
+            plt.close(fig)
+    except KeyboardInterrupt:
+        plt.close(fig)
+
+
+def kde(data, x):
+    y, t, optw, gs, C, confb95, yb = ssvkernel(data, tin=x)
+    return (
+        y
+    ), confb95
+       
+
+def generate_full_comparison(SITE, df, channel, unit, adaptive_kde=False):
+    print("Use channel numbers 8-23")
+
+    print("Loading channel {} and unit {}".format(channel, unit))
+
+    SPIKES = suss.io.read_pickle(os.path.join(SITE, "manually_curated", "curated-e{}.pkl".format(channel)))
+
+    _node_lookup = dict(SPIKES.labeled_nodes)
+
+    inject_spikes(df, _node_lookup[unit].flatten().times, buffer=2.0)
+
+    call_types = df["call_type"].unique()
+
+    x = np.linspace(-2.0, 2.0, 1000)
+    mask = (x >= -1.5) & (x < 1.5)
+
+    call_types_with_trials = []
+    for call in call_types:
+        filtered = get_spikes_in_window(
+            df, (df["call_type"] == call)
+        )
+        if len(filtered) <= 2:
+            pass
+        else:
+            call_types_with_trials.append((call, filtered))
+
+    fig, axes = fig_grid(len(call_types_with_trials), (4, 3))
+
+    all_psths = []
+    for (call, filtered_df), ax in zip(call_types_with_trials, axes):
+        if adaptive_kde:
+            y, yerr = kde(np.concatenate(filtered_df), x)
+            dt = x[1] - x[0]
+            scale = dt * len(np.concatenate(filtered_df)) / len(filtered_df)
+            y = y * scale
+            yerr = yerr * scale
+
+            # now y is in spikes per time bin.
+            # to get to spikes per second (Hz)...
+
+            y = y / dt
+            yerr = yerr / dt
+
+            ax.fill_between(x[mask], yerr[0, mask], yerr[1, mask], color="Grey", alpha=0.3)
+            ax.set_xlabel("Hz")
+        else:
+            y, _ = kde2(np.concatenate(filtered_df), x)
+
+        all_psths.append(y)
+
+        ax.plot(x[mask], y[mask], linewidth=1)
+
+        ax.text(
+            0.95, 0.95,
+            "n={}".format(len(filtered_df)), 
+            horizontalalignment="right",
+            verticalalignment="top",
+            transform=ax.transAxes,
+            fontsize=16)
+
+        ax.text(
+            0.05, 0.95,
+            call,
+            horizontalalignment="left",
+            verticalalignment="top",
+            transform=ax.transAxes,
+            fontsize=16)
+
+    ylim = (np.min(all_psths) / 1.1, np.max(all_psths) * 1.1)
+    for (call, filtered_df), ax in zip(call_types_with_trials, axes):
+        ax.set_ylim(*ylim)
+
+    plt.show()
+    plt.close(fig)
