@@ -105,7 +105,7 @@ def get_spikes_in_window(df, selector):
     return spike_times
 
 
-def plot_raw(events, loader, channels, dt=0.2, t_start=-0.5, t_stop=0.5, ylim=None, mic=False, ax_size=(7, 3), max_columns=3):
+def plot_raw(events, loader, channels, dt=0.2, t_start=-0.5, t_stop=0.5, ylim=None, mic=False, randomize=False, ax_size=(7, 3), max_columns=3):
     print("Make sure you are using channel number by 8-23, not 0-16")
     try:
         iter(channels)
@@ -113,14 +113,19 @@ def plot_raw(events, loader, channels, dt=0.2, t_start=-0.5, t_stop=0.5, ylim=No
         channels = [channels]
 
     try:
-        for _, event in events.iterrows():
+        if randomize:
+            iterator = events.sample(frac=1).iterrows()
+        else:
+            iterator = events.iterrows()
+
+        for _, event in iterator:
             fig, axes = fig_grid(len(channels), ax_size=ax_size, max_columns=max_columns)
 
             for idx, channel in enumerate(channels):
                 ax = axes[idx]
                 if mic:
                     sig = loader.time_slice(event["start_time"] + t_start, event["start_time"] + t_stop, signal="mic")
-                    ax.plot(sig.t, sig.data[:, 0], linewidth=1)
+                    ax.plot(sig.t, sig.data[:, channel], linewidth=1)
                 else:
                     sig = loader.time_slice(event["start_time"] + t_start, event["start_time"] + t_stop, signal="filtered")
                     ax.plot(sig.t, sig.data[:, channel - 8], linewidth=1)
@@ -143,6 +148,18 @@ def plot_raw(events, loader, channels, dt=0.2, t_start=-0.5, t_stop=0.5, ylim=No
                     "{}".format(event["call_type"]),
                     horizontalalignment="right",
                     verticalalignment="top",
+                    fontsize=14,
+                    transform=ax.transAxes)
+
+                hours = int(event["start_time"] // 3600)
+                mins = int((event["start_time"] - (hours * 3600)) // 60)
+                secs = int(event["start_time"] - (hours * 3600) - (mins * 60))
+                ax.text(
+                    0.01,
+                    0.01,
+                    "{:1d}h{:1d}m{:1d}s".format(hours, mins, secs),
+                    horizontalalignment="left",
+                    verticalalignment="bottom",
                     fontsize=14,
                     transform=ax.transAxes)
 
