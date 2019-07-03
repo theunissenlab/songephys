@@ -5,8 +5,10 @@ import datetime
 from collections import defaultdict
 
 import numpy as np
-import scipy.io.wavfile
+import wavio
 from scipy.signal import correlate
+
+from soundsig.signal import resample_signal
 
 
 def compute_realigned_trial_times(
@@ -49,10 +51,22 @@ def compute_realigned_trial_times(
     of Intan recording.
     """
     all_offsets = []
-    for row_idx, row in playback_df.iterrows():
-        sr, wav_data = scipy.io.wavfile.read(row.stimulus_name)
 
-        assert sr == intan_lazy_mic.sampling_rate
+    intan_sr = intan_lazy_mic.sampling_rate 
+
+    _loaded_stim_cache = {}
+    for row_idx, row in playback_df.iterrows():
+        if row.stimulus_name in _loaded_stim_cache:
+            wav_data = _loaded_stim_cache[row.stimulus_name]
+        else:
+            wav_object = wavio.read(row.stimulus_name)
+
+            stim_sr = wav_object.rate
+            wav_data = wav_object.data[:, 0]
+            # assert sr == intan_lazy_mic.sampling_rate
+            if stim_sr != intan_sr:
+                wav_data, _ = resample_signal(wav_data, stim_sr, intan_sr)
+            _loaded_stim_cache[row.stimulus_name] = wav_data
 
         estimated_start = (row.time - intan_start_time).total_seconds()  # timedelta
         if estimated_start < 0 or estimated_start > intan_lazy_mic.N / intan_lazy_mic.sampling_rate:
@@ -67,7 +81,7 @@ def compute_realigned_trial_times(
 
         for i in np.arange(recorded_data.shape[1]):
             correlated = correlate(recorded_data[:, i], wav_data, mode="same")
-            all_offsets.append((np.argmax(correlated) / sr - row.duration / 2) - PADDING)
+            all_offsets.append((np.argmax(correlated) / intan_sr - row.duration / 2) - window)
 
     best_offset = np.median(all_offsets)
     print("Offsetting playbacks by {:.5f} seconds".format(best_offset))

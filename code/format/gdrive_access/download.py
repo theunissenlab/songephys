@@ -19,6 +19,7 @@ import time
 from pydrive.drive import GoogleDrive
 
 from .auth import get_auth
+from format.lab_utils import drive2local_by_lab
 
 import config
 
@@ -86,7 +87,15 @@ def gdrive_listdir(dir):
     }).GetList()
 
 
-def download_session(session_id, save_to=None, pyoperant_files=tuple()):
+
+
+
+def download_session(
+        session_id,
+        save_to=None,
+        pyoperant_files=tuple(),
+        lab="theunissen",
+    ):
     """Download a recording session data into the proper location
 
     Creates directories in this structure if they don't exist yet
@@ -114,12 +123,21 @@ def download_session(session_id, save_to=None, pyoperant_files=tuple()):
     raw_dir = os.path.join(session_dir, "raw")
     stimuli_dir = os.path.join(session_dir, "stimuli")
 
-    gdrive_bird_dir = gdrive_look_in(gdrive_root_dir, bird_name)
-    gdrive_rhd_dir = gdrive_look_in(gdrive_bird_dir, "RHD")
-    try:
-        rhd_file = gdrive_look_in(gdrive_rhd_dir, "{}.rhd".format(session_id))
-    except:
-        raise Exception("Rhd file not found")
+    if lab == "theunissen":
+        gdrive_bird_dir = gdrive_look_in(gdrive_root_dir, bird_name)
+        gdrive_rhd_dir = gdrive_look_in(gdrive_bird_dir, "RHD")
+        try:
+            rhd_file = gdrive_look_in(gdrive_rhd_dir, "{}.rhd".format(session_id))
+        except:
+            raise Exception("Rhd file not found")
+    elif lab == "seewiesen":
+        gdrive_seewiesen_dir = gdrive_look_in(gdrive_root_dir, "Seewiesen")
+        gdrive_bird_dir = gdrive_look_in(gdrive_seewiesen_dir, bird_name)
+        gdrive_rhd_dir = gdrive_bird_dir
+        try:
+            rhd_file = gdrive_look_in(gdrive_rhd_dir, "{}.rhd".format(session_id))
+        except:
+            raise Exception("Rhd file not found")
 
     if not os.path.exists(raw_dir):
         os.makedirs(raw_dir)
@@ -131,10 +149,18 @@ def download_session(session_id, save_to=None, pyoperant_files=tuple()):
                     "Not downloading...".format(rhd_file["title"]))
     else:
         logger.info("Downloading {} to {}".format(rhd_file["title"], raw_dir))
-        download_file(rhd_file, os.path.join(raw_dir, rhd_file["title"]))
+
+        download_file(
+            rhd_file,
+            os.path.join(raw_dir, drive2local_by_lab[lab](rhd_file["title"]))
+        )
 
     csv_string = ""
-    gdrive_pyoperant_dir = gdrive_look_in(gdrive_bird_dir, "pyoperant")
+    if lab == "theunissen":
+        gdrive_pyoperant_dir = gdrive_look_in(gdrive_bird_dir, "pyoperant")
+    elif lab == "seewiesen":
+        gdrive_pyoperant_dir = gdrive_bird_dir
+
     for pyoperant_file in pyoperant_files:
         if not pyoperant_file.endswith(".csv"):
             pyoperant_file = "{}.csv".format(pyoperant_file)
@@ -153,7 +179,12 @@ def download_session(session_id, save_to=None, pyoperant_files=tuple()):
 
     # We can load the csvs and check which stimulus directories to download
     if pyoperant_files:
-        gdrive_stimuli_dir = gdrive_look_in(gdrive_bird_dir, "stimuli")
+        if lab == "theunissen":
+            gdrive_stimuli_dir = gdrive_look_in(gdrive_bird_dir, "stimuli")
+        elif lab == "seewiesen":
+            gdrive_stimuli_dir = gdrive_look_in(gdrive_seewiesen_dir, "Stimuli")
+            gdrive_stimuli_dir = gdrive_look_in(gdrive_stimuli_dir, "Bird1")
+
         stimuli_folders = gdrive_listdir(gdrive_stimuli_dir)
         for stimuli_folder in stimuli_folders:
             # TODO (check if this is needed)

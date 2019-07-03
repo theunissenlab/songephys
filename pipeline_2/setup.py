@@ -1,6 +1,8 @@
 import glob
 import os
 
+import pickle
+
 import numpy as np
 import luigi
 from neo.io import RHDIO, NixIO
@@ -9,7 +11,6 @@ from format.gdrive_access import download
 from format.io import load_yaml
 from format.lazy import (
     LazySignal,
-    LazySite,
     create_lazy_signals_from_nix,
 )
 from utils import session_basename
@@ -59,6 +60,7 @@ class DownloadSession(luigi.Task):
                             "cannot download raw data files")
 
         # First, a hacky way to check if there are supposed to be pyoperants
+        # (and if the lab is theunissen lab)
         session_name = os.path.basename(self.session_dir)
         prefix = session_name.split("_")[0]
         site_dirs = glob.glob(os.path.join(
@@ -69,18 +71,24 @@ class DownloadSession(luigi.Task):
             "{}*".format(prefix),
             "sessions.yaml"))
         pyoperants = []
+
         for site_dir in site_dirs:
             session_config = load_yaml(site_dir)
             for session in session_config["sessions"]:
                 if session["id"] == session_name and "playbacks" in session:
                     pyoperants += session["playbacks"]
+
+            # This should be the same for every config file
+            LAB_NAME = session_config.get("lab", "theunissen")
+
         self.pyoperants = pyoperants
         # end hack
 
         download.download_session(
             self.session_name,
             save_to=self.session_dir,
-            pyoperant_files=self.pyoperants)
+            pyoperant_files=self.pyoperants,
+            lab=LAB_NAME)
 
 
 

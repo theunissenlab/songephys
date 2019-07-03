@@ -12,7 +12,7 @@ def timestamp_from_intan_filename(filename):
         raise FutureWarning("You are in the wrong century for this function.")
 
     basename = os.path.splitext(os.path.basename(filename))[0]
-    bird, date, time = basename.split("_")
+    date, time = basename.split("_")[-2:]
     return datetime.datetime(
         year=2000 + int(date[:2]),
         month=int(date[2:4]),
@@ -21,3 +21,4 @@ def timestamp_from_intan_filename(filename):
         minute=int(time[2:4]),
         second=int(time[4:])
     )
+

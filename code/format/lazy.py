@@ -554,7 +554,7 @@ def create_lazy_signals_from_nix(nix_file, output_mic, output_elec, batch_size):
                 sig.shape[0],
                 sig.shape[1],
                 output_mic,
-                sig.sampling_rate.item(),
+                round(sig.sampling_rate.item()),
             )
 
             lazy_signal.write(sig, batch_size)
@@ -567,7 +567,7 @@ def create_lazy_signals_from_nix(nix_file, output_mic, output_elec, batch_size):
                 sig.shape[0],
                 sig.shape[1],
                 output_elec,
-                sig.sampling_rate.item(),
+                round(sig.sampling_rate.item()),
             )
             lazy_signal.write(sig, batch_size)
             signals_created["raw"] = lazy_signal
