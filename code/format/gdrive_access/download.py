@@ -87,7 +87,38 @@ def gdrive_listdir(dir):
     }).GetList()
 
 
+def download_csvs(
+        site_id,
+        csv_list,
+        save_to=None,
+        lab="theunissen"
+    ):
+    bird_name = site_id.split("_")[0]
 
+    if lab == "theunissen":
+        gdrive_bird_dir = gdrive_look_in(gdrive_root_dir, bird_name)
+        gdrive_pyoperant_dir = gdrive_look_in(gdrive_bird_dir, "pyoperant")
+    elif lab == "seewiesen":
+        gdrive_seewiesen_dir = gdrive_look_in(gdrive_root_dir, "Seewiesen")
+        gdrive_bird_dir = gdrive_look_in(gdrive_seewiesen_dir, bird_name)
+        gdrive_pyoperant_dir = gdrive_bird_dir
+
+    downloaded = []
+    for pyoperant_file in csv_list:
+        try:
+            csv_file = gdrive_look_in(gdrive_pyoperant_dir, pyoperant_file)
+        except:
+            logger.warning("File {} not found! "
+                           "Skipping...".format(pyoperant_file))
+            continue
+
+        download_dest = os.path.join(save_to, csv_file["title"])
+        download_file(csv_file, download_dest)
+        downloaded.append(download_dest)
+
+    print(downloaded)
+
+    return downloaded
 
 
 def download_session(

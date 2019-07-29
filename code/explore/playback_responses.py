@@ -33,6 +33,7 @@ def full_responses(EVENTS):
             relation = metadata["emitter"]
         
         rows.append((
+            event["playback_file"],
             os.path.basename(event["playback_file"]),
             relation,
             event["vocalizer"],
@@ -42,7 +43,7 @@ def full_responses(EVENTS):
             event["start_time"].item() + event["duration"].item(),
         ))
     return pd.DataFrame(data=rows,
-        columns=["file", "relation_short", "relation", "call_type", "start_time", "duration", "stop_time"])
+        columns=["file_path", "file", "relation_short", "relation", "call_type", "start_time", "duration", "stop_time"])
 
 
 def _get_layout(n, max_columns=None):
@@ -79,7 +80,10 @@ def fig_grid(n, ax_size=(3, 2), max_columns=None):
     return fig, axes
    
 
-def inject_spikes(df, spikes, buffer=1.0):
+def inject_spikes(df, spikes, buffer=1.0, key=None):
+    if key is None:
+        key = "spikes"
+
     spike_times = []
     
     for t_start, t_stop in zip(df["start_time"], df["stop_time"]):
@@ -88,12 +92,12 @@ def inject_spikes(df, spikes, buffer=1.0):
 
         spike_times.append(spikes[idx0:idx1])
     
-    df["spikes"] = pd.Series(spike_times, index=df.index)
+    df[key] = pd.Series(spike_times, index=df.index)
     return df 
 
 
 def filter_dataframe(df, selector):
-    subset = df.where(selector & df["spikes"].apply(len) > 0).dropna()
+    subset = df.where(selector & df["spikes"].apply(len) > 0).dropna(how="all")
     return subset
 
 

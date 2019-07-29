@@ -1,19 +1,35 @@
 import glob
 import os
+import shutil
 
 import pickle
 
 import numpy as np
 import luigi
 from neo.io import RHDIO, NixIO
+import pandas as pd
 
 from format.gdrive_access import download
-from format.io import load_yaml
+from format.io import load_yaml, save_yaml
+from format.intan_utils import timestamp_from_intan_filename
 from format.lazy import (
     LazySignal,
     create_lazy_signals_from_nix,
 )
+from format.gdrive_access.download import download_csvs
 from utils import session_basename
+
+
+class SiteFileList(luigi.Task):
+    """Checks if a file list file exists
+    """
+    site_dir = luigi.Parameter()
+
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir, "filelist"))
+
+    def run(self):
+        raise Exception("The filelist file must be manually created")
 
 
 class SiteConfig(luigi.Task):
@@ -23,7 +39,115 @@ class SiteConfig(luigi.Task):
         return luigi.LocalTarget(os.path.join(self.site_dir, "sessions.yaml"))
 
     def run(self):
-        raise Exception("The sessions.yaml file must be manually created")
+        """Creates a yaml config file for the session
+
+        The yaml can be made manually, but this can be slightly easier
+        because it is sometimes confusing when one playback csv spans
+        multiple RHD files, and vice-versa.
+
+        REQUIRES google drive authentication (needs to download csvs
+        and read them to find trial timestamps)
+
+        Example file contents:
+
+              seewiesen
+              ZF4F_trialdata_20190612134340.csv
+              ZF4F_2t_190612_134437.rhd
+              ZF4F_2t_190612_135747.rhd
+        """
+        if not os.path.join(self.site_dir, "filelist"):
+            raise Exception("""
+    Error, either
+
+        - sessions.yaml must be created manually
+        - a plain text file named 'filelist' must be created
+          that includes the lab code name (i.e. "theunissen" or "seewiesen")
+          on the first line, and csvs and rhds on other lines.
+
+          This will automatically create the session.yaml file
+              """)
+
+        rhds = []
+        csvs = []
+        name = None
+
+        with open(os.path.join(self.site_dir, "filelist"), "r") as filelist:
+            for line in filelist.readlines():
+                line = line.strip()
+                if name is None:
+                    if not line in ["theunissen", "seewiesen"]:
+                        raise ValueError("The first line of filelist must be either 'theunissen' or 'seewiesen'")
+                    name = line
+                    continue
+
+                if line.endswith(".rhd"):
+                    rhds.append(line)
+                elif line.endswith(".csv"):
+                    csvs.append(line)
+
+        # Get the timestamps from rhd filenames
+        rhd_times = [
+            (timestamp_from_intan_filename(rhd), rhd)
+            for rhd in rhds
+        ]
+        rhd_times = sorted(rhd_times)
+
+        t0 = rhd_times[0][0]
+
+        rhd_dicts = [
+            {
+                "id": os.path.splitext(rhd_name)[0],
+                "t": (rhd_time - t0).seconds,
+            } for rhd_time, rhd_name in rhd_times
+        ]
+
+        # Download the csvs in a temporary directory
+        csv_start_stop = []
+
+        csv_temp_dir = os.path.join(self.site_dir, "tmp")
+        if not os.path.exists(csv_temp_dir):
+            os.makedirs(csv_temp_dir)
+
+        site_name = session_basename(self.site_dir)
+        download_csvs(site_name, csvs, csv_temp_dir, lab=name)
+
+        # Get the first and last trial time for each csv file
+        for csv in csvs:
+            csv_data = pd.read_csv(
+                    os.path.join(csv_temp_dir, csv),
+                    parse_dates=True,
+                    converters={"time": pd.to_datetime})
+            first = csv_data["time"].iloc[0]
+            last = csv_data["time"].iloc[-1]
+
+            csv_start_stop.append((csv, first, last))
+
+        # Associate csvs to RHDs using timestamp overlap conditions that
+        # are highly sophisticated and complex
+        for csv, start, stop in csv_start_stop:
+            for i in range(len(rhd_times) - 1):
+                if (
+                        (rhd_times[i][0] <= start < rhd_times[i + 1][0]) or
+                        (rhd_times[i][0] <= stop < rhd_times[i + 1][0]) or
+                        (rhd_times[i][0] > start and rhd_times[i + 1][0] < stop) or
+                        (start > rhd_times[i][0] and stop < rhd_times[i + 1][0])
+                        ):
+                    if "pyoperants" not in rhd_dicts[i]:
+                        rhd_dicts[i]["pyoperants"] = [os.path.splitext(csv)[0]]
+                    else:
+                        rhd_dicts[i]["pyoperants"].append(os.path.splitext(csv)[0])
+
+            if rhd_times[-1][0] <= start:
+                if "pyoperants" not in rhd_dicts[-1]:
+                    rhd_dicts[-1]["pyoperants"] = [os.path.splitext(csv)[0]]
+                else:
+                    rhd_dicts[-1]["pyoperants"].append(os.path.splitext(csv)[0])
+
+        save_yaml(self.output().path, {"lab": name, "sessions": rhd_dicts})
+
+        # Remove the temporary directory
+        print("Removing temp dir {}".format(csv_temp_dir))
+        shutil.rmtree(csv_temp_dir)
 
 
 class DownloadSession(luigi.Task):
@@ -55,12 +179,14 @@ class DownloadSession(luigi.Task):
         }
 
     def run(self):
+        """Use the yaml file to download RHDs and pyoperant csvs for this session
+        """
         if download.drive is None:
             raise Exception("Not authenticated with Google Drive; "
                             "cannot download raw data files")
 
-        # First, a hacky way to check if there are supposed to be pyoperants
-        # (and if the lab is theunissen lab)
+        # First, check if there are supposed to by pyoperant csv files
+        # by loading the yaml file and looking.
         session_name = os.path.basename(self.session_dir)
         prefix = session_name.split("_")[0]
         site_dirs = glob.glob(os.path.join(
@@ -78,11 +204,12 @@ class DownloadSession(luigi.Task):
                 if session["id"] == session_name and "playbacks" in session:
                     pyoperants += session["playbacks"]
 
-            # This should be the same for every config file
+            # The yaml file may specify a particular "lab".
+            # This is needed for the download function to adjust
+            # for slightly different directory structure on google drive
             LAB_NAME = session_config.get("lab", "theunissen")
 
         self.pyoperants = pyoperants
-        # end hack
 
         download.download_session(
             self.session_name,
