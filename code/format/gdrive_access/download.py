@@ -35,6 +35,7 @@ except:
     logger.warning("Google Drive authentication failed")
     drive = None
     gdrive_root_dir = None
+    logger.info("Run the gdrive setup script")
 else:
     gdrive_root_dir = drive.ListFile({
         "q": "title = 'Intan Ephys Data'"
