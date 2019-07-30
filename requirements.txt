@@ -1,23 +1,44 @@
 Cython==0.28.2
 flask==0.12.2
+hdbscan==0.8.22
 h5py==2.7.0
 ipython==5.4.1
 jupyter==1.0.0
 luigi==2.6.2
-matplotlib==2.0.2
-# mne==0.15
+matplotlib==2.2.2
+networkx==2.1
 nixio==1.3.1
-numpy==1.14.0
-pandas==0.19.0
+numpy==1.16.0
+# pandas==0.19.0
+pandas==0.24.2
 PyDrive==1.3.1
-scikit-learn==0.18.1
-scipy==0.19.0
-statsmodels==0.8.0
-Theano==1.0.1
+scikit-learn==0.21.2
+scipy==1.3.0
+# statsmodels==0.8.0
+soundsig==1.5
+umap==0.1.1
+Theano==1.0.4
+sqlalchemy==1.2.10
+wavio==0.0.4
+
+# Load intan rhd format code
+-e git://github.com/theunissenlab/load_intan_rhd_format.git@master#egg=load_intan_rhd_format-0.0
 
 # Modified neo package
--e git://github.com/theunissenlab/python-neo.git@715db06#egg=neo
--e git://github.com/theunissenlab/soundsig.git@master#egg=soundsig
-# soundsig
+-e git://github.com/theunissenlab/python-neo.git@4317e4#egg=tlab_neo-0.5.1
 
---process-dependency-links
+# Spike sorting library
+# For now, install by cloning and setting the path
+-e git://github.com/kevinyu/solid-garbanzo.git@v0.1-alpha#egg=suss-0.1-alpha[gui]
+
+# Isosplit
+-e git://github.com/magland/isosplit5_python.git@master#egg=isosplit5-0.1.3
+
+# Soundsig (Need latest master of soundsig for bug fixes)
+# -e git://github.com/theunissenlab/soundsig.git@master#egg=soundsig-0.1
+
+# Latest version of sklearn (Need at least v0.20.0)
+# -e git://github.com/scikit-learn/scikit-learn.git@813d7d#egg=sklearn-0.20dev
+# -e git://github.com/scikit-learn/scikit-learn.git@4f5dd77#egg=sklearn-0.21dev
+
+# --process-dependency-links

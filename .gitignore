@@ -3,6 +3,7 @@ notebooks
 settings.yaml
 credentials.json
 load_intan_rhd_format
+client_secrets.json
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

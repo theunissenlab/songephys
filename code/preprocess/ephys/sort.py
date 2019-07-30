@@ -1,24 +1,21 @@
+import time
+
+import hdbscan
 import numpy as np
 import matplotlib.pyplot as plt
 import scipy.stats
-from suss.io import read_pickle, save_pickle
-from preproephys import extract_spikes_from_signal
-from sklearn.decomposition import PCA
-from sklearn.mixture import BayesianGaussianMixture, GaussianMixture
-from sklearn.cluster import KMeans
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
-from sklearn.neighbors import KNeighborsClassifier
-
-import hdbscan
-
-from isosplit5 import isosplit5
-
 import umap
-import time
-
-from sklearn.cluster import KMeans
-from sklearn import preprocessing
 from MulticoreTSNE import MulticoreTSNE as TSNE
+from isosplit5 import isosplit5
+from sklearn import preprocessing
+from sklearn.cluster import KMeans
+from sklearn.decomposition import PCA
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from sklearn.mixture import BayesianGaussianMixture, GaussianMixture
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.neighbors import LocalOutlierFactor
+
+from suss.io import read_pickle, save_pickle
 
 
 PCS = 12
@@ -467,11 +464,8 @@ def sort_set(spike_dataset):
                 dpoints=500,
                 sr=spike_dataset.sample_rate)
 
-        print("wf", wf)
         projected = umap.UMAP(n_components=6, repulsion_strength=2.0).fit_transform(wf)
-        print("projected1", projected)
         projected = umap.UMAP(n_components=2, repulsion_strength=2.0).fit_transform(projected)
-        print("projected2", projected)
         labels = hdb_fit_near(projected, n_clusters=16, try_range=np.arange(10, 40, 1))
 
         reclustered = clustered.select(index).cluster(labels)
@@ -507,4 +501,70 @@ def sort_set(spike_dataset):
 
         return final_result # cuz i dont want to deal with upgoing also yet
 
+
+def mymainmansort_set(spike_dataset):
+    labels = -np.ones(len(spike_dataset.times))
+    for polarity in [-1, 1]:
+        peaks = spike_dataset.waveforms[:, 20]
+        dataset = spike_dataset.select(peaks > 0)
+        selector = LocalOutlierFactor().fit_predict(PCA(n_components=6).fit_transform(dataset.waveforms)) == 1
+        dataset = dataset.select(selector)
+
+        umap_model = umap.UMAP(n_components=6, min_dist=0.1).fit(dataset.waveforms)
+
+        step = 2000
+        waveform_windows = [dataset.waveforms[i:i+step] for i in range(0, len(dataset.times), step)]
+
+        all_labels = []
+        for window_idx, window_wfs in enumerate(waveform_windows):
+            all_labels.append(cluster_window(window_wfs, umap_model.transform(window_wfs)))
+
+        all_labels, new_labels_flat, G = connect_windows(waveforms_windows, all_labels)
+        all_labels, new_labels_flat, G = connect_windows(waveforms_windows, all_labels, reassign=False)
+
+        # Now cluster all the points that weren't included 
+
+        unclustered = new_labels_flat == -1
+        waveforms2 = waveforms[unclustered]
+        windows2 = [waveforms2[i:i+step] for i in range(0, len(waveforms2), step)]
+
+        all_labels2 = []
+        for window_idx, window_wfs in enumerate(windows2):
+            all_labels2.append(cluster_window(windows2, umap_model.transform(window_wfs)))
+
+        all_labels2, new_labels_flat2, G2 = connect_windows(windows2, all_labels2)
+        all_labels2, new_labels_flat2, G2 = connect_windows(windows2, all_labels2, reassign=False)
+
+        all_new_labels_flat = np.copy(new_labels_flat)
+        selector = np.where(unclustered)
+        for label in np.unqiue(new_labels_flat2):
+            if label == -1:
+                continue
+            selector_ = np.zeros_like(new_labels_flat)
+            for k in selector[new_labels_flat2 == label]:
+                selector_[k] = 1
+
+            np.place(all_new_labels_flat, selector_, np.max(all_new_labels_flat) + 1)
+
+
+
+
+
+        wf, ind, labels, index = _sort_set(
+                spike_dataset,
+                polarity=polarity,
+                dpoints=2000,
+                sr=spike_dataset.sample_rate)
+        dataset = spike_dataset.select(index)
+        clustered = dataset.cluster(labels)
+
+        wf, ind, labels, index = _sort_set(
+                clustered,
+                polarity=polarity,
+                dpoints=500,
+                sr=spike_dataset.sample_rate)
+
+        projected = umap.UMAP(n_components=6, repulsion_strength=2.0).fit_transform(wf)
+        projected = umap.UMAP(n_components=2, repulsion_strength=2.0).fit_transform(projected)
+        labels = hdb_fit_near(projected, n_clusters=16, try_range=np.arange(10, 40, 1))
 
