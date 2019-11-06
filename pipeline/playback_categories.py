@@ -39,7 +39,7 @@ class GenerateCategoryPSTHs(luigi.Task):
         return luigi.LocalTarget(os.path.join(self.categories_dir, "placeholder"))
 
     def run(self):
-        events = np.load(self.input()["vocal_periods"].path)[()]["playback"]
+        events = np.load(self.input()["vocal_periods"].path, allow_pickle=True)[()]["playback"]
         spikes = suss.io.read_pickle(self.input()["spikes"].path)
 
         for unit, node in spikes.labeled_nodes:

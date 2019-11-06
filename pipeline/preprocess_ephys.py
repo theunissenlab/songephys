@@ -125,7 +125,7 @@ class DetectSpikes(luigi.Task):
         )
 
     def run(self):
-        signals = np.load(self.input()["lazy_signals"].path)[()]
+        signals = np.load(self.input()["lazy_signals"].path, allow_pickle=True)[()]
         sampling_rate = signals["filtered"].sampling_rate
         spike_radius = int(config.SPIKE_WIDTH * sampling_rate)
 
@@ -180,7 +180,7 @@ class MergeLazySignals(luigi.Task):
         lazy_signals_filtered = []
         signal_times = []
         for previous_result, session in zip(self.input(), self.session_info["sessions"]):
-            session_sigs = np.load(previous_result["lazy_signals"].path)[()]
+            session_sigs = np.load(previous_result["lazy_signals"].path, allow_pickle=True)[()]
             lazy_signals_mic.append(session_sigs["mic"])
             lazy_signals_raw.append(session_sigs["raw"])
             lazy_signals_filtered.append(session_sigs["filtered"])

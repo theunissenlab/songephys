@@ -100,7 +100,7 @@ class App(object):
             self.savepath = loadpath or "temp_syllable_labeling.npy"
         
         if loadpath is not None and os.path.exists(loadpath):
-            loaded_data = np.load(loadpath)[()]
+            loaded_data = np.load(loadpath, allow_pickle=True)[()]
             print("Loaded", loadpath)
             self.labels = loaded_data["labels"]
             self.assigned_colors = loaded_data["assigned_colors"]
@@ -826,10 +826,10 @@ if __name__ == "__main__":
         "sites")
     site = os.path.join(site_dir, SITE)
     if LIVE == "live":
-        sound_events = np.load(os.path.join(site, "disjoint_vocal_periods.npy"))[()]
+        sound_events = np.load(os.path.join(site, "disjoint_vocal_periods.npy", allow_pickle=True))[()]
         sound_events = custom_correction(sound_events, SITE)
     elif LIVE == "playback":
-        sound_events = np.load(os.path.join(site, "vocal_periods.npy"))[()]["playback"]
+        sound_events = np.load(os.path.join(site, "vocal_periods.npy"), allow_pickle=True)[()]["playback"]
         sound_events = custom_correction(sound_events, SITE)
         for event in sound_events:
             event["start_time"] += config.PAD_SONG_BEFORE * pq.s

@@ -56,7 +56,7 @@ class MergeLazyFiles(luigi.Task):
         lazy_signals_filtered = []
         signal_times = []
         for session_output, session in zip(self.input()["lazy_signals"], self.session_info["sessions"]):
-            session_sigs = np.load(session_output["lazy_signals"].path)[()]
+            session_sigs = np.load(session_output["lazy_signals"].path, allow_pickle=True)[()]
             lazy_signals_mic.append(session_sigs["mic"])
             lazy_signals_raw.append(session_sigs["raw"])
             lazy_signals_filtered.append(session_sigs["filtered"])

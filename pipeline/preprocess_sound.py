@@ -111,7 +111,7 @@ class CreateMicrophoneAlignedCodes(luigi.Task):
         # associated with each pyoperant csv
         stim_dirs = _get_stim_dirs(csv_files, stimuli_directory)
 
-        signals = np.load(self.input()["lazy_signals"]["lazy_signals"].path)[()]
+        signals = np.load(self.input()["lazy_signals"]["lazy_signals"].path, allow_pickle=True)[()]
         lazy_mic = signals["mic"]
         max_time = lazy_mic.N / lazy_mic.sampling_rate
 
@@ -203,7 +203,7 @@ class CombinePlaybackMetadata(luigi.Task):
 
         if not len(block.segments[0].events):
             # If we messed up the digital codes...
-            stimulus_codes = np.load(self.input()["aligned_codes"].path)[()]
+            stimulus_codes = np.load(self.input()["aligned_codes"].path, allow_pickle=True)[()]
         else:
             events = nix.load_lazy_object(block.segments[0].events[0])
             stimulus_codes = convert_digital_to_metadata(events)
@@ -242,7 +242,7 @@ class FindVocalPeriods(luigi.Task):
         )
 
     def run(self):
-        signals = np.load(self.input()["lazy_signals"]["lazy_signals"].path)[()]
+        signals = np.load(self.input()["lazy_signals"]["lazy_signals"].path, allow_pickle=True)[()]
         mic = signals["mic"]
 
         ######################################################
@@ -281,7 +281,7 @@ class FindVocalPeriods(luigi.Task):
             block = nix.read_block(lazy=True)
 
             if not len(block.segments[0].events):
-                stimulus_codes = np.load(self.input()["aligned_codes"].path)[()]
+                stimulus_codes = np.load(self.input()["aligned_codes"].path, allow_pickle=True)[()]
                 sampling_rate = mic.sampling_rate / pq.s
             else:
                 digital_signals = nix.load_lazy_object(block.segments[0].events[0])
@@ -354,7 +354,7 @@ class MergeVocalPeriods(luigi.Task):
                 session["t"] * pq.s
                 for session in self.session_info["sessions"]
         ]
-        vocal_period_data = [np.load(s.path)[()] for s in self.input()]
+        vocal_period_data = [np.load(s.path, allow_pickle=True)[()] for s in self.input()]
 
         combined_result = defaultdict(list)
         for vocal_periods, offset in zip(vocal_period_data, block_offsets):
@@ -381,8 +381,8 @@ class DetectVocalAndSilentPeriods(luigi.Task):
         return luigi.LocalTarget(os.path.join(self.site_dir, "vocal_periods_with_silence.npy"))
 
     def run(self):
-        lazy_site = np.load(self.input()["lazy_site"].path)[()]
-        vocal_periods = np.load(self.input()["vocal_periods"].path)[()]
+        lazy_site = np.load(self.input()["lazy_site"].path, allow_pickle=True)[()]
+        vocal_periods = np.load(self.input()["vocal_periods"].path, allow_pickle=True)[()]
 
         # # this odesnt belong here but i need to do it
         # vocal_periods["playback"] = [e for e in vocal_periods["playback"] if e["duration"].item() > 1.5]

@@ -184,7 +184,7 @@ def recombine_with_deleted_wfs(sorted_data, original_data):
 def generate_plots(site, elec=None, unit=None):
     save_path = os.path.join(site, "unit_summaries")
 
-    sound_events = np.load(os.path.join(site, "vocal_periods.npy"))[()]
+    sound_events = np.load(os.path.join(site, "vocal_periods.npy"), allow_pickle=True)[()]
 
     try:
         os.makedirs(save_path)
