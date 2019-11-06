@@ -30,7 +30,7 @@ from preprocess.sound.detect import (
 )
 from preprocess.sound.stimuli import merge_segments
 from preprocess_ephys import MergeLazySignals
-from setup import GenerateLazyFiles, Rhd2Nix
+from file_setup import GenerateLazyFiles, Rhd2Nix
 
 import config
 

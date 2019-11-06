@@ -28,7 +28,7 @@ from preprocess.ephys.newsort import sort as new_sort, create_hierarchy
 
 from utils import session_basename
 
-from setup import SiteConfig, GenerateLazyFiles
+from file_setup import SiteConfig, GenerateLazyFiles
 import config
 
 
@@ -72,7 +72,7 @@ class FilterSignals(luigi.Task):
 
     def run(self):
         outputs = self.output()
-        signals = np.load(self.input()["lazy_signals"].path)[()]
+        signals = np.load(self.input()["lazy_signals"].path, allow_pickle=True)[()]
         signal = signals["raw"]
 
         output_signal = LazySignal(

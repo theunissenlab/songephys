@@ -4,6 +4,7 @@ settings.yaml
 credentials.json
 load_intan_rhd_format
 client_secrets.json
+solid-garbanzo
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

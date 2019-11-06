@@ -6,7 +6,7 @@ import numpy as np
 import luigi
 
 from preprocess_ephys import FilterSignals
-from setup import GenerateLazyFiles
+from file_setup import GenerateLazyFiles
 
 from format.io import load_yaml
 from format.lazy import (
