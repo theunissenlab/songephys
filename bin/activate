@@ -4,7 +4,7 @@ root="`dirname \"$root\"`"
 
 export PROJECT_ROOT="${root}"
 export PATH=$PROJECT_ROOT/bin:$PATH
-export PYTHONPATH=$PROJECT_ROOT/code:$PROJECT_ROOT/lib:$PROJECT_ROOT/pipeline:$PROJECT_ROOT/solid-garbanzo
+#export PYTHONPATH=$PROJECT_ROOT/code:$PROJECT_ROOT/lib:$PROJECT_ROOT/pipeline:$PROJECT_ROOT/solid-garbanzo:$PYTHONPATH
 # export PYTHONPATH=$PROJECT_ROOT/code_old:$PROJECT_ROOT/lib:$PROJECT_ROOT/pipeline_old:$PROJECT_ROOT/solid-garbanzo
 export LUIGI_CONFIG_PATH=$PROJECT_ROOT/luigi.cfg
 
@@ -15,4 +15,4 @@ if [ $# -eq 0 ]
   env=$PROJECT_ROOT/$1
 fi
 
-. $env/bin/activate
+# . $env/bin/activate

@@ -123,7 +123,7 @@ def select_with_spikes(df, selector):
     """Select subset of dataframe, dropping rows that do not fit
     the selection criteria and have no spikes
     """
-    subset = df.where(selector & df["spikes"].apply(len) > 0).dropna()
+    subset = df.where(selector & (df["spikes"].apply(len) > 0) ).dropna()
     return subset
 
 
