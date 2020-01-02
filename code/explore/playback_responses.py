@@ -21,27 +21,42 @@ def kde2(data, x):
     ), None
 
 
-def full_responses(EVENTS):
+def full_responses(EVENTS, file_parser=_parse_julie_filename_metadata):
     # Columns playback file name, vocalizer, vocalization_type, start time, duration
     rows = []
     for event in EVENTS:
-        metadata = _parse_julie_filename_metadata(os.path.basename(event["playback_file"]))
-        relation = None
-        if metadata["source_sex"]:
-            relation = os.path.basename(event["playback_file"]).split("_")[1]
-        else:
-            relation = metadata["emitter"]
-        
-        rows.append((
-            event["playback_file"],
-            os.path.basename(event["playback_file"]),
-            relation,
-            event["vocalizer"],
-            metadata["type"][:2].upper() if not metadata.get("callid") else metadata["callid"][:2].upper(),
-            event["start_time"].item() + 0.5,
-            event["duration"].item() - 1.0,
-            event["start_time"].item() + event["duration"].item(),
-        ))
+        if event.get("sound_type") == "playback":
+            metadata = file_parser(os.path.basename(event["playback_file"]))
+            relation = None
+            if metadata["source_sex"]:
+                relation = os.path.basename(event["playback_file"]).split("_")[1]
+            else:
+                relation = metadata["emitter"]
+            
+            rows.append((
+                event["playback_file"],
+                os.path.basename(event["playback_file"]),
+                relation,
+                event["vocalizer"],
+                metadata["type"][:2].upper() if not metadata.get("callid") else metadata["callid"][:2].upper(),
+                event["start_time"].item() + 0.5,
+                event["duration"].item() - 1.0,
+                event["start_time"].item() + event["duration"].item(),
+            ))
+
+        elif event.get("sound_type") == "live":
+            rows.append((
+                None,
+                None,
+                None,
+                None,
+                None,
+                event["start_time"].item() + 0.5,
+                event["duration"].item() - 1.0,
+                event["start_time"].item() + event["duration"].item(),
+            ))
+
+
     return pd.DataFrame(data=rows,
         columns=["file_path", "file", "relation_short", "relation", "call_type", "start_time", "duration", "stop_time"])
 

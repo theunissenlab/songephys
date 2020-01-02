@@ -3,7 +3,13 @@ import os
 import numpy as np
 import pandas as pd
 import quantities as pq
+import scipy
+import umap
+from hdbscan import HDBSCAN
+from sklearn.neighbors import LocalOutlierFactor
 
+
+from soundsig.sound import spectrogram
 from soundsig.signal import highpass_filter, lowpass_filter, bandpass_filter
 
 from preprocess.sound.playback_utils import (
@@ -21,6 +27,390 @@ def get_amplitude_envelope(sound, fs=30000.0, lowpass=5000.0, highpass=2000.0):
     streams_filtered_env = np.abs(lowpass_filter(streams_filtered_env.T, fs, lowpass).T)
     streams_filtered_env = lowpass_filter(streams_filtered_env.T, fs, 100).T
     return streams_filtered_env
+
+
+def compute_smart_threshold(amp_env, sampling_rate=30000.0, multiple=3):
+    """Compute a threshold by detecting baseline periods
+
+    A chunk of audio may be mostly silence or may be mostly vocalizations
+    with few or no moments of silence available. This makes it difficult to
+    define a detection threshold that is robust across many windows.
+
+    This function identifies a baseline that is robust to the overall statistics
+    of sound in the window (should generally work when there is at least
+    1/10th of a second of silence between vocalizations) by assuming that
+    the 0.1s bin with the least variance in peak to peak distance is near
+    the silence baseline.
+
+    Parameters
+    ==========
+    amp_env : numpy array of floats > 0 representing the amplitude envelope of the signal
+    sampling_rate (float): sampling rate of the amp env signal
+    multiple : How many multiples of the std of the signal to add to the baseline
+    """
+    high_peaks = scipy.signal.find_peaks(amp_env)[0]
+    low_peaks = scipy.signal.find_peaks(-amp_env)[0]
+    
+    if len(high_peaks) == len(low_peaks):
+        peak_idx = high_peaks[:-1]
+        peak2peak = np.abs(amp_env[high_peaks[:-1]] - amp_env[low_peaks[:-1]])
+    elif len(high_peaks) > len(low_peaks):
+        peak_idx = high_peaks[1:-1]
+        peak2peak = np.abs(amp_env[high_peaks[1:-1]] - amp_env[low_peaks[1:]])
+    elif len(low_peaks) > len(high_peaks):
+        peak_idx = high_peaks[:-1]
+        peak2peak = np.abs(amp_env[high_peaks[:-1]] - amp_env[low_peaks[1:-1]])
+        
+    dsamp = int(sampling_rate / 20.0)
+    
+    windows = []
+    for i in range(0, len(amp_env), dsamp):
+        windows.append((peak_idx >= i) & (peak_idx < i + dsamp))
+        
+    all_means = np.array([
+        np.mean(peak2peak[window]) if len(peak2peak[window]) > 1 else np.inf
+        for window in windows
+    ])
+    all_stds = np.array([
+        np.std(peak2peak[window]) if len(peak2peak[window]) > 1 else np.inf
+        for window in windows
+    ])
+    
+    # Assume the baseline is in the bottom 5% of the data
+    mean_cutoff = np.percentile(all_means, 5)
+    _best = np.argmin(all_stds[all_means < mean_cutoff])
+    best_window = np.where(all_means < mean_cutoff)[0][_best]
+    
+    all_good_windows = [
+        i for i in range(len(windows)) if
+        np.abs(all_means[i] - all_means[best_window]) < 2 * all_stds[best_window]
+    ]
+    
+    if not len(all_good_windows):
+        return np.mean(amp_env) + multiple * np.std(amp_env)
+    
+    dat = np.concatenate([amp_env[peak_idx[windows[i]]] for i in all_good_windows])
+    
+    thresh = np.mean(dat) + multiple * np.std(dat)
+    
+    return thresh
+
+
+def get_default_threshold(mic, window=5):
+    """Gets a threshold over all windows to use as a default
+
+    Uses compute_smart_threshold in every time window for an
+    entire microphone signal. Uses the median threshold as the
+    default threshold, and computes the std as a helper value to
+    reject thresholds that seem far off from what they should be.
+
+    Parameters
+    ==========
+    mic : instance of format.lazy.LazySignal
+        Lazy mic signal
+    window : float
+        Temporal (in seconds) width of each window to compute threshold in
+    """
+
+    all_thresholds_list = []
+    for t in np.arange(0, mic.N / mic.sampling_rate, window):
+        end_time = min(t + window, mic.N / mic.sampling_rate)
+
+        sliced = mic.time_slice(t, end_time)
+        t_arr = sliced.t
+        sig = sliced.data
+        sig = sig - np.mean(sig, axis=0)
+        sig = bandpass_filter(sig.T, mic.sampling_rate, 1000, 8000).T
+        amp_env = get_amplitude_envelope(sig, mic.sampling_rate, highpass=2000, lowpass=8000)
+        amp_env = np.mean(amp_env, axis=1)
+        threshold = compute_smart_threshold(amp_env, sampling_rate=mic.sampling_rate)
+        all_thresholds_list.append(threshold)
+        
+    all_thresholds_list = np.array(all_thresholds_list)
+    
+    # Remove outlier thresholds
+    clf = LocalOutlierFactor(n_neighbors=5, contamination=0.1, algorithm="kd_tree")
+    y_pred = clf.fit_predict(all_thresholds_list[:, None])
+    
+    # Return median (non-outlier) threshold and std
+    return np.median(all_thresholds_list[y_pred == 1]), np.std(all_thresholds_list[y_pred == 1])
+
+
+def check_overlap(interval, check_intervals):
+    t1, t2 = interval
+    check_intervals = np.array(check_intervals)
+    if not len(check_intervals):
+        return False
+
+    try:
+        idx = np.searchsorted(check_intervals[:, 0], interval[0])
+    except:
+        print(check_intervals.shape)
+        raise
+
+    if idx > 0 and t1 < check_intervals[idx - 1][1]:
+        return True
+    elif idx < len(check_intervals) and t2 > check_intervals[idx][0]:
+        return True
+    else:
+        return False
+
+
+def find_live_periods(lazy_mic, default_threshold, default_threshold_std, window=5):
+    """Detect all periods of sound, learning toward grouping up close together sounds
+    """
+    last_interval_to_check = None
+    all_intervals = []
+
+    # Iterate over 5s time windows
+    for t in np.arange(0, lazy_mic.N / lazy_mic.sampling_rate, window):
+        end_time = min(t + window, lazy_mic.N, lazy_mic.sampling_rate)
+
+        # Load the sound from this time window, filter it,
+        # and make an amplitude envelope from the mean of the two channels
+        sliced = lazy_mic.time_slice(t, end_time)
+        t_arr = sliced.t
+        sig = sliced.data
+        sig = sig - np.mean(sig, axis=0)
+        sig = bandpass_filter(sig.T, lazy_mic.sampling_rate, 1000, 8000).T
+        amp_env = get_amplitude_envelope(
+            sig,
+            lazy_mic.sampling_rate,
+            highpass=2000,
+            lowpass=8000)
+        amp_env = np.mean(amp_env, axis=1)
+
+        # Select the threshold. If its too large relative to the default threshold
+        # then use the default threshold instead
+        threshold = compute_smart_threshold(
+            amp_env,
+            sampling_rate=lazy_mic.sampling_rate
+        )
+        if threshold > default_threshold + default_threshold_std:
+            threshold = default_threshold
+
+        # Locate intervals by array index where the sound power exceeds the threshold
+        # using parameters optimized to group up multiple events in longer
+        # chunks (defined by the fuse_duration as 0.5 seconds)
+        intervals = threshold_events(
+            amp_env,
+            threshold,
+            polarity=1,
+            sampling_rate=lazy_mic.sampling_rate,
+            ignore_width=0.05,
+            min_size=0.05,
+            fuse_duration=0.5
+        )
+
+        # Convert intervals into time in seconds, with logic to merge continuous
+        # periods that might span the previous/next windows
+        if last_interval_to_check is not None:
+            if not len(intervals):
+                all_intervals.append(last_interval_to_check)
+            elif intervals[0][0] < (0.5 * lazy_mic.sampling_rate):
+                all_intervals.append((
+                    last_interval_to_check[0],
+                    intervals[0][1] / lazy_mic.sampling_rate + t
+                ))
+                intervals = intervals[1:]
+            else:
+                all_intervals.append(last_interval_to_check)
+                all_intervals.append((
+                    intervals[0][0] / lazy_mic.sampling_rate + t,
+                    intervals[0][1] / lazy_mic.sampling_rate + t
+                ))
+                intervals = intervals[1:]
+            last_interval_to_check = None
+
+        for i0, i1 in intervals:
+            if i1 == len(sig):
+                last_interval_to_check = (i0 / lazy_mic.sampling_rate + t, i1 / lazy_mic.sampling_rate + t)
+                break
+            all_intervals.append((i0 / lazy_mic.sampling_rate + t, i1 / lazy_mic.sampling_rate + t))
+
+    return all_intervals
+
+
+def split_live_syllables(
+        lazy_mic,
+        detected_sound_intervals,
+        default_threshold,
+        default_threshold_std
+    ):
+    """From predetermined sound periods, try to segment them into individual calls/syllables
+    """
+
+    all_syllable_intervals = []
+
+    for t1, t2 in detected_sound_intervals:
+        # Load the sound from this time window, filter it,
+        # and make an amplitude envelope from the mean of the two channels
+        sliced = lazy_mic.time_slice(t1, t2)
+        t_arr = sliced.t
+        sig = sliced.data
+        sig = sig - np.mean(sig, axis=0)
+        sig = bandpass_filter(sig.T, lazy_mic.sampling_rate, 1000, 8000).T
+        amp_env = get_amplitude_envelope(
+            sig,
+            lazy_mic.sampling_rate,
+            highpass=2000,
+            lowpass=8000)
+        amp_env = np.mean(amp_env, axis=1)
+
+        # Since the interval is known to be mostly sound, it doesn't make sense
+        # to compute the detection threshold from this interval alone. So we
+        # load a period extending 1s on either end to compute a threshold from a
+        # period that is presumed to include some silence.
+        sliced_extended = lazy_mic.time_slice(t1 - 1.0, t2 + 1.0)
+        sig_extended = sliced_extended.data
+        sig_extended = sig_extended - np.mean(sig_extended, axis=0)
+        sig_extended = bandpass_filter(sig_extended.T, lazy_mic.sampling_rate,
+                1000, 8000).T
+        amp_env_extended = get_amplitude_envelope(
+                sig_extended,
+                lazy_mic.sampling_rate,
+                highpass=2000,
+                lowpass=8000
+        )
+        amp_env_extended = np.mean(amp_env_extended, axis=1)
+
+        threshold = compute_smart_threshold(amp_env_extended, lazy_mic.sampling_rate)
+        if threshold > default_threshold + default_threshold_std:
+            threshold = default_threshold + default_threshold_std
+
+        # Compute intervals within this period, optimizing for separating sounds
+        # that have more than 20ms of silence between them
+        # Then gradually raise the threshold used until the longest period detected is
+        # no greater than 1s.
+        longest_interval_short_enough = False
+        idx = 0
+        while longest_interval_short_enough == False:
+            intervals = threshold_events(
+                    amp_env,
+                    threshold,
+                    polarity=1,
+                    sampling_rate=lazy_mic.sampling_rate,
+                    ignore_width=0.02,
+                    min_size=0.01,
+                    fuse_duration=0.02
+            )
+            lengths = [np.diff(x) / lazy_mic.sampling_rate for x in intervals]
+            if len(lengths) and np.max(lengths) > 1:
+                threshold *= 1.25
+            else:
+                longest_interval_short_enough = True
+                longest_interval_short_enough
+
+            # Make sure we don't get in an infinite loop. If we don't find a threshold
+            # after 10 tries, just end it here.
+            idx += 1
+            if idx > 10:
+                break
+
+        if not len(intervals):
+            # We didn't find any, just use this whole period as a call
+            all_syllable_intervals.append([t1, t2])
+        else:
+            for interval in intervals:
+                all_syllable_intervals.append((
+                    t_arr[interval[0]],
+                    t_arr[interval[1] - 1]
+                ))
+
+    return all_syllable_intervals
+
+
+def cluster_syllables(lazy_mic, syllable_intervals, exclude_intervals=None, pad=0.05):
+    centered_specs = []
+    final_syllable_intervals = []
+
+    for t1, t2 in syllable_intervals:
+        # Excluded intervals are those that we don't want to detect calls in
+        # e.g. playback periods
+        if exclude_intervals is not None and check_overlap((t1, t2), exclude_intervals):
+            continue
+        else:
+            final_syllable_intervals.append((t1, t2))
+
+        # Load sound signal
+        sliced = lazy_mic.time_slice(t1, t2)
+        t_arr = sliced.t
+        sig = sliced.data
+        sig = sig - np.mean(sig, axis=0)
+        sig = bandpass_filter(sig.T, lazy_mic.sampling_rate, 1000, 8000).T
+
+        # Compute the center of mass (COM) of the power - this is to center the spectrogram on
+        amp_env = get_amplitude_envelope(
+            sig,
+            lazy_mic.sampling_rate,
+            highpass=2000,
+            lowpass=8000)
+        amp_env = np.mean(amp_env, axis=1)
+        com = np.sum(amp_env * t_arr) / np.sum(amp_env)
+
+        # Now make a new slice of fixed width centered on the COM
+        sliced = lazy_mic.time_slice(com - pad, com + pad)
+        t_arr = sliced.t
+        sig = sliced.data
+        sig = sig - np.mean(sig, axis=0)
+        sig = bandpass_filter(sig.T, lazy_mic.sampling_rate, 1000, 8000).T
+
+        # Compute spectrogram on both channels
+        t_spec, f_spec, spec, _ = spectrogram(
+                sig[:, 0], 30000, 1000, 50, min_freq=250, max_freq=8000, cmplx=False)
+        t_spec, f_spec, spec2, _ = spectrogram(
+                sig[:, 1], 30000, 1000, 50, min_freq=250, max_freq=8000, cmplx=False)
+
+        centered_specs.append(np.array([spec, spec2]))
+
+    centered_specs = np.array(centered_specs)
+    print("HI", centered_specs.shape)
+    if len(centered_specs) > 1:
+        proj = umap.UMAP(n_components=6).fit_transform(
+                centered_specs.reshape(len(centered_specs), -1)
+        )
+        labels = HDBSCAN(min_cluster_size=10).fit_predict(proj)
+    else:
+        labels = []
+
+    return final_syllable_intervals, centered_specs, labels
+
+
+def detect_call_and_syllable_dicts_from_lazy(lazy_mic, exclude_intervals=None, window=5):
+    """
+    """
+
+    default_threshold, default_std = get_default_threshold(lazy_mic, window=window)
+
+    intervals = find_live_periods(lazy_mic, default_threshold, default_std, window=window)
+
+    syllable_intervals = split_live_syllables(
+            lazy_mic,
+            intervals,
+            default_threshold,
+            default_std)
+
+    final_syllable_intervals, specs, labels = cluster_syllables(
+            lazy_mic,
+            syllable_intervals,
+            exclude_intervals=exclude_intervals,
+            pad=0.1)
+
+    seg_dicts = []
+    for (t1, t2), label in zip(final_syllable_intervals, labels):
+        seg_dicts.append({
+            "description": "autodetected call by threshold",
+            "name": "live_unknown",
+            "playback_file": None,
+            "sound_type": "live",
+            "vocalization_type": "unknown",
+            "vocalizer": "unknown",
+            "start_time": t1 * pq.s,
+            "duration": (t2 - t1) * pq.s,
+            "label": label
+        })
+
+    return seg_dicts
 
 
 def threshold_events(
@@ -77,13 +467,17 @@ def threshold_events(
 # def _fill_in_missing_digital_codes(mic, playbacks_db):
 
 
-def find_vocal_periods_from_lazy(mic, window_duration, threshold):
+def find_vocal_periods_from_lazy(mic, window_duration, threshold_mult):
     """Finds periods where amplitude envelope is crossed using lazy signal
 
     Args
     ----
     mic: format.lazy.LazySignal
         Instance of LazySignal from which to load microphone data
+    window_duration: float
+        Window width (seconds) in which to compute amplitude thresholds
+    threshold_mult: float
+        Threshold value (in multiples of the median) to compute the threshold
 
     Returns list of intervals (start_time, stop_time) which represent intervals
     during which a theshold was crossed.
@@ -100,14 +494,14 @@ def find_vocal_periods_from_lazy(mic, window_duration, threshold):
         sig = bandpass_filter(sig.T, mic.sampling_rate, 1000, 8000).T
         amp_env = get_amplitude_envelope(sig, mic.sampling_rate, highpass=2000, lowpass=8000)
         amp_env = np.mean(amp_env, axis=1)
-        threshold = np.median(amp_env) * threshold # config.VOCALIZATION_AMPLITUDE_THRESHOLD
+        threshold = np.median(amp_env) * threshold_mult # config.VOCALIZATION_AMPLITUDE_THRESHOLD
 
         intervals = threshold_events(
             amp_env,
             threshold,
             polarity=1,
             sampling_rate=mic.sampling_rate,
-            ignore_width=0.01,
+            ignore_width=config.AUTODETECT_IGNORE_DURATION,
             min_size=0.1,
             fuse_duration=config.AUTODETECT_FUSE_DURATION
         )
@@ -301,9 +695,6 @@ def get_surrounding_silence(
 
     for i in np.arange(len(all_events) - 1):
         e1 = all_events[i]
-        e2 = all_events[i + 1]
-
-        t0 = (e1["start_time"] + e1["duration"]).item() - config.PAD_SONG_AFTER
         t1 = min(t0 + max_duration, e2["start_time"].item() + config.PAD_SONG_BEFORE)
 
         if t1 - t0 < min_duration:

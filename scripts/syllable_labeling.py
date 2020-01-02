@@ -9,7 +9,8 @@ import cv2
 import os
 from suss.io import read_pickle
 import matplotlib.pyplot as plt
-from segmentation.audio_segment import merge_segments
+# from segmentation.audio_segment import merge_segments
+from preprocess.sound.stimuli import merge_segments
 from soundsig.sound import spectrogram, plot_spectrogram
 from soundsig.signal import highpass_filter, bandpass_filter
 from matplotlib.widgets import Button, SpanSelector, RadioButtons, Slider
@@ -826,7 +827,7 @@ if __name__ == "__main__":
         "sites")
     site = os.path.join(site_dir, SITE)
     if LIVE == "live":
-        sound_events = np.load(os.path.join(site, "disjoint_vocal_periods.npy", allow_pickle=True))[()]
+        sound_events = np.load(os.path.join(site, "disjoint_vocal_periods.npy"), allow_pickle=True)[()]
         sound_events = custom_correction(sound_events, SITE)
     elif LIVE == "playback":
         sound_events = np.load(os.path.join(site, "vocal_periods.npy"), allow_pickle=True)[()]["playback"]

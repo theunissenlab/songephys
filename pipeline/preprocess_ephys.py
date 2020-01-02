@@ -8,11 +8,15 @@ Need to test:
     Spike sorting functions
 """
 
+from collections import defaultdict
 import os
 import luigi
 
 import numpy as np
+import matplotlib.pyplot as plt
 
+from soundsig.sound import spectrogram
+from soundsig.signal import highpass_filter, lowpass_filter, bandpass_filter
 import suss.io
 from suss.core import SpikeDataset
 
@@ -25,6 +29,7 @@ from preprocess.ephys.filter import context_based_filtering
 from preprocess.ephys.detect import extract_spikes
 from preprocess.ephys.sort import sort_set
 from preprocess.ephys.newsort import sort as new_sort, create_hierarchy
+from preprocess_sound import MergeLiveCalls
 
 from utils import session_basename
 
@@ -194,6 +199,66 @@ class MergeLazySignals(luigi.Task):
         )
 
         np.save(self.output().path, new_site)
+
+
+class CheckLiveCalls(luigi.Task):
+    """Make a plot that shows examples of clusters of live vocalizations
+    """
+
+    site_dir = luigi.Parameter()
+
+    def requires(self):
+        return {
+            "lazy_site": MergeLazySignals(self.site_dir),
+            "calls": MergeLiveCalls(self.site_dir)
+        }
+
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir, "live_calls.png"))
+
+    def run(self):
+        call_periods = np.load(self.input()["calls"].path, allow_pickle=True)[()]
+        lazy_site = np.load(self.input()["lazy_site"].path, allow_pickle=True)[()]
+
+        labels = sorted(list(set([period["label"] for period in call_periods])))
+
+        idx = defaultdict(int)
+        fig = plt.figure(figsize=(0.4, 1))
+
+        for period in call_periods:
+            if idx[period["label"]] > 20:
+                continue
+            else:
+                ax = fig.add_axes([
+                    idx[period["label"]],
+                    period["label"],
+                    1,
+                    1
+                ])
+                t1 = period["start_time"].item()
+                t2 = (period["start_time"] + period["duration"]).item()
+                sig = lazy_site.time_slice(t1, t2, signal="mic")
+                t_arr = sig.t
+                sig = sig.data
+                sig = sig - np.mean(sig, axis=0)
+                sig = bandpass_filter(sig.T, lazy_site._signals["mic"][0].sampling_rate, 1000, 8000).T
+
+                i = np.argmax(np.sum(sig, axis=0))
+
+                t_spec, f_spec, spec, _ = spectrogram(
+                        sig[:, i], 30000, 1000, 50, min_freq=250, max_freq=8000, cmplx=False)
+
+                ax.pcolormesh(t_spec, f_spec, spec, cmap="Greys")
+
+                ax.spines['top'].set_visible(False)
+                ax.spines['left'].set_visible(False)
+                ax.set_yticks([])
+                ax.set_yticklabels([])
+                ax.set_xticks([])
+                ax.set_xticklabels([])
+
+                idx[period["label"]] += 1
+        fig.savefig(self.output().path, format="png", bbox_inches='tight')
 
 
 class MergeSpikeDatasets(luigi.Task):

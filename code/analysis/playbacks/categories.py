@@ -11,13 +11,17 @@ import os
 import time
 
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 import numpy as np
 import pandas as pd
 import quantities as pq
 from scipy.interpolate import interp1d
 from sklearn.neighbors import KernelDensity
 
+from IPython.display import display
+
 from preprocess.sound.playback_utils import _parse_julie_filename_metadata
+from util import border, get_square_dims
 
 import suss.io
 
@@ -119,21 +123,21 @@ def get_unit_info(df, spike_times, spike_waveforms, t_buffer=1.0):
 
 
 
-def select_with_spikes(df, selector):
+def select_with_spikes(df, selector, spike_time_key="spikes"):
     """Select subset of dataframe, dropping rows that do not fit
     the selection criteria and have no spikes
     """
-    subset = df.where(selector & (df["spikes"].apply(len) > 0) ).dropna()
+    subset = df.where(selector & df[spike_time_key].apply(len) > 0).dropna(how="all")
     return subset
 
 
-def relative_spike_times(df, selector):
+def relative_spike_times(df, selector, spike_time_key="spikes"):
     """Get spike times relative to stimulus onset for selected subset of data
     """
-    subset = select_with_spikes(df, selector)
+    subset = select_with_spikes(df, selector, spike_time_key=spike_time_key)
     spike_times = []
     for i, row in subset.iterrows():
-        spike_times.append(row["spikes"] - row["start_time"])
+        spike_times.append(row[spike_time_key] - row["start_time"])
 
     return spike_times
 
@@ -336,8 +340,12 @@ def generate_category_comparisons(
     # Plot the spike shape in the last column
     last_ax = axes[-2][-1]
     last_ax = last_ax.twinx()
-    last_ax.plot(np.array(wfs).T, alpha=0.5, color="Black")
+    last_ax.plot(np.array(wfs).T, alpha=0.2, color="Black")
     last_ax.plot(np.mean(wfs, axis=0), color="Magenta", linewidth=2)
+    old_ylim = last_ax.get_ylim()
+
+    if np.max(np.abs(np.array(old_ylim))) > 300:
+        last_ax.set_ylim(-300, 200)
 
     new_ax = axes[-1][0]
 

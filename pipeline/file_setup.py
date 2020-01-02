@@ -132,16 +132,16 @@ class SiteConfig(luigi.Task):
                         (rhd_times[i][0] > start and rhd_times[i + 1][0] < stop) or
                         (start > rhd_times[i][0] and stop < rhd_times[i + 1][0])
                         ):
-                    if "pyoperants" not in rhd_dicts[i]:
-                        rhd_dicts[i]["pyoperants"] = [os.path.splitext(csv)[0]]
+                    if "playbacks" not in rhd_dicts[i]:
+                        rhd_dicts[i]["playbacks"] = [os.path.splitext(csv)[0]]
                     else:
-                        rhd_dicts[i]["pyoperants"].append(os.path.splitext(csv)[0])
+                        rhd_dicts[i]["playbacks"].append(os.path.splitext(csv)[0])
 
-            if rhd_times[-1][0] <= start:
-                if "pyoperants" not in rhd_dicts[-1]:
-                    rhd_dicts[-1]["pyoperants"] = [os.path.splitext(csv)[0]]
+            if rhd_times[-1][0] <= start or rhd_times[-1][0] <= stop:
+                if "playbacks" not in rhd_dicts[-1]:
+                    rhd_dicts[-1]["playbacks"] = [os.path.splitext(csv)[0]]
                 else:
-                    rhd_dicts[-1]["pyoperants"].append(os.path.splitext(csv)[0])
+                    rhd_dicts[-1]["playbacks"].append(os.path.splitext(csv)[0])
 
         save_yaml(self.output().path, {"lab": name, "sessions": rhd_dicts})
 

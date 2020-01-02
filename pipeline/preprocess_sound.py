@@ -23,10 +23,11 @@ from preprocess.sound.playback_alignment import (
 )
 from preprocess.sound.detect import (
     # find_vocal_periods_from_lazy,
+    detect_call_and_syllable_dicts_from_lazy,
     generate_stim_dicts,
     generate_vocal_periods_dicts_from_lazy,
     get_surrounding_silence,
-    shave_silences
+    shave_silences,
 )
 from preprocess.sound.stimuli import merge_segments
 from preprocess_ephys import MergeLazySignals
@@ -321,6 +322,50 @@ class FindVocalPeriods(luigi.Task):
         )
 
 
+class FindLiveCalls(luigi.Task):
+
+    session_dir = luigi.Parameter()
+
+    def requires(self):
+        return {
+            "lazy_signals": GenerateLazyFiles(self.session_dir),
+            "vocal_periods": FindVocalPeriods(self.session_dir),
+        }
+
+    def output(self):
+        segmentation_dir = os.path.join(self.session_dir, "segmentation")
+        segment_data_file = "call_periods.npy"
+        return luigi.LocalTarget(
+            os.path.join(segmentation_dir, segment_data_file)
+        )
+
+    def run(self):
+        signals = np.load(self.input()["lazy_signals"]["lazy_signals"].path, allow_pickle=True)[()]
+        mic = signals["mic"]
+
+        playback_periods = np.load(self.input()["vocal_periods"].path, allow_pickle=True)[()]["playback"]
+
+        ######################################################
+        ### First search for periods of live vocalizations ###
+        ######################################################
+
+        exclude_intervals = [
+            (
+                period["start_time"].item() + 0.5,
+                period["start_time"].item() + period["duration"].item() - 0.5
+            ) for period in playback_periods
+        ]
+
+        seg_dicts = detect_call_and_syllable_dicts_from_lazy(
+            mic, exclude_intervals, window=5
+        )
+
+        np.save(
+            self.output().path,
+            seg_dicts
+        )
+
+
 class MergeVocalPeriods(luigi.Task):
     """Merge together vocal period dicts
 
@@ -363,6 +408,51 @@ class MergeVocalPeriods(luigi.Task):
                     period["start_time"] += offset
                 combined_result[key] += vocal_periods[key]
         combined_result = dict(combined_result)
+
+        np.save(self.output().path, combined_result)
+
+
+class MergeLiveCalls(luigi.Task):
+    """Merge together vocal period dicts
+
+    The sessions and relative offsets must be defined in a
+    sessions.yaml file in the site directory. This function
+    takes the vocal periods (both live and playback) for each
+    session and just adds the specified offset to each one.
+    """
+
+    site_dir = luigi.Parameter()
+
+    def requires(self):
+        self.session_info = load_yaml(
+                os.path.join(self.site_dir, "sessions.yaml")
+        )
+        for session in self.session_info["sessions"]:
+            session_dir = os.path.join(
+                    self.site_dir,
+                    "..",
+                    "..",
+                    "sessions",
+                    session["id"]
+            )
+            yield FindLiveCalls(session_dir=session_dir)
+
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir, "call_periods.npy"))
+
+    def run(self):
+        block_offsets = [
+                session["t"] * pq.s
+                for session in self.session_info["sessions"]
+        ]
+        vocal_period_data = [list(np.load(s.path, allow_pickle=True)[()]) for s in self.input()]
+
+        combined_result = []
+        for vocal_periods, offset in zip(vocal_period_data, block_offsets):
+            print(type(combined_result), type(vocal_periods))
+            for period in vocal_periods:
+                period["start_time"] += offset
+            combined_result = combined_result + vocal_periods
 
         np.save(self.output().path, combined_result)
 

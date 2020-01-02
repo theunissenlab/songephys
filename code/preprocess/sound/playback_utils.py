@@ -72,6 +72,51 @@ def _parse_julie_filename_metadata(fname):
     return metadata
 
 
+def _parse_ladder_filename_data(fname):
+    fname = os.path.basename(fname)
+    fname = os.path.splitext(fname)[0]
+    metadata = dict()
+    vals = fname.split("_")
+
+    if fname.startswith("randripple"):
+        metadata["emitter"] = vals[0]
+        metadata["callid"] = "ripple"
+        metadata["type"] = "ripple"
+        metadata["source_sex"] = None
+        metadata["source"] = "unfamiliar"
+        metadata["stim_class"] = "Noise"
+    elif fname.endswith("Familiar"):
+        metadata["emitter"] = vals[3]
+        metadata["callid"] = vals[0]
+        metadata["type"] = "song" if vals[0].lower() == "so" else "dc"
+        metadata["source_sex"] = None
+        metadata["source"] = "familiar"
+        metadata["stim_class"] = "Call"
+    elif fname.endswith("Unfamiliar"):
+        metadata["emitter"] = vals[3]
+        metadata["callid"] = vals[0]
+        metadata["type"] = "song" if vals[0].lower() == "so" else "dc"
+        metadata["source_sex"] = None
+        metadata["source"] = "unfamiliar"
+        metadata["stim_class"] = "Call"
+    elif fname.endswith("SHUFFLED"):
+        metadata["emitter"] = vals[3]
+        metadata["callid"] = vals[0]
+        metadata["type"] = "shuffled_song"
+        metadata["source_sex"] = None
+        metadata["source"] = "test"
+        metadata["stim_class"] = "Ladder"
+    else:
+        metadata["emitter"] = vals[3]
+        metadata["callid"] = vals[0]
+        metadata["type"] = "song" if vals[0].lower() == "so" else "dc"
+        metadata["source_sex"] = None
+        metadata["source"] = "test"
+        metadata["stim_class"] = "Ladder"
+    
+    return metadata
+
+
 def _get_duration(wav_file):
     # rate, data = scipy.io.wavfile.read(wav_file)
     w = wavio.read(wav_file)
