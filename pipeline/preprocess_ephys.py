@@ -29,7 +29,6 @@ from preprocess.ephys.filter import context_based_filtering
 from preprocess.ephys.detect import extract_spikes
 from preprocess.ephys.sort import sort_set
 from preprocess.ephys.newsort import sort as new_sort, create_hierarchy
-from preprocess_sound import MergeLiveCalls
 
 from utils import session_basename
 
@@ -217,6 +216,7 @@ class CheckLiveCalls(luigi.Task):
         return luigi.LocalTarget(os.path.join(self.site_dir, "live_calls.png"))
 
     def run(self):
+        from preprocess_sound import MergeLiveCalls
         call_periods = np.load(self.input()["calls"].path, allow_pickle=True)[()]
         lazy_site = np.load(self.input()["lazy_site"].path, allow_pickle=True)[()]
 
