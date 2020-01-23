@@ -257,7 +257,11 @@ class CheckLiveCalls(luigi.Task):
                 ax.set_xticks([])
                 ax.set_xticklabels([])
 
+                if idx[period["label"]] == 0:
+                    ax.set_ylabel(period["label"])
+
                 idx[period["label"]] += 1
+
         fig.savefig(self.output().path, format="png", bbox_inches='tight')
 
 
