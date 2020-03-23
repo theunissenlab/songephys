@@ -79,6 +79,7 @@ def _parse_ladder_filename_data(fname):
     vals = fname.split("_")
 
     if fname.startswith("randripple"):
+        metadata["key"] = "{} {}".format(vals[0], "ripple")
         metadata["emitter"] = vals[0]
         metadata["callid"] = "ripple"
         metadata["type"] = "ripple"
@@ -86,6 +87,7 @@ def _parse_ladder_filename_data(fname):
         metadata["source"] = "unfamiliar"
         metadata["stim_class"] = "Noise"
     elif fname.endswith("Familiar"):
+        metadata["key"] = "{} {}".format(vals[3], vals[0])
         metadata["emitter"] = vals[3]
         metadata["callid"] = vals[0]
         metadata["type"] = "song" if vals[0].lower() == "so" else "dc"
@@ -93,6 +95,7 @@ def _parse_ladder_filename_data(fname):
         metadata["source"] = "familiar"
         metadata["stim_class"] = "Call"
     elif fname.endswith("Unfamiliar"):
+        metadata["key"] = "{} {}".format(vals[3], vals[0])
         metadata["emitter"] = vals[3]
         metadata["callid"] = vals[0]
         metadata["type"] = "song" if vals[0].lower() == "so" else "dc"
@@ -100,6 +103,7 @@ def _parse_ladder_filename_data(fname):
         metadata["source"] = "unfamiliar"
         metadata["stim_class"] = "Call"
     elif fname.endswith("SHUFFLED"):
+        metadata["key"] = "{} shuffled_so".format(vals[3])
         metadata["emitter"] = vals[3]
         metadata["callid"] = vals[0]
         metadata["type"] = "shuffled_song"
@@ -107,6 +111,7 @@ def _parse_ladder_filename_data(fname):
         metadata["source"] = "test"
         metadata["stim_class"] = "Ladder"
     else:
+        metadata["key"] = "{} {}".format(vals[3], vals[0])
         metadata["emitter"] = vals[3]
         metadata["callid"] = vals[0]
         metadata["type"] = "song" if vals[0].lower() == "so" else "dc"

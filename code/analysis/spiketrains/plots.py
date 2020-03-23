@@ -1,6 +1,7 @@
 import matplotlib.pyplot as plt
 import matplotlib.gridspec as gridspec
 import numpy as np
+from sklearn.neighbors import KernelDensity
 
 from analysis.spiketrains.psth import conv, gaussian_convolver
 
@@ -27,7 +28,8 @@ def raster_plot(
         alpha=1.0,
         ax=None,
         cmap="Greys",
-        mode=("scatter", "vlines", "pcolormesh")
+        mode=("scatter", "vlines", "pcolormesh"),
+        fix_raster_trials=None,
     ):
     """Raster plot based on spike arrival times
 
@@ -54,7 +56,18 @@ def raster_plot(
         elif mode == "pcolormesh":
             ax.pcolormesh(spikes, cmap=cmap)
 
-    ax.set_ylim(0.0, len(spike_times))
+    if fix_raster_trials is None:
+        ax.set_ylim(0.0, len(spike_times))
+    else:
+        ax.set_ylim(len(spike_times) - fix_raster_trials, len(spike_times))
+        ax.fill_between(
+                [min_time, max_time],
+                len(spike_times) - fix_raster_trials,
+                0,
+                color="Grey",
+                alpha=0.1
+                )
+
     ax.set_xlim(min_time, max_time)
 
 
@@ -68,7 +81,8 @@ def psth_plot(
         ax=None,
         mode=("hist", "gaussian"),
         conv_width=10,
-        linewidth=2
+        linewidth=2,
+        show_rate=False,
     ):
     if not isinstance(mode, str):
         mode = "hist"
@@ -93,9 +107,24 @@ def psth_plot(
     elif mode == "gaussian":
         t_arr, binned = bin_spikes(spike_times, min_time, max_time, dt=0.001)
         convolved = conv([binned], gaussian_convolver, conv_width)[0]
-        ax.plot(t_arr, convolved, color=color, alpha=alpha, linewidth=linewidth)
-        
-    ax.set_xlim(min_time, max_time)
+        frq = convolved / len(spike_times)
+        y = frq / 0.001
+        ax.plot(t_arr, y, color=color, alpha=alpha, linewidth=linewidth)
+
+    elif mode == "kde":
+        # do this just to get t_arr
+        t_arr, binned = bin_spikes(spike_times, min_time, max_time, dt=0.001)
+
+        model = KernelDensity(
+            bandwidth=0.1, kernel="linear"
+        ).fit(np.concatenate(spike_times)[:, None])
+
+        ax.plot(
+            t_arr,
+            np.exp(model.score_samples(t_arr[:, None])),
+            color=color,
+            alpha=alpha,
+        )
 
 
 def make_sound_raster_psth_subplot(
