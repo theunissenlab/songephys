@@ -39,19 +39,20 @@ def raster_plot(
     ax = ax or plt.gca()
 
     for i, spikes in enumerate(spike_times):
-        if mode == "scatter":
-            ax.scatter(spikes, i * np.ones(len(spikes)), s=linewidth, marker="|", color=color, alpha=alpha)
-        elif mode == "vlines":
-            ax.vlines(
-                    spikes,
-                    i + 0.2,
-                    i + 0.8,
-                    linewidth=linewidth,
-                    color=color,
-                    alpha=alpha
-            )
-        elif mode == "pcolormesh":
-            ax.pcolormesh(spikes, cmap=cmap)
+        if (len(spikes) > 0 ):
+            if mode == "scatter":
+                ax.scatter(spikes, i * np.ones(len(spikes)), s=linewidth, marker="|", color=color, alpha=alpha)
+            elif mode == "vlines":
+                ax.vlines(
+                        spikes,
+                        i + 0.2,
+                        i + 0.8,
+                        linewidth=linewidth,
+                        color=color,
+                        alpha=alpha
+                        )
+            elif mode == "pcolormesh":
+                ax.pcolormesh(spikes, cmap=cmap)
 
     ax.set_ylim(0.0, len(spike_times))
     ax.set_xlim(min_time, max_time)

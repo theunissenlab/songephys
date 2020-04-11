@@ -127,13 +127,19 @@ def select_with_spikes(df, selector):
     return subset
 
 
-def relative_spike_times(df, selector):
+def relative_spike_times(df, selector, delNoSpikes = False):
     """Get spike times relative to stimulus onset for selected subset of data
     """
-    subset = select_with_spikes(df, selector)
+    if delNoSpikes:
+        subset = select_with_spikes(df, selector)
+    else:
+        subset = df.where(selector).dropna()
     spike_times = []
     for i, row in subset.iterrows():
-        spike_times.append(row["spikes"] - row["start_time"])
+        if row["spikes"].size > 0 :
+            spike_times.append(row["spikes"] - row["start_time"])
+        else:
+            spike_times.append([])
 
     return spike_times
 
