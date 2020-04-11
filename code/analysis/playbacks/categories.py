@@ -11,13 +11,17 @@ import os
 import time
 
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 import numpy as np
 import pandas as pd
 import quantities as pq
 from scipy.interpolate import interp1d
 from sklearn.neighbors import KernelDensity
 
+from IPython.display import display
+
 from preprocess.sound.playback_utils import _parse_julie_filename_metadata
+from util import border, get_square_dims
 
 import suss.io
 
@@ -119,27 +123,31 @@ def get_unit_info(df, spike_times, spike_waveforms, t_buffer=1.0):
 
 
 
-def select_with_spikes(df, selector):
+def select_with_spikes(df, selector, spike_time_key="spikes", exclude_empty=True):
     """Select subset of dataframe, dropping rows that do not fit
     the selection criteria and have no spikes
     """
-    subset = df.where(selector & (df["spikes"].apply(len) > 0) ).dropna()
+    if exclude_empty:
+        subset = df[selector & (df[spike_time_key].apply(len) > 0)].dropna(how="all")
+    else:
+        subset = df[selector].dropna(how="all")
+
     return subset
 
 
-def relative_spike_times(df, selector, delNoSpikes = False):
+def relative_spike_times(df, selector, spike_time_key="spikes", exclude_empty=True):
     """Get spike times relative to stimulus onset for selected subset of data
     """
-    if delNoSpikes:
-        subset = select_with_spikes(df, selector)
-    else:
-        subset = df.where(selector).dropna()
+    subset = select_with_spikes(
+        df,
+        selector,
+        spike_time_key=spike_time_key,
+        exclude_empty=exclude_empty
+    )
+
     spike_times = []
     for i, row in subset.iterrows():
-        if row["spikes"].size > 0 :
-            spike_times.append(row["spikes"] - row["start_time"])
-        else:
-            spike_times.append([])
+        spike_times.append(row[spike_time_key] - row["start_time"])
 
     return spike_times
 
@@ -162,6 +170,13 @@ def kde(data, x):
     #     np.exp(model.score_samples(x[:, None]))
     #     # (x[1] - x[0])
     # )
+
+def kde(data, x):
+    model = KernelDensity(
+             bandwidth=0.1, kernel="linear"
+    ).fit(data[:, None])
+
+    return np.exp(model.score_samples(x[:, None]))
 
 
 def make_comparison_plot(df):
@@ -317,6 +332,164 @@ def make_comparison_plot(df):
     return fig, axes
 
 
+from analysis.spiketrains.plots import make_sound_raster_psth_subplot, psth_plot, raster_plot
+
+def make_stim_rasters(
+        df,
+        min_time=-1.0,
+        max_time=2.0,
+        group_column="file",
+        plot_sound_fn=None,
+        key="spikes",
+        figsize=(8, 6),
+        height_ratios=(0.5, 1, 1),
+        bin_size=0.01,
+        show_details=False,
+        psth_ylim=None,
+        psth_color=None,
+        exclude_empty_trials=True,
+    ):
+
+    '''
+    relations = df["relation_short"].unique()
+    call_types = df["call_type"].unique()
+    categories = df.groupby([
+        'relation_short',
+        'call_type'
+    ]).size().reset_index().rename(columns={0:'count'})
+    '''
+    group_keys = sorted(df[group_column].unique())
+
+    rows, cols = get_square_dims(len(group_keys)) 
+    fig = plt.figure(
+            figsize=(cols * figsize[0], rows * figsize[1] + (figsize[1] / 2 if plot_sound_fn is not None else 0))
+    )
+
+    gs = gridspec.GridSpec(
+        rows,
+        cols,
+        wspace=0.3,
+        hspace=0.5
+    )
+
+    max_ylim = 0
+    psth_axes = []
+
+    group_idx = 0
+    for row in range(rows):
+        for col in range(cols):
+            if group_idx > len(group_keys) - 1:
+                break
+
+
+            # display(df)
+            filtered = relative_spike_times(
+                df,
+                (df[group_column] == group_keys[group_idx]),
+                spike_time_key=key,
+                exclude_empty=exclude_empty_trials,
+            )
+
+            # hack in the max time
+            if group_keys[group_idx].startswith("DC"):
+                duration = 5.0
+            elif group_keys[group_idx].startswith("randripple"):
+                duration = 4.0
+            else:
+                duration = 8.0
+
+            if not len(filtered):
+                group_idx += 1
+                continue
+
+            if plot_sound_fn is None:
+                sub_axes = make_sound_raster_psth_subplot(
+                    sound_idx=None,
+                    raster_idx=1,
+                    psth_idx=0,
+                    outer_grid_spec=gs[row, col],
+                    height_ratios=height_ratios[-2:],
+                )
+            else:
+                sub_axes = make_sound_raster_psth_subplot(
+                    sound_idx=0,
+                    raster_idx=2,
+                    psth_idx=1,
+                    outer_grid_spec=gs[row, col],
+                    height_ratios=height_ratios,
+                )
+
+            raster_ax = fig.add_subplot(sub_axes["raster_ax"])
+            raster_plot(
+                    filtered,
+                    min_time=min_time,
+                    max_time=duration,
+                    color="k",
+                    linewidth=.5,
+                    ax=raster_ax,
+                    mode="vlines",
+                    fix_raster_trials=10,
+
+            )
+            raster_ax.set_yticks([])
+            raster_ax.set_xlim(min_time, duration)
+
+            psth_ax = fig.add_subplot(sub_axes["psth_ax"])
+            psth_plot(
+                    filtered,
+                    min_time=min_time,
+                    max_time=duration,
+                    bins=int((duration - min_time) / bin_size),
+                    color=psth_color or "k",
+                    linewidth=2.0,
+                    ax=psth_ax,
+                    mode="gaussian",
+                    conv_width=20,
+            )
+            psth_ax.set_xlim(min_time, duration)
+            if psth_ylim is not None:
+                psth_ax.set_ylim(*psth_ylim)
+
+            if plot_sound_fn is None:
+                text_ax = psth_ax
+            else:
+                sound_ax = fig.add_subplot(sub_axes["sound_ax"])
+                plot_sound_fn(df[df[group_column] == group_keys[group_idx]], sound_ax)
+                sound_ax.set_xlim(min_time, duration)
+                border(sound_ax, 0, 0, 0, 1)
+                sound_ax.set_yticks([])
+                sound_ax.set_xticks([])
+
+                text_ax = sound_ax
+            
+            text_ax.text(
+                0.05,
+                1.05,
+                "{}".format(group_keys[group_idx]),
+                horizontalalignment="left",
+                verticalalignment="bottom",
+                transform=plt.gca().transAxes
+            )
+            psth_ax.set_xticks([])
+            max_ylim = max(max_ylim, psth_ax.get_ylim()[1])
+            psth_axes.append(psth_ax)
+            
+            if min_time < 0:
+                raster_ax.vlines([0], *raster_ax.get_ylim(),
+                        linestyle=":", color="red")
+
+            border(raster_ax, 0, 0, 0, 1)
+            border(psth_ax, 1, 0, 0, 0)
+            group_idx += 1
+
+    for ax in psth_axes:
+        ax.set_ylim(0, max_ylim)
+        ax.vlines([0], *ax.get_ylim(),
+            linestyle=":", color="red")
+
+    return fig
+
+
 def _add_subplot(fig, oldnsubplots, new):
     new_idx = len(fig.axes) + 1
     return fig.add_subplot(new_idx, 1)
@@ -342,8 +515,12 @@ def generate_category_comparisons(
     # Plot the spike shape in the last column
     last_ax = axes[-2][-1]
     last_ax = last_ax.twinx()
-    last_ax.plot(np.array(wfs).T, alpha=0.5, color="Black")
+    last_ax.plot(np.array(wfs).T, alpha=0.2, color="Black")
     last_ax.plot(np.mean(wfs, axis=0), color="Magenta", linewidth=2)
+    old_ylim = last_ax.get_ylim()
+
+    if np.max(np.abs(np.array(old_ylim))) > 300:
+        last_ax.set_ylim(-300, 200)
 
     new_ax = axes[-1][0]
 
@@ -353,3 +530,5 @@ def generate_category_comparisons(
     )
 
     return fig, axes
+
+

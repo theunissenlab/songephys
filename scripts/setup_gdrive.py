@@ -56,8 +56,8 @@ The downloaded file has all authentication information of your application. Rena
     with open("client_secrets.json") as json_file:  
         data = json.load(json_file)
 
-    settings_dict["client_config"]["client_id"] = data["web"]["client_id"]
-    settings_dict["client_config"]["client_secret"] = data["web"]["client_secret"]
+    settings_dict["client_config"]["client_id"] = data["installed"]["client_id"]
+    settings_dict["client_config"]["client_secret"] = data["installed"]["client_secret"]
     # May need to set redirect uris?
 
     with open("settings.yaml", "w") as settings_file:

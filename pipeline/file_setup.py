@@ -132,16 +132,16 @@ class SiteConfig(luigi.Task):
                         (rhd_times[i][0] > start and rhd_times[i + 1][0] < stop) or
                         (start > rhd_times[i][0] and stop < rhd_times[i + 1][0])
                         ):
-                    if "pyoperants" not in rhd_dicts[i]:
-                        rhd_dicts[i]["pyoperants"] = [os.path.splitext(csv)[0]]
+                    if "playbacks" not in rhd_dicts[i]:
+                        rhd_dicts[i]["playbacks"] = [os.path.splitext(csv)[0]]
                     else:
-                        rhd_dicts[i]["pyoperants"].append(os.path.splitext(csv)[0])
+                        rhd_dicts[i]["playbacks"].append(os.path.splitext(csv)[0])
 
-            if rhd_times[-1][0] <= start:
-                if "pyoperants" not in rhd_dicts[-1]:
-                    rhd_dicts[-1]["pyoperants"] = [os.path.splitext(csv)[0]]
+            if rhd_times[-1][0] <= start or rhd_times[-1][0] <= stop:
+                if "playbacks" not in rhd_dicts[-1]:
+                    rhd_dicts[-1]["playbacks"] = [os.path.splitext(csv)[0]]
                 else:
-                    rhd_dicts[-1]["pyoperants"].append(os.path.splitext(csv)[0])
+                    rhd_dicts[-1]["playbacks"].append(os.path.splitext(csv)[0])
 
         save_yaml(self.output().path, {"lab": name, "sessions": rhd_dicts})
 
@@ -245,11 +245,25 @@ class Rhd2Nix(luigi.Task):
 
     def run(self):
         inputs = self.input()
+        
+        # Read the yaml file to have information about the session
+        site_dir = self.session_dir.split(sep='..')[0]
+        self.session_info = load_yaml(
+            os.path.join(site_dir, "sessions.yaml")
+        )
 
         rhd_file = inputs["rhd"].path
         rhd = RHDIO(rhd_file)
+        blk = rhd.read_block()
+        
+        # Delete the digital input form the rhd file if from Seewiesen.  These are trahs (as of April 2020)
+        if (self.session_info["lab"] == 'seewiesen' ) :
+            print('Seewiesen Data: digital events in rhd will be deleted')
+            segment = blk.segments[0]
+            segment.eventarrays = []
+            
         nix = NixIO(self.output().path)
-        nix.write_block(rhd.read_block())
+        nix.write_block(blk)
         nix.close()
 
         # Remove the RHD file now that we have a NIX file

@@ -2,6 +2,8 @@ from collections import defaultdict
 
 import numpy as np
 
+import config
+
 
 def detect_spike_times(signal, threshold_std=3, spike_radius=20, min_spacing=1):
     """Get indices of peaks in signal crossing threshold
@@ -26,15 +28,19 @@ def detect_spike_times(signal, threshold_std=3, spike_radius=20, min_spacing=1):
     threshold = threshold_std * np.std(signal)
     mask = np.where(np.abs(signal) >= threshold)[0]
     mask = np.concatenate([mask, [len(signal)]])
+
     edges = np.where(np.diff(mask) > min_spacing)[0]
 
     spikes_found = []
     start_ind = 0
+
     for stop_ind in edges:
         spike_ind = np.argmax(np.abs(signal[mask[start_ind]:mask[stop_ind] + 1]))
         spike_ind = mask[start_ind] + np.int(spike_ind)
 
         if (spike_ind - spike_radius < 0) or (spike_ind + spike_radius > len(signal)):
+            pass
+        elif np.abs(signal[spike_ind]) > (config.Z_SPIKE_LIMIT * threshold):
             pass
         else:
             spikes_found.append(spike_ind)
@@ -84,7 +90,7 @@ def extract_spikes(
                 sig,
                 threshold_std=threshold_std,
                 spike_radius=spike_radius,
-                min_spacing=2
+                min_spacing=config.MIN_SPIKE_THRESHOLD_SPACING
             )
             waveforms = get_spike_snippets(sig, indices, spike_radius)
 

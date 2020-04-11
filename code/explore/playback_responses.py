@@ -4,12 +4,14 @@ import suss.io
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
 import quantities as pq
 from IPython.display import clear_output
 
 from sklearn.neighbors import KernelDensity
 
 from preprocess.sound.playback_utils import _parse_julie_filename_metadata
+from util import border, get_square_dims
 
 from .adaptive_kde import ssvkernel
 
@@ -21,27 +23,42 @@ def kde2(data, x):
     ), None
 
 
-def full_responses(EVENTS):
+def full_responses(EVENTS, file_parser=_parse_julie_filename_metadata):
     # Columns playback file name, vocalizer, vocalization_type, start time, duration
     rows = []
     for event in EVENTS:
-        metadata = _parse_julie_filename_metadata(os.path.basename(event["playback_file"]))
-        relation = None
-        if metadata["source_sex"]:
-            relation = os.path.basename(event["playback_file"]).split("_")[1]
-        else:
-            relation = metadata["emitter"]
-        
-        rows.append((
-            event["playback_file"],
-            os.path.basename(event["playback_file"]),
-            relation,
-            event["vocalizer"],
-            metadata["type"][:2].upper() if not metadata.get("callid") else metadata["callid"][:2].upper(),
-            event["start_time"].item() + 0.5,
-            event["duration"].item() - 1.0,
-            event["start_time"].item() + event["duration"].item(),
-        ))
+        if event.get("sound_type") == "playback":
+            metadata = file_parser(os.path.basename(event["playback_file"]))
+            relation = None
+            if metadata["source_sex"]:
+                relation = os.path.basename(event["playback_file"]).split("_")[1]
+            else:
+                relation = metadata["emitter"]
+            
+            rows.append((
+                event["playback_file"],
+                os.path.basename(event["playback_file"]),
+                relation,
+                event["vocalizer"],
+                metadata["type"][:2].upper() if not metadata.get("callid") else metadata["callid"][:2].upper(),
+                event["start_time"].item() + 0.5,
+                event["duration"].item() - 1.0,
+                event["start_time"].item() + event["duration"].item(),
+            ))
+
+        elif event.get("sound_type") == "live":
+            rows.append((
+                None,
+                None,
+                None,
+                None,
+                None,
+                event["start_time"].item() + 0.5,
+                event["duration"].item() - 1.0,
+                event["start_time"].item() + event["duration"].item(),
+            ))
+
+
     return pd.DataFrame(data=rows,
         columns=["file_path", "file", "relation_short", "relation", "call_type", "start_time", "duration", "stop_time"])
 
@@ -80,7 +97,7 @@ def fig_grid(n, ax_size=(3, 2), max_columns=None):
     return fig, axes
    
 
-def inject_spikes(df, spikes, buffer=1.0, key=None):
+def inject_spikes(df, spikes, buffer=20.0, key=None):
     if key is None:
         key = "spikes"
 
@@ -109,7 +126,21 @@ def get_spikes_in_window(df, selector):
     return spike_times
 
 
-def plot_raw(events, loader, channels, dt=0.2, t_start=-0.5, t_stop=0.5, ylim=None, mic=False, randomize=False, ax_size=(7, 3), max_columns=3):
+def plot_raw(
+        events,
+        loader,
+        channels,
+        dt=0.2,
+        t_start=-0.5,
+        t_stop=0.5,
+        ylim=None,
+        mic=False,
+        randomize=False,
+        ax_size=(7, 3),
+        max_columns=3,
+        max_channels=16,
+    ):
+
     print("Make sure you are using channel number by 8-23, not 0-16")
     try:
         iter(channels)
@@ -131,8 +162,14 @@ def plot_raw(events, loader, channels, dt=0.2, t_start=-0.5, t_stop=0.5, ylim=No
                     sig = loader.time_slice(event["start_time"] + t_start, event["start_time"] + t_stop, signal="mic")
                     ax.plot(sig.t, sig.data[:, channel], linewidth=1)
                 else:
+                    # We configured intan to record on channels 8-23
+                    # when using 16 channels
+                    if max_channels == 32:
+                        channel_idx = channel
+                    elif max_channels == 16:
+                        channel_idx = channel - 8
                     sig = loader.time_slice(event["start_time"] + t_start, event["start_time"] + t_stop, signal="filtered")
-                    ax.plot(sig.t, sig.data[:, channel - 8], linewidth=1)
+                    ax.plot(sig.t, sig.data[:, channel_idx], linewidth=1)
                 if ylim is not None:
                     ax.set_ylim(*ylim)
 
@@ -179,10 +216,12 @@ def plot_raw(events, loader, channels, dt=0.2, t_start=-0.5, t_stop=0.5, ylim=No
     return
 
 
-def view_spike_waveforms_on_channel(SITE, channel):
+def view_spike_waveforms_on_channel(SITE, channel, suffix=""):
     print("Use channel numbers 8-23")
-    SPIKES = suss.io.read_pickle(os.path.join(SITE, "manually_curated", "curated-e{}.pkl".format(channel)))
+    SPIKES = suss.io.read_pickle(os.path.join(SITE, "manually_curated", "curated-e{}{}.pkl".format(channel, suffix)))
+
     step = 500
+
     try:
         for i in range(step):
             fig, axes = fig_grid(len(SPIKES.labeled_nodes), (4, 3))
@@ -204,6 +243,40 @@ def view_spike_waveforms_on_channel(SITE, channel):
             clear_output(wait=True)
             plt.show()
             plt.close(fig)
+    except KeyboardInterrupt:
+        plt.close(fig)
+
+
+def view_spike_isi_on_channel(SITE, channel, suffix="-kevin"):
+    print("Use channel numbers 8-23")
+    SPIKES = suss.io.read_pickle(os.path.join(SITE, "manually_curated", "curated-e{}{}.pkl".format(channel, suffix)))
+    try:
+        fig, axes = fig_grid(len(SPIKES.labeled_nodes), (4, 3))
+        for node_idx, (label, node) in enumerate(SPIKES.labeled_nodes):
+            ax = axes[node_idx]
+            dt = np.diff(node.flatten().times)
+            ax.hist(dt, bins=80, range=(0, 0.04), color="Black")
+            ax.text(
+                0.01,
+                0.99,
+                "Unit {} (index {})".format(label, node_idx),
+                horizontalalignment="left",
+                verticalalignment="top",
+                fontsize=14,
+                transform=ax.transAxes)
+            ax.text(
+                0.99,
+                0.99,
+                "{:.1f}% < 1ms".format(100.0 * np.sum(dt < 0.001) / len(dt)),
+                horizontalalignment="right",
+                verticalalignment="top",
+                fontsize=14,
+                transform=ax.transAxes)
+            ax.vlines([0.001], *ax.get_ylim(), color="Red", linestyle="--")
+
+        clear_output(wait=True)
+        plt.show()
+        plt.close(fig)
     except KeyboardInterrupt:
         plt.close(fig)
 
@@ -289,3 +362,125 @@ def generate_full_comparison(SITE, df, channel, unit, adaptive_kde=False):
 
     plt.show()
     plt.close(fig)
+
+
+def compare_responses(
+        dfs,
+        df_labels=None,
+        show_individual_stims=False,
+        min_time=-1.0,
+        max_time=6.0,
+        height_ratios=(0.5, 1, 1),
+        plot_sound_fn=None,
+        group_column="Key",
+        figsize=(8, 6),
+        bin_size=0.01,
+        show_details=False,
+        psth_ylim=None,
+        psth_color=None,
+        spike_time_key="spikes"):
+    """Compare responses in dataframes of trials
+
+    mostly copied from analysis.playbacks.categories.make_stim_rasters
+    """
+    cols = len(dfs)
+    n_stims_per_df = [len(df["Key"].unique()) for df in dfs]
+    max_stims = np.max(n_stims_per_df)
+
+    if show_individual_stims:
+        rows = int(max_stims)
+    else:
+        rows = 1
+
+    fig = plt.figure(
+        figsize=(cols * figsize[0], rows * figsize[1] + (figsize[1] / 2 if plot_sound_fn is not None else 0))
+    )
+    gs = gridspec.GridSpec(
+        rows,
+        cols,
+        wspace=0.3,
+        hspace=0.5
+    )
+
+    max_ylim = 0
+    psth_axes = []
+    from analysis.spiketrains.plots import make_sound_raster_psth_subplot, psth_plot, raster_plot
+    from analysis.playbacks.categories import relative_spike_times
+    for col_i, df in enumerate(dfs):
+        filtered = relative_spike_times(
+            df.sort_values(group_column),
+            np.ones(len(df)).astype(np.bool),
+            spike_time_key=spike_time_key,
+            exclude_empty=True,
+        )
+
+        sub_axes = make_sound_raster_psth_subplot(
+            sound_idx=None,
+            raster_idx=1,
+            psth_idx=0,
+            outer_grid_spec=gs[0, col_i],
+            height_ratios=height_ratios[-2:],
+        )
+
+        raster_ax = fig.add_subplot(sub_axes["raster_ax"])
+        raster_plot(
+                filtered,
+                min_time=min_time,
+                max_time=6.0,
+                color="k",
+                linewidth=1,
+                ax=raster_ax,
+                mode="vlines",
+                fix_raster_trials=len(filtered),
+
+        )
+        raster_ax.set_yticks([])
+        raster_ax.set_xlim(min_time, max_time)
+
+        psth_ax = fig.add_subplot(sub_axes["psth_ax"])
+        psth_plot(
+                filtered,
+                min_time=min_time,
+                max_time=max_time,
+                bins=int((max_time - min_time) / bin_size),
+                color=psth_color or "k",
+                linewidth=2.0,
+                ax=psth_ax,
+                mode="gaussian",
+                conv_width=20,
+        )
+        psth_ax.set_xlim(min_time, max_time)
+        psth_ax.set_xticks([])
+        max_ylim = max(max_ylim, psth_ax.get_ylim()[1])
+        psth_axes.append(psth_ax)
+
+        if psth_ylim is not None:
+            psth_ax.set_ylim(*psth_ylim)
+        text_ax = psth_ax
+        text_ax.text(
+            0.05,
+            1.05,
+            df_labels[col_i],
+            horizontalalignment="left",
+            verticalalignment="bottom",
+            transform=plt.gca().transAxes
+        )
+
+
+        if min_time < 0:
+            raster_ax.vlines([0], *raster_ax.get_ylim(),
+                    linestyle=":", color="red")
+
+        border(raster_ax, 0, 0, 0, 1)
+        border(psth_ax, 1, 0, 0, 0)
+
+    for ax in psth_axes:
+        ax.set_ylim(0, max_ylim)
+        ax.vlines([0], *ax.get_ylim(),
+            linestyle=":", color="red")
+
+    return fig
+
+
+
+
