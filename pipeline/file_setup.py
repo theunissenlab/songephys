@@ -261,6 +261,7 @@ class Rhd2Nix(luigi.Task):
             print('Seewiesen Data: digital events in rhd will be deleted')
             segment = blk.segments[0]
             segment.eventarrays = []
+            segment.events = []
             
         nix = NixIO(self.output().path)
         nix.write_block(blk)
