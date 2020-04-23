@@ -260,8 +260,8 @@ class Rhd2Nix(luigi.Task):
         else:
             storeDIG=True
             
-        rhd = RHDIO(rhd_file,storeDIG=storeDIG)
-        blk = rhd.read_block()
+        rhd = RHDIO(rhd_file)
+        blk = rhd.read_block(storeDIG=storeDIG)
         
         # Delete the digital input form the rhd file if from Seewiesen.  These are trahs (as of April 2020)
 
