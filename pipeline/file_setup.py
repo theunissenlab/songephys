@@ -253,12 +253,18 @@ class Rhd2Nix(luigi.Task):
         )
 
         rhd_file = inputs["rhd"].path
-        rhd = RHDIO(rhd_file)
+        
+        if (self.session_info["lab"] == 'seewiesen' ) :
+            print('Seewiesen Data: digital events in rhd will be deleted')
+            storeDIG=False
+        else:
+            storeDIG=True
+            
+        rhd = RHDIO(rhd_file,storeDIG=storeDIG)
         blk = rhd.read_block()
         
         # Delete the digital input form the rhd file if from Seewiesen.  These are trahs (as of April 2020)
-        if (self.session_info["lab"] == 'seewiesen' ) :
-            print('Seewiesen Data: digital events in rhd will be deleted')
+
             segment = blk.segments[0]
             segment.eventarrays = []
             segment.events = []

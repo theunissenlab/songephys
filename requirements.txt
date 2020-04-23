@@ -23,10 +23,10 @@ sqlalchemy==1.2.10
 wavio==0.0.4
 
 # Load intan rhd format code
--e git://github.com/theunissenlab/load_intan_rhd_format.git@master#egg=load_intan_rhd_format-0.0
+-e git://github.com/theunissenlab/load_intan_rhd_format.git@master#egg=load_intan_rhd_format-0.1
 
 # Modified neo package
--e git://github.com/theunissenlab/python-neo.git@4317e4#egg=tlab_neo-0.5.1
+-e git://github.com/theunissenlab/python-neo.git@master=#egg=tlab_neo-0.5.1
 
 # Spike sorting library
 # For now, install by cloning and setting the path
