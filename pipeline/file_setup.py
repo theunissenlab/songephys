@@ -253,7 +253,10 @@ class Rhd2Nix(luigi.Task):
         )
 
         rhd_file = inputs["rhd"].path
-        
+ 
+        # Delete the digital input form the rhd file if from Seewiesen.  
+        # These are not used for stim id but to sync with bat logger
+       
         if (self.session_info["lab"] == 'seewiesen' ) :
             print('Seewiesen Data: digital events in rhd will be deleted')
             storeDIG=False
@@ -262,13 +265,7 @@ class Rhd2Nix(luigi.Task):
             
         rhd = RHDIO(rhd_file)
         blk = rhd.read_block(storeDIG=storeDIG)
-        
-        # Delete the digital input form the rhd file if from Seewiesen.  These are trahs (as of April 2020)
-
-            segment = blk.segments[0]
-            segment.eventarrays = []
-            segment.events = []
-            
+                    
         nix = NixIO(self.output().path)
         nix.write_block(blk)
         nix.close()
