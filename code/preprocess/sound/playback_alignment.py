@@ -11,11 +11,19 @@ from scipy.signal import correlate
 from soundsig.signal import resample_signal
 
 
+def find_alignment(signal, template):
+    """Find best index in signal to align template waveform
+    """
+    correlated = correlate(signal, template, mode="same")
+    peak = np.argmax(np.abs(correlated))
+    return correlated, peak - len(template) // 2
+
+
 def compute_realigned_trial_times(
         playback_df,
         intan_start_time,
         intan_lazy_mic,
-        window=1
+        window=2
     ):
     """Compute the stimulus start times (relative to intan data) of trials
 
@@ -50,7 +58,8 @@ def compute_realigned_trial_times(
     the nth value is the start time for the nth trial in seconds from start
     of Intan recording.
     """
-    all_offsets = []
+    new_start_times = []
+    shifts = []
 
     intan_sr = intan_lazy_mic.sampling_rate 
 
@@ -70,6 +79,7 @@ def compute_realigned_trial_times(
 
         estimated_start = (row.time - intan_start_time).total_seconds()  # timedelta
         if estimated_start < 0 or estimated_start > intan_lazy_mic.N / intan_lazy_mic.sampling_rate:
+            new_start_times.append(estimated_start)
             continue
 
         recorded_data = intan_lazy_mic.time_slice(
@@ -79,18 +89,21 @@ def compute_realigned_trial_times(
 
         recorded_data = recorded_data - np.mean(recorded_data, axis=0)
 
+        best_score = 0
+        best_estimate_index = None
         for i in np.arange(recorded_data.shape[1]):
-            correlated = correlate(recorded_data[:, i], wav_data, mode="same")
-            all_offsets.append((np.argmax(correlated) / intan_sr - row.duration / 2) - window)
+            correlated, estimated_index = find_alignment(recorded_data[:, i], wav_data)
+            score = np.max(np.abs(correlated) / np.max(np.abs(recorded_data[:, i])))
+            if score > best_score:
+                best_estimate_index = estimated_index
+        
+        new_start_times.append((estimated_start - window) + best_estimate_index/ intan_sr)
+        shifts.append(new_start_times[-1] - estimated_start)
 
-    best_offset = np.median(all_offsets)
-    print("Offsetting playbacks by {:.5f} seconds".format(best_offset))
+    print("Offsetting playbacks by best correlation\n"
+            "On average, shifted by {:.2f}".format(np.mean(shifts)))
 
-    adjusted_start_times = np.array([
-        (t - intan_start_time).total_seconds() for t in playback_df.time
-    ]) + best_offset
-
-    return adjusted_start_times
+    return new_start_times
 
 
 def _calculate_playback_repetitions(playbacks_df):
