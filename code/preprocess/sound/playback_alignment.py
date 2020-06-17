@@ -74,7 +74,7 @@ def compute_realigned_trial_times(
             wav_data = wav_object.data[:, 0]
             # assert sr == intan_lazy_mic.sampling_rate
             if stim_sr != intan_sr:
-                wav_data, _ = resample_signal(wav_data, stim_sr, intan_sr)
+                _, wav_data  = resample_signal(wav_data, stim_sr, intan_sr)
             _loaded_stim_cache[row.stimulus_name] = wav_data
 
         estimated_start = (row.time - intan_start_time).total_seconds()  # timedelta
