@@ -88,6 +88,14 @@ def gdrive_listdir(dir):
     }).GetList()
 
 
+def gdrive_get_folder(*path):
+    current_position = gdrive_root_dir
+    for path_element in path:
+        current_position = gdrive_look_in(current_position, path_element)
+
+    return current_position
+
+
 def download_csvs(
         site_id,
         csv_list,

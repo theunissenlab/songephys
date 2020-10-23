@@ -457,6 +457,82 @@ class MergeLiveCalls(luigi.Task):
         np.save(self.output().path, combined_result)
 
 
+class CreateSoundsepAutodetectedPeriods(luigi.Task):
+    site_dir = luigi.Parameter()
+
+    def requires(self):
+        return MergeLiveCalls(self.site_dir)
+
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir, "autodetected.pkl"))
+
+    def run(self):
+        """
+        Removes the dependency on pyquantities from the call_periods.npy file and
+        converts it into a pandas dataframe
+        """
+        periods = np.load(self.input().path, allow_pickle=True)[()]
+        for period in periods:
+            period["t_start"] = period["start_time"].item()
+            period["t_stop"] = period["start_time"].item() + period["duration"].item()
+            del period["start_time"]
+            del period["duration"]
+
+        df = pd.DataFrame(list(periods))
+        df.to_pickle(self.output().path)
+
+
+class CreateLabelingSaveFile(luigi.Task):
+    """Creates a save file (used for soundsep) that populates
+    the live call periods (from FindLiveCalls/MergeLiveCalls) as well as storing
+    the playback periods as a preset source
+    """
+    site_dir = luigi.Parameter()
+
+    def requires(self):
+        return {
+            "live_calls": MergeLiveCalls(self.site_dir),
+            "vocal_periods": MergeVocalPeriods(self.site_dir),
+        }
+
+    def output(self):
+        if not os.path.exists(os.path.join(self.site_dir, "outputs")):
+            os.makedirs(os.path.join(self.site_dir, "outputs"))
+
+        return luigi.LocalTarget(os.path.join(self.site_dir, "outputs", "save.npy"))
+
+    def run(self):
+        live_calls = np.load(self.input()["live_calls"].path, allow_pickle=True)[()]
+        vocal_periods = np.load(self.input()["vocal_periods"].path, allow_pickle=True)[()]
+
+        playback_df = pd.DataFrame([
+            {
+                "t_start": period["start_time"].item() + 0.5,
+                "t_stop": period["start_time"].item() + period["duration"].item() - 0.5
+            } for period in vocal_periods["playback"]
+        ])
+
+        playback_source_dict = {
+            "name": "Playbacks",
+            "channel": 0,
+            "hidden": False,
+            "intervals": playback_df,
+            "readonly": True
+        }
+
+        autodetect_table = pd.DataFrame([
+            {
+                "t_start": period["start_time"].item(),
+                "t_stop": period["start_time"].item() + period["duration"].item()
+            } for period in live_calls
+        ])
+        
+        np.save(self.output().path, {
+            "sources": [playback_source_dict],
+            "autodetect": autodetect_table
+        })
+
+
 class DetectVocalAndSilentPeriods(luigi.Task):
 
     site_dir = luigi.Parameter()

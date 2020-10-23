@@ -360,6 +360,7 @@ class SortSpikes(luigi.Task):
         min_value=config.ELECTRODES[0],
         max_value=config.ELECTRODES[-1] + 1
     )
+    # add upgoing /  downgoing parameter
 
     def requires(self):
         return MergeSpikeDatasets(self.site_dir)

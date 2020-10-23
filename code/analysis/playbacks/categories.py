@@ -20,13 +20,13 @@ from sklearn.neighbors import KernelDensity
 
 from IPython.display import display
 
-from preprocess.sound.playback_utils import _parse_julie_filename_metadata
+from preprocess.sound.playback_utils import _parse_julie_filename_metadata, _parse_ladder_filename_data
 from util import border, get_square_dims
 
 import suss.io
 
 
-def create_stimulus_dataframe(events):
+def create_stimulus_dataframe(events, parser=_parse_julie_filename_metadata):
     """Create dataframe from list of event dictionaries
 
     Args
@@ -50,16 +50,28 @@ def create_stimulus_dataframe(events):
 
     for event in events:
         stim_set = os.path.basename(os.path.dirname(event["playback_file"]))
-        metadata = _parse_julie_filename_metadata(event["playback_file"])
-        rows.append((
-            os.path.basename(event["playback_file"]),
-            "{}".format(metadata["emitter"][:4]),
-            metadata["callid"],
-            event["start_time"].item() + 0.5,
-            event["duration"].item() - 1.0,
-            event["start_time"].item() + event["duration"].item(),
-            event["playback_file"]
-        ))
+        metadata = parser(event["playback_file"])
+        if parser == _parse_julie_filename_metadata:
+            rows.append((
+                os.path.basename(event["playback_file"]),
+                "{}".format(metadata["emitter"][:4]),
+                metadata["callid"],
+                event["start_time"].item() + 0.5,
+                event["duration"].item() - 1.0,
+                event["start_time"].item() + event["duration"].item(),
+                event["playback_file"]
+            ))
+        elif parser == _parse_ladder_filename_data:
+            rows.append((
+                os.path.basename(event["playback_file"]),
+                metadata["source"],
+                metadata["type"],
+                event["start_time"].item() + 0.5,  # This has to be hardcoded cuz i was dumb
+                event["duration"].item() - 1.0,    # a long time ago
+                event["start_time"].item() + event["duration"].item(),
+                event["playback_file"]
+            ))
+
 
     return pd.DataFrame(data=rows,
         columns=["file", "relation_short", "call_type",
