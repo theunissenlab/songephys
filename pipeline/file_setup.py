@@ -85,6 +85,10 @@ class SiteConfig(luigi.Task):
                 elif line.endswith(".csv"):
                     csvs.append(line)
 
+        # Remove duplicates if they exist from filelist
+        rhds = list(set(rhds))
+        csvs = list(set(csvs))
+
         # Get the timestamps from rhd filenames
         rhd_times = [
             (timestamp_from_intan_filename(rhd), rhd)
