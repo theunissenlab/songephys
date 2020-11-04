@@ -502,11 +502,6 @@ def make_stim_rasters(
     return fig
 
 
-def _add_subplot(fig, oldnsubplots, new):
-    new_idx = len(fig.axes) + 1
-    return fig.add_subplot(new_idx, 1)
-
-
 def generate_category_comparisons(
         events,
         spike_times,

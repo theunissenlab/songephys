@@ -16,7 +16,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from soundsig.sound import spectrogram
-from soundsig.signal import highpass_filter, lowpass_filter, bandpass_filter
+from soundsig.signal import bandpass_filter
 import suss.io
 from suss.core import SpikeDataset
 
@@ -27,14 +27,10 @@ from format.lazy import (
 )
 from preprocess.ephys.filter import context_based_filtering
 from preprocess.ephys.detect import extract_spikes
-from preprocess.ephys.sort import sort_set
 from preprocess.ephys.newsort import sort as new_sort, create_hierarchy
-
-from utils import session_basename
 
 from file_setup import SiteConfig, GenerateLazyFiles
 import config
-
 
 
 class FilterSignals(luigi.Task):
@@ -207,6 +203,9 @@ class CheckLiveCalls(luigi.Task):
     site_dir = luigi.Parameter()
 
     def requires(self):
+        # Imported here to avoid circular imports
+        from preprocess_sound import MergeLiveCalls
+
         return {
             "lazy_site": MergeLazySignals(self.site_dir),
             "calls": MergeLiveCalls(self.site_dir)
@@ -216,11 +215,8 @@ class CheckLiveCalls(luigi.Task):
         return luigi.LocalTarget(os.path.join(self.site_dir, "live_calls.png"))
 
     def run(self):
-        from preprocess_sound import MergeLiveCalls
         call_periods = np.load(self.input()["calls"].path, allow_pickle=True)[()]
         lazy_site = np.load(self.input()["lazy_site"].path, allow_pickle=True)[()]
-
-        labels = sorted(list(set([period["label"] for period in call_periods])))
 
         idx = defaultdict(int)
         fig = plt.figure(figsize=(0.4, 1))
@@ -238,15 +234,26 @@ class CheckLiveCalls(luigi.Task):
                 t1 = period["start_time"].item()
                 t2 = (period["start_time"] + period["duration"]).item()
                 sig = lazy_site.time_slice(t1, t2, signal="mic")
-                t_arr = sig.t
                 sig = sig.data
                 sig = sig - np.mean(sig, axis=0)
-                sig = bandpass_filter(sig.T, lazy_site._signals["mic"][0].sampling_rate, 1000, 8000).T
+                sig = bandpass_filter(
+                    sig.T,
+                    lazy_site._signals["mic"][0].sampling_rate,
+                    1000,
+                    8000
+                ).T
 
                 i = np.argmax(np.sum(sig, axis=0))
 
                 t_spec, f_spec, spec, _ = spectrogram(
-                        sig[:, i], 30000, 1000, 50, min_freq=250, max_freq=8000, cmplx=False)
+                    sig[:, i],
+                    30000,
+                    1000,
+                    50,
+                    min_freq=250,
+                    max_freq=8000,
+                    cmplx=False
+                )
 
                 ax.pcolormesh(t_spec, f_spec, spec, cmap="Greys")
 

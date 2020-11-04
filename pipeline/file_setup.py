@@ -2,8 +2,6 @@ import glob
 import os
 import shutil
 
-import pickle
-
 import numpy as np
 import luigi
 from neo.io import RHDIO, NixIO
@@ -12,11 +10,7 @@ import pandas as pd
 from format.gdrive_access import download
 from format.io import load_yaml, save_yaml
 from format.intan_utils import timestamp_from_intan_filename
-from format.lazy import (
-    LazySignal,
-    create_lazy_signals_from_nix,
-)
-from format.gdrive_access.download import download_csvs
+from format.lazy import create_lazy_signals_from_nix
 from utils import session_basename
 
 
@@ -33,31 +27,32 @@ class SiteFileList(luigi.Task):
 
 
 class SiteConfig(luigi.Task):
+    """Creates a yaml config file for the site defining its sessions
+
+    The yaml can be made manually, but this can be slightly easier
+    because it is sometimes confusing when one playback csv spans
+    multiple RHD files, and vice-versa.
+
+    REQUIRES google drive authentication (needs to download csvs
+    and read them to find trial timestamps)
+
+    Example file contents:
+
+          seewiesen
+          ZF4F_trialdata_20190612134340.csv
+          ZF4F_2t_190612_134437.rhd
+          ZF4F_2t_190612_135747.rhd
+    """
     site_dir = luigi.Parameter()
 
     def output(self):
         return luigi.LocalTarget(os.path.join(self.site_dir, "sessions.yaml"))
 
     def run(self):
-        """Creates a yaml config file for the session
-
-        The yaml can be made manually, but this can be slightly easier
-        because it is sometimes confusing when one playback csv spans
-        multiple RHD files, and vice-versa.
-
-        REQUIRES google drive authentication (needs to download csvs
-        and read them to find trial timestamps)
-
-        Example file contents:
-
-              seewiesen
-              ZF4F_trialdata_20190612134340.csv
-              ZF4F_2t_190612_134437.rhd
-              ZF4F_2t_190612_135747.rhd
-        """
         if not os.path.join(self.site_dir, "filelist"):
             raise Exception("""
-    Error, either
+
+        Error, either
 
         - sessions.yaml must be created manually
         - a plain text file named 'filelist' must be created
@@ -65,6 +60,7 @@ class SiteConfig(luigi.Task):
           on the first line, and csvs and rhds on other lines.
 
           This will automatically create the session.yaml file
+
               """)
 
         rhds = []
@@ -75,8 +71,9 @@ class SiteConfig(luigi.Task):
             for line in filelist.readlines():
                 line = line.strip()
                 if name is None:
-                    if not line in ["theunissen", "seewiesen"]:
-                        raise ValueError("The first line of filelist must be either 'theunissen' or 'seewiesen'")
+                    if line not in ["theunissen", "seewiesen"]:
+                        raise ValueError("The first line of filelist must be "
+                                         "either 'theunissen' or 'seewiesen'")
                     name = line
                     continue
 
@@ -113,7 +110,7 @@ class SiteConfig(luigi.Task):
             os.makedirs(csv_temp_dir)
 
         site_name = session_basename(self.site_dir)
-        download_csvs(site_name, csvs, csv_temp_dir, lab=name)
+        download.download_csvs(site_name, csvs, csv_temp_dir, lab=name)
 
         # Get the first and last trial time for each csv file
         for csv in csvs:
@@ -222,7 +219,6 @@ class DownloadSession(luigi.Task):
             lab=LAB_NAME)
 
 
-
 class Rhd2Nix(luigi.Task):
     """Converts an RHD file to a NIX file, and clean up the RHD file
 
@@ -249,27 +245,26 @@ class Rhd2Nix(luigi.Task):
 
     def run(self):
         inputs = self.input()
-        
+
         # Read the yaml file to have information about the session
-        site_dir = self.session_dir.split(sep='..')[0]
+        site_dir = self.session_dir.split(sep="..")[0]
         self.session_info = load_yaml(
             os.path.join(site_dir, "sessions.yaml")
         )
 
         rhd_file = inputs["rhd"].path
- 
-        # Delete the digital input form the rhd file if from Seewiesen.  
+
+        # Delete the digital input form the rhd file if from Seewiesen.
         # These are not used for stim id but to sync with bat logger
-       
-        if (self.session_info["lab"] == 'seewiesen' ) :
-            print('Seewiesen Data: digital events in rhd will be deleted')
-            storeDIG=False
+        if (self.session_info["lab"] == "seewiesen"):
+            print("Seewiesen Data: digital events in rhd will be deleted")
+            storeDIG = False
         else:
-            storeDIG=True
-            
+            storeDIG = True
+
         rhd = RHDIO(rhd_file)
         blk = rhd.read_block(storeDIG=storeDIG)
-                    
+
         nix = NixIO(self.output().path)
         nix.write_block(blk)
         nix.close()

@@ -1,4 +1,3 @@
-import datetime
 import glob
 import logging
 import os
@@ -83,8 +82,8 @@ class CreateMicrophoneAlignedCodes(luigi.Task):
     Inputs
     ------
     session_dir : str
-        Path to session. The session_dir/raw directory must contain csv files for
-        all playbacks played during the session
+        Path to session. The session_dir/raw directory must contain csv
+        files for all playbacks played during the session
 
     Outputs a numpy array of trial codes for alignment of data to trials
     """
@@ -112,7 +111,10 @@ class CreateMicrophoneAlignedCodes(luigi.Task):
         # associated with each pyoperant csv
         stim_dirs = _get_stim_dirs(csv_files, stimuli_directory)
 
-        signals = np.load(self.input()["lazy_signals"]["lazy_signals"].path, allow_pickle=True)[()]
+        signals = np.load(
+            self.input()["lazy_signals"]["lazy_signals"].path,
+            allow_pickle=True
+        )[()]
         lazy_mic = signals["mic"]
         max_time = lazy_mic.N / lazy_mic.sampling_rate
 
@@ -180,7 +182,7 @@ class CombinePlaybackMetadata(luigi.Task):
         combined_db = "playbacks.pkl"
 
         return luigi.LocalTarget(
-                os.path.join(segmentation_dir, combined_db)
+            os.path.join(segmentation_dir, combined_db)
         )
 
     def run(self):
@@ -343,7 +345,10 @@ class FindLiveCalls(luigi.Task):
         signals = np.load(self.input()["lazy_signals"]["lazy_signals"].path, allow_pickle=True)[()]
         mic = signals["mic"]
 
-        playback_periods = np.load(self.input()["vocal_periods"].path, allow_pickle=True)[()]["playback"]
+        playback_periods = np.load(
+            self.input()["vocal_periods"].path,
+            allow_pickle=True
+        )[()]["playback"]
 
         ######################################################
         ### First search for periods of live vocalizations ###
@@ -449,7 +454,6 @@ class MergeLiveCalls(luigi.Task):
 
         combined_result = []
         for vocal_periods, offset in zip(vocal_period_data, block_offsets):
-            print(type(combined_result), type(vocal_periods))
             for period in vocal_periods:
                 period["start_time"] += offset
             combined_result = combined_result + vocal_periods
@@ -526,7 +530,7 @@ class CreateLabelingSaveFile(luigi.Task):
                 "t_stop": period["start_time"].item() + period["duration"].item()
             } for period in live_calls
         ])
-        
+
         np.save(self.output().path, {
             "sources": [playback_source_dict],
             "autodetect": autodetect_table
@@ -547,8 +551,14 @@ class DetectVocalAndSilentPeriods(luigi.Task):
         return luigi.LocalTarget(os.path.join(self.site_dir, "vocal_periods_with_silence.npy"))
 
     def run(self):
-        lazy_site = np.load(self.input()["lazy_site"].path, allow_pickle=True)[()]
-        vocal_periods = np.load(self.input()["vocal_periods"].path, allow_pickle=True)[()]
+        lazy_site = np.load(
+            self.input()["lazy_site"].path,
+            allow_pickle=True
+        )[()]
+        vocal_periods = np.load(
+            self.input()["vocal_periods"].path,
+            allow_pickle=True
+        )[()]
 
         # # this odesnt belong here but i need to do it
         # vocal_periods["playback"] = [e for e in vocal_periods["playback"] if e["duration"].item() > 1.5]

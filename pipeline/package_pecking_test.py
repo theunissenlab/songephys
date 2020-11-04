@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from postprocess.trials import package_unit_lightweight, package_stims_and_renditions
-from postprocess.memory_test import compute_coherences, lookup_reward
+from postprocess.memory_test import lookup_reward
 from preprocess_ephys import ManualSorting, MergeLazySignals
 
 
