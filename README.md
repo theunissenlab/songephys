@@ -1,5 +1,14 @@
 # songephys
 
+The general purpose of this repository is for preprocessing of data from our electrophysiological experiemnts in zebra finches.
+
+The core code is in the code/ folder.
+
+The data pipeline are defined in luigi tasks in the pipeline/ folder. Each task is defined by its inputs, its outputs, and some function that transforms the inputs to outputs.
+
+The code in here should be for general data pre-processing and preliminary analysis. For detailed analysis for specific projects, use songephys to transform your data into package(s) of files
+that can be easily read in to a separate, specialized project.
+
 ## Setup
 
 Best way to do everything is to use virtualenv. Create an isolated python virtualenv with `virtualenv env`.
