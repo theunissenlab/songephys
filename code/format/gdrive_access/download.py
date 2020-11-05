@@ -149,6 +149,7 @@ def download_session(
         pyoperant_files (list of str):
             Each element is a name of a pyoperant file
             (e.g. "GreYel3594M_trialdata_20170912164335.csv")
+        lab (str): either seewiesen or theunissen
     """
     if session_id.endswith(".rhd"):
         session_id = os.path.splitext(session_id)[0]

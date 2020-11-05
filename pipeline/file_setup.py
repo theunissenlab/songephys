@@ -11,11 +11,20 @@ from format.gdrive_access import download
 from format.io import load_yaml, save_yaml
 from format.intan_utils import timestamp_from_intan_filename
 from format.lazy import create_lazy_signals_from_nix
-from utils import session_basename
+from pipeline_utils import (
+    associate_pyoperant_csvs_to_rhds,
+    get_session_sites,
+    parse_filelist,
+    session_basename,
+)
 
 
 class SiteFileList(luigi.Task):
     """Checks if a file list file exists
+
+    sites/
+        SITE/
+            filelist [output]
     """
     site_dir = luigi.Parameter()
 
@@ -29,27 +38,45 @@ class SiteFileList(luigi.Task):
 class SiteConfig(luigi.Task):
     """Creates a yaml config file for the site defining its sessions
 
-    The yaml can be made manually, but this can be slightly easier
-    because it is sometimes confusing when one playback csv spans
-    multiple RHD files, and vice-versa.
+    The yaml can be made manually, but this can be slightly easier because it
+    is sometimes confusing when one playback csv spans multiple RHD files,
+    and vice-versa.
 
-    REQUIRES google drive authentication (needs to download csvs
-    and read them to find trial timestamps)
+    REQUIRES google drive authentication (needs to download csvs and read them
+    to find trial timestamps)
 
-    Example file contents:
+    sites/
+        SITE/
+            filelist [input]
+            session.yaml [output]
 
+    Example filelist:
           seewiesen
           ZF4F_trialdata_20190612134340.csv
           ZF4F_2t_190612_134437.rhd
           ZF4F_2t_190612_135747.rhd
+
+    Converted into sessions.yaml:
+          lab: seewiesen
+          sessions:
+            - id: ZF4F_2t_190612_134437
+              pyoperants:
+              - ZF4F_trialdata_20190612134340
+              t: 0.0
+            - id: ZF4F_2t_190612_135747
+              t: 790.0
     """
     site_dir = luigi.Parameter()
 
     def output(self):
         return luigi.LocalTarget(os.path.join(self.site_dir, "sessions.yaml"))
 
+    def requires(self):
+        # Let the run() function capture this to spit out the correct error message
+        return None  # return SiteFileList(self.site_dir)
+
     def run(self):
-        if not os.path.join(self.site_dir, "filelist"):
+        if not os.path.join(self.input().path, "filelist"):
             raise Exception("""
 
         Error, either
@@ -59,96 +86,26 @@ class SiteConfig(luigi.Task):
           that includes the lab code name (i.e. "theunissen" or "seewiesen")
           on the first line, and csvs and rhds on other lines.
 
+          Example filelist contents
+
+          seewiesen
+          ZF4F_trialdata_20190612134340.csv
+          ZF4F_2t_190612_134437.rhd
+          ZF4F_2t_190612_135747.rhd
+
           This will automatically create the session.yaml file
 
               """)
 
-        rhds = []
-        csvs = []
-        name = None
+        site_files = parse_filelist(self.input().path)
+        session_dicts = associate_pyoperant_csvs_to_rhds(
+            self.site_dir,
+            site_files["rhds"],
+            site_files["csvs"],
+            site_files["lab"]
+        )
 
-        with open(os.path.join(self.site_dir, "filelist"), "r") as filelist:
-            for line in filelist.readlines():
-                line = line.strip()
-                if name is None:
-                    if line not in ["theunissen", "seewiesen"]:
-                        raise ValueError("The first line of filelist must be "
-                                         "either 'theunissen' or 'seewiesen'")
-                    name = line
-                    continue
-
-                if line.endswith(".rhd"):
-                    rhds.append(line)
-                elif line.endswith(".csv"):
-                    csvs.append(line)
-
-        # Remove duplicates if they exist from filelist
-        rhds = list(set(rhds))
-        csvs = list(set(csvs))
-
-        # Get the timestamps from rhd filenames
-        rhd_times = [
-            (timestamp_from_intan_filename(rhd), rhd)
-            for rhd in rhds
-        ]
-        rhd_times = sorted(rhd_times)
-
-        t0 = rhd_times[0][0]
-
-        rhd_dicts = [
-            {
-                "id": os.path.splitext(rhd_name)[0],
-                "t": (rhd_time - t0).seconds,
-            } for rhd_time, rhd_name in rhd_times
-        ]
-
-        # Download the csvs in a temporary directory
-        csv_start_stop = []
-
-        csv_temp_dir = os.path.join(self.site_dir, "tmp")
-        if not os.path.exists(csv_temp_dir):
-            os.makedirs(csv_temp_dir)
-
-        site_name = session_basename(self.site_dir)
-        download.download_csvs(site_name, csvs, csv_temp_dir, lab=name)
-
-        # Get the first and last trial time for each csv file
-        for csv in csvs:
-            csv_data = pd.read_csv(
-                    os.path.join(csv_temp_dir, csv),
-                    parse_dates=True,
-                    converters={"time": pd.to_datetime})
-            first = csv_data["time"].iloc[0]
-            last = csv_data["time"].iloc[-1]
-
-            csv_start_stop.append((csv, first, last))
-
-        # Associate csvs to RHDs using timestamp overlap conditions that
-        # are highly sophisticated and complex
-        for csv, start, stop in csv_start_stop:
-            for i in range(len(rhd_times) - 1):
-                if (
-                        (rhd_times[i][0] <= start < rhd_times[i + 1][0]) or
-                        (rhd_times[i][0] <= stop < rhd_times[i + 1][0]) or
-                        (rhd_times[i][0] > start and rhd_times[i + 1][0] < stop) or
-                        (start > rhd_times[i][0] and stop < rhd_times[i + 1][0])
-                        ):
-                    if "playbacks" not in rhd_dicts[i]:
-                        rhd_dicts[i]["playbacks"] = [os.path.splitext(csv)[0]]
-                    else:
-                        rhd_dicts[i]["playbacks"].append(os.path.splitext(csv)[0])
-
-            if rhd_times[-1][0] <= start or rhd_times[-1][0] <= stop:
-                if "playbacks" not in rhd_dicts[-1]:
-                    rhd_dicts[-1]["playbacks"] = [os.path.splitext(csv)[0]]
-                else:
-                    rhd_dicts[-1]["playbacks"].append(os.path.splitext(csv)[0])
-
-        save_yaml(self.output().path, {"lab": name, "sessions": rhd_dicts})
-
-        # Remove the temporary directory
-        print("Removing temp dir {}".format(csv_temp_dir))
-        shutil.rmtree(csv_temp_dir)
+        save_yaml(self.output().path, {"lab": site_files["lab"], "sessions": session_dicts})
 
 
 class DownloadSession(luigi.Task):
@@ -168,6 +125,9 @@ class DownloadSession(luigi.Task):
     def output(self):
         self.session_name = session_basename(self.session_dir)
         output_directory = os.path.join(self.session_dir, "raw")
+
+        self.site_dirs, self.pyoperants = get_session_sites(self.session_dir)
+
         return {
             "rhd": luigi.LocalTarget(os.path.join(
                 output_directory, "{}.rhd".format(self.session_name)
@@ -186,31 +146,14 @@ class DownloadSession(luigi.Task):
             raise Exception("Not authenticated with Google Drive; "
                             "cannot download raw data files")
 
-        # First, check if there are supposed to by pyoperant csv files
-        # by loading the yaml file and looking.
-        session_name = os.path.basename(self.session_dir)
-        prefix = session_name.split("_")[0]
-        site_dirs = glob.glob(os.path.join(
-            self.session_dir,
-            "..",
-            "..",
-            "sites",
-            "{}*".format(prefix),
-            "sessions.yaml"))
-        pyoperants = []
+        if not len(self.site_dirs):
+            raise Exception("No sites were found with sessions.yaml containing {}".format(self.session_dir))
 
-        for site_dir in site_dirs:
-            session_config = load_yaml(site_dir)
-            for session in session_config["sessions"]:
-                if session["id"] == session_name and "playbacks" in session:
-                    pyoperants += session["playbacks"]
-
-            # The yaml file may specify a particular "lab".
-            # This is needed for the download function to adjust
-            # for slightly different directory structure on google drive
-            LAB_NAME = session_config.get("lab", "theunissen")
-
-        self.pyoperants = pyoperants
+        # Get the lab name from the first site
+        # This is needed for the download function to adjust
+        # for slightly different directory structure on google drive
+        session_config = load_yaml(os.path.join(self.site_dirs[0], "sessions.yaml"))
+        LAB_NAME = session_config.get("lab", "theunissen")
 
         download.download_session(
             self.session_name,

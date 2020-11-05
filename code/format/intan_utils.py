@@ -7,6 +7,12 @@ import os
 
 def timestamp_from_intan_filename(filename):
     """Read datetime from filename into timestamp
+
+    Filenames look like this:
+    RedGre7107M__171221_001122
+
+    Convert it to
+    12/21/2017 at 00:11:22
     """
     if not (2000 <= datetime.datetime.now().year < 2100):
         raise FutureWarning("You are in the wrong century for this function.")
