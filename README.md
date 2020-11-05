@@ -22,6 +22,8 @@ Then setup by:
 
 3. Oh right you need to clone [`load_intan_rhd_format` repository](https://github.com/theunissenlab/load_intan_rhd_format.git). Add a symlink to it or add it to the PYTHONPATH
 
+4. Set up google drive api credentials. `mkdir tlab_gdrive_credentials`, then use `python -m gdrive_access.setup_credentials --dir tlab_gdrive_credentials` and follow the instructions carefully. See [gdrive-access](https://github.com/theunissenlab/gdrive_python) for details.
+
 ## Dependencies
 
 The code we are using in songephys depends on several of our internal packages, including soundsig, neosound, load_intan_rhd_format, etc.
@@ -36,30 +38,3 @@ The three options to install these are (all need to be tested)
 
 4. Install libgpuarray (for Theano) by cd to libgpuarray and doing `python setup.py build` and `python setup.py install`
 
-
-## Gdrive access
-
-settings.yaml.default
-
-### Instructions to get client_secrets.json
-
-Directions found here: https://pythonhosted.org/PyDrive/quickstart.html
-
-Drive API requires OAuth2.0 for authentication. PyDrive makes your life much easier by handling complex authentication steps for you.
-
-    Go to APIs Console (https://console.developers.google.com/cloud-resource-manager?pli=1) and make your own project.
-    Search for ‘Google Drive API’, select the entry, and click ‘Enable’.
-    Select ‘Credentials’ from the left menu, click ‘Create Credentials’, select ‘OAuth client ID’.
-    Now, the product name and consent screen need to be set -> click ‘Configure consent screen’ and follow the instructions. Once finished:
-
-        Select ‘Application type’ to be Web application.
-        Enter an appropriate name.
-        Input http://localhost:8080 for ‘Authorized JavaScript origins’.
-        Input http://localhost:8080/ for ‘Authorized redirect URIs’.
-        Click ‘Save’.
-
-    Click ‘Download JSON’ on the right side of Client ID to download client_secret_<really long ID>.json.
-
-The downloaded file has all authentication information of your application. Rename the file to “client_secrets.json” and place it in your working directory.
-
-Create quickstart.py file and copy and paste the following code.

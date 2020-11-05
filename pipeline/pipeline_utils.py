@@ -2,7 +2,7 @@ import os
 import config
 import tempfile
 
-from format.gdrive_access import download
+from format import gdrive
 
 from utils import intervals_overlap
 
@@ -109,7 +109,7 @@ def associate_pyoperant_csvs_to_rhds(site_dir, csvs, rhds, lab):
     csv_start_stop = []
 
     with tempfile.TemporaryDirectory() as csv_temp_dir:
-        download.download_csvs(site_name, csvs, csv_temp_dir, lab=lab)
+        gdrive.download_csvs(site_name, csvs, csv_temp_dir, lab=lab)
 
         # Get the first and last trial time for each csv file
         for csv in csvs:

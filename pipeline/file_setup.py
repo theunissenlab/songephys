@@ -7,7 +7,7 @@ import luigi
 from neo.io import RHDIO, NixIO
 import pandas as pd
 
-from format.gdrive_access import download
+from format import gdrive
 from format.io import load_yaml, save_yaml
 from format.intan_utils import timestamp_from_intan_filename
 from format.lazy import create_lazy_signals_from_nix
@@ -142,7 +142,7 @@ class DownloadSession(luigi.Task):
     def run(self):
         """Use the yaml file to download RHDs and pyoperant csvs for this session
         """
-        if download.drive is None:
+        if gdrive.root is None:
             raise Exception("Not authenticated with Google Drive; "
                             "cannot download raw data files")
 
@@ -155,7 +155,7 @@ class DownloadSession(luigi.Task):
         session_config = load_yaml(os.path.join(self.site_dirs[0], "sessions.yaml"))
         LAB_NAME = session_config.get("lab", "theunissen")
 
-        download.download_session(
+        gdrive.download_session(
             self.session_name,
             save_to=self.session_dir,
             pyoperant_files=self.pyoperants,

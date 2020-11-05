@@ -10,6 +10,7 @@ if not PROJECT_ROOT:
     raise Exception("PROJECT_ROOT env variable not set")
 DATADIR = os.path.join(PROJECT_ROOT, "data")
 TMPDIR = os.path.join(PROJECT_ROOT, "data", "tmp")
+GDRIVE_CREDENTIALS_DIR = os.path.join(PROJECT_ROOT, "tlab_gdrive_credentials")
 
 
 #################

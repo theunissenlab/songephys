@@ -10,7 +10,7 @@ from utils import deprecated
 @deprecated("Use utils.float_x")
 def float_x(x):
     return np.asarray(x, dtype=theano.config.floatX)
-    
+
 
 @deprecated("Use utils.convert_seconds_to_minutes instead")
 def convert_mins(t_sec):
@@ -25,7 +25,7 @@ def convert_mins(t_sec):
         minutes = (t_sec / 60.0)
         return "{:.1f}m".format(minutes)
 
-    
+
 @deprecated("Use utils.estimate_time_remaining")
 def estimate_time_remaining(started_at, fraction_complete):
     time_elapsed = time.time() - started_at
@@ -43,7 +43,7 @@ def border(ax, left=False, right=False, top=False, bottom=False):
     ax.spines["top"].set_visible(top)
     ax.spines["bottom"].set_visible(bottom)
 
-    
+
 @deprecated("Use plot_utils.get_square_dims")
 def get_square_dims(n):
     root = np.sqrt(n)

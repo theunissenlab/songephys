@@ -28,6 +28,9 @@ wavio==0.0.4
 # Modified neo package
 -e git://github.com/theunissenlab/python-neo.git@master=#egg=tlab_neo-0.5.1
 
+# Google drive api access
+-e git://github.com/theunissenlab/gdrive_python.git@v0.0.2
+
 # Spike sorting library
 # For now, install by cloning and setting the path
 -e git://github.com/kevinyu/solid-garbanzo.git@v0.1-alpha#egg=suss-0.1-alpha[gui]
