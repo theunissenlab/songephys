@@ -1,15 +1,12 @@
-import glob
 import os
 import shutil
 
 import numpy as np
 import luigi
 from neo.io import RHDIO, NixIO
-import pandas as pd
 
 from format import gdrive
 from format.io import load_yaml, save_yaml
-from format.intan_utils import timestamp_from_intan_filename
 from format.lazy import create_lazy_signals_from_nix
 from pipeline_utils import (
     associate_pyoperant_csvs_to_rhds,
@@ -71,9 +68,9 @@ class SiteConfig(luigi.Task):
     def output(self):
         return luigi.LocalTarget(os.path.join(self.site_dir, "sessions.yaml"))
 
+    # Let the run() function capture this to spit out the correct error message
     def requires(self):
-        # Let the run() function capture this to spit out the correct error message
-        return None  # return SiteFileList(self.site_dir)
+        return SiteFileList(self.site_dir)
 
     def run(self):
         if not os.path.join(self.input().path, "filelist"):
@@ -100,8 +97,8 @@ class SiteConfig(luigi.Task):
         site_files = parse_filelist(self.input().path)
         session_dicts = associate_pyoperant_csvs_to_rhds(
             self.site_dir,
-            site_files["rhds"],
             site_files["csvs"],
+            site_files["rhds"],
             site_files["lab"]
         )
 
@@ -120,7 +117,6 @@ class DownloadSession(luigi.Task):
     """
 
     session_dir = luigi.Parameter()
-    pyoperants = luigi.ListParameter(default=[])
 
     def output(self):
         self.session_name = session_basename(self.session_dir)
@@ -155,11 +151,30 @@ class DownloadSession(luigi.Task):
         session_config = load_yaml(os.path.join(self.site_dirs[0], "sessions.yaml"))
         LAB_NAME = session_config.get("lab", "theunissen")
 
-        gdrive.download_session(
+        gdrive.downloaders[LAB_NAME].download_session(
             self.session_name,
             save_to=self.session_dir,
             pyoperant_files=self.pyoperants,
-            lab=LAB_NAME)
+        )
+
+
+class DownloadSite(luigi.Task):
+    site_dir = luigi.Parameter()
+
+    def output(self):
+        return luigi.LocalTarget("dummy")
+
+    def requires(self):
+        self.site_config = load_yaml(os.path.join(self.site_dir, "sessions.yaml"))
+
+        for session in self.site_config["sessions"]:
+            session_dir = os.path.join(self.site_dir, "..", "..", "sessions", session["id"])
+            if not os.path.exists(session_dir):
+                os.makedirs(session_dir)
+            yield DownloadSession(os.path.join(self.site_dir, "..", "..", "sessions", session["id"]))
+
+    def run(self):
+        pass
 
 
 class Rhd2Nix(luigi.Task):
@@ -189,17 +204,14 @@ class Rhd2Nix(luigi.Task):
     def run(self):
         inputs = self.input()
 
-        # Read the yaml file to have information about the session
-        site_dir = self.session_dir.split(sep="..")[0]
-        self.session_info = load_yaml(
-            os.path.join(site_dir, "sessions.yaml")
-        )
+        site_dirs, _ = get_session_sites(self.session_dir)
+        session_info = load_yaml(os.path.join(site_dirs[0], "sessions.yaml"))
 
         rhd_file = inputs["rhd"].path
 
         # Delete the digital input form the rhd file if from Seewiesen.
         # These are not used for stim id but to sync with bat logger
-        if (self.session_info["lab"] == "seewiesen"):
+        if (session_info["lab"] == "seewiesen"):
             print("Seewiesen Data: digital events in rhd will be deleted")
             storeDIG = False
         else:
@@ -207,7 +219,6 @@ class Rhd2Nix(luigi.Task):
 
         rhd = RHDIO(rhd_file)
         blk = rhd.read_block(storeDIG=storeDIG)
-
         nix = NixIO(self.output().path)
         nix.write_block(blk)
         nix.close()

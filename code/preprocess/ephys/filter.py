@@ -12,9 +12,14 @@ from preprocess.ephys.detect import (
     get_spike_snippets
 )
 from preprocess.ephys._timelagged_filter import TimelaggedFilterer
-from util import convert_mins, estimate_time_remaining
+from utils import convert_seconds_to_minutes, estimate_time_remaining
 
 import config
+
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.StreamHandler())
+logger.setLevel(logging.DEBUG)
 
 
 timelagged_filterer = TimelaggedFilterer(block_width=config.FILTER_BLOCK)
@@ -146,7 +151,7 @@ def context_based_filtering(
         '''
 
         if output_signal is None:
-            logging.info("Output signal is None. Not saving anywhere.")
+            logger.info("Output signal is None. Not saving anywhere.")
             # yield highpass_signals, base_signal, noise_intervals         
         else:
             output_signal.write(
@@ -161,13 +166,13 @@ def context_based_filtering(
 
         elapsed, remaining = estimate_time_remaining(
             _start_time, batch_idx / signal_loader.N)
-        logging.warning(
+        logger.info(
             "Filtering {}/{} in {}... "
             "Est. remaining: {}".format(
                 batch_idx,
                 signal_loader.N,
-                convert_mins(elapsed),
-                convert_mins(remaining)
+                convert_seconds_to_minutes(elapsed),
+                convert_seconds_to_minutes(remaining)
             )
         )
 
@@ -240,7 +245,7 @@ def context_based_filtering(
 
         elapsed, remaining = estimate_time_remaining(
             _start_time, batch_idx / signal_loader.N)
-        logging.warning(
+        logger.info(
             "Filtering {}/{} in {}... "
             "Est. remaining: {}".format(
                 batch_idx,
@@ -249,7 +254,7 @@ def context_based_filtering(
                 convert_mins(remaining)
             )
         )
-        logging.warning("{:.2f}".format(np.sum([
+        logger.warning("{:.2f}".format(np.sum([
             np.sum(np.diff(x)) for x in all_noise_intervals
         ]) / sampling_rate / 60.0))
 

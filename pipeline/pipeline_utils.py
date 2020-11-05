@@ -1,9 +1,13 @@
+import glob
 import os
 import config
 import tempfile
 
-from format import gdrive
+import pandas as pd
 
+from format import gdrive
+from format.intan_utils import timestamp_from_intan_filename
+from format.io import load_yaml
 from utils import intervals_overlap
 
 
@@ -38,9 +42,9 @@ def parse_filelist(filelist_path):
         for line in filelist.readlines():
             line = line.strip()
             if name is None:
-                if line not in ["theunissen", "seewiesen"]:
+                if line not in ["theunissen", "seewiesen", "test"]:
                     raise ValueError("The first line of filelist must be "
-                                     "either 'theunissen' or 'seewiesen'")
+                                     "either 'theunissen', 'seewiesen', or 'test'")
                 name = line
                 continue
 
@@ -109,7 +113,7 @@ def associate_pyoperant_csvs_to_rhds(site_dir, csvs, rhds, lab):
     csv_start_stop = []
 
     with tempfile.TemporaryDirectory() as csv_temp_dir:
-        gdrive.download_csvs(site_name, csvs, csv_temp_dir, lab=lab)
+        gdrive.downloaders[lab].download_csvs(site_name, csvs, csv_temp_dir)
 
         # Get the first and last trial time for each csv file
         for csv in csvs:
