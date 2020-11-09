@@ -7,6 +7,7 @@ import luigi
 import numpy as np
 import pandas as pd
 import quantities as pq
+import soundfile as sf
 from neo.io import NixIO
 
 from format.io import load_yaml
@@ -21,7 +22,6 @@ from preprocess.sound.playback_alignment import (
     create_replacement_codes
 )
 from preprocess.sound.detect import (
-    # find_vocal_periods_from_lazy,
     detect_call_and_syllable_dicts_from_lazy,
     generate_stim_dicts,
     generate_vocal_periods_dicts_from_lazy,
@@ -36,6 +36,7 @@ import config
 
 
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 def _get_stim_dirs(csv_files, stimuli_directory):
@@ -71,6 +72,41 @@ def _get_stim_dirs(csv_files, stimuli_directory):
         stim_dirs.append(stim_dir_used)
 
     return stim_dirs
+
+
+class ExportMicrophonesToWav(luigi.Task):
+    """Write the microphone data from Nix file to a wav file
+    """
+    session_dir = luigi.Parameter()
+
+    def requires(self):
+        return Rhd2Nix(self.session_dir)
+
+    def output(self):
+        segmentation_dir = os.path.join(self.session_dir, "segmentation")
+        if not os.path.exists(segmentation_dir):
+            os.makedirs(segmentation_dir)
+
+        return luigi.LocalTarget(os.path.join(segmentation_dir, "mic.wav"))
+
+    def run(self):
+        nix = NixIO(self.input().path)
+        block = nix.read_block(lazy=True)
+
+        for signal in block.segments[0].analogsignals:
+            if signal.annotations["neo_name"] == "Board ADC":
+                mic_signal = signal
+
+        mic_signal = nix.load_lazy_object(mic_signal)
+        mic_data = np.array(mic_signal)
+        mic_data_minus_mean = mic_data - np.mean(mic_data, axis=0)
+
+        samplerate = int(mic_signal.sampling_rate.item())
+        channels = mic_data_minus_mean.shape[1]
+
+        with sf.SoundFile(self.output().path, "w", samplerate=samplerate, channels=channels) as soundfile:
+            logger.info("Writing mic data to {}".format(self.output().path))
+            soundfile.write(np.array(mic_data_minus_mean))
 
 
 class CreateMicrophoneAlignedCodes(luigi.Task):
