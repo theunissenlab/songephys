@@ -95,7 +95,7 @@ class App(object):
 
     def __init__(self, events, loader, savepath=None, loadpath=None, figsize=(8, 8)):
         self.events = events
-        self.fs = loader._signals["mic"][0].sampling_rate
+        self.fs = loader.get_signal_sampling_rate("mic")
 
         if savepath is None:
             self.savepath = loadpath or "temp_syllable_labeling.npy"

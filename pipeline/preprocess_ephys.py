@@ -238,7 +238,7 @@ class CheckLiveCalls(luigi.Task):
                 sig = sig - np.mean(sig, axis=0)
                 sig = bandpass_filter(
                     sig.T,
-                    lazy_site._signals["mic"][0].sampling_rate,
+                    lazy_site.get_signal_sampling_rate("mic"),
                     1000,
                     8000
                 ).T

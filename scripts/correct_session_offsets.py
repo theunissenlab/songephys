@@ -1,3 +1,8 @@
+"""
+Used to correct the timestamps in a site's sessions.yaml file
+"""
+
+
 import datetime
 
 

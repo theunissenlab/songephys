@@ -23,6 +23,7 @@ import numpy as np
 from numpy.lib.format import open_memmap
 from neo.io import NixIO
 from format.io import load_block, load_yaml
+from utils import deprecated
 
 import config
 
@@ -280,6 +281,10 @@ class LazySignal(object):
                 chunk = new_array[i:i + batch_size]
                 self._write(chunk, n=chunk.shape[0], offset=offset + i)
 
+    @deprecated("The lazy.LazySignal object has been moved to "
+            "format.lazy.LazySignal. If you are seeing this after "
+            "loading a site/session, lazy files for this site and "
+            "site/session should be updated to use the new module.")
     def time_slice(self, t_start, t_stop):
         """Access a subset of the data array
 
@@ -451,6 +456,10 @@ class LazySite(object):
 
         self._signals[signal_name] = signals
 
+    @deprecated("The lazy.LazySite object has been moved to "
+            "format.lazy.LazySite. If you are seeing this after loading "
+            "a site, the lazy objects for the site and its sessions "
+            "should be updated.")
     def time_slice(self, t_start, t_stop, signal=None):
         """Access a subset of the data array by time
 

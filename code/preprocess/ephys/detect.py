@@ -1,4 +1,10 @@
+import sys
 from collections import defaultdict
+
+try:
+    import concurrent.futures as concurrent_futures
+except ImportError:
+    concurrent_futures = None
 
 import numpy as np
 
@@ -112,3 +118,115 @@ def extract_spikes(
             }
 
     return results
+
+
+def get_snippet_size(t_pre, t_post, sampling_rate):
+    """Compute number of samples and time array for snipping waveforms
+
+    Previous code used a snippet "radius" (equal time cut before and after peak)
+    Instead, we want to be able to vary how much time before and after peak are
+    included in the snippets for analysis.
+
+    Args
+    ----
+    t_pre : float
+        Time before peak in seconds
+    t_post : float
+        Time after peak in seconds
+    sampling_rate : int
+        Sampling rate of signal
+
+    Returns a tuple of 5 elements:
+        - time array (time array for cut snippets using the following params)
+        - samples_pre (number of samples before peak)
+        - samples_post (number of samples after peak)
+        - t_pre (time before peak in seconds, discretized by sampling_rate steps)
+        - t_post (time after peak in seconds, discretized by sampling_rate steps)
+        - peak_idx (index of peak value)
+    """
+    expect_samples_pre = int(np.ceil(t_pre * sampling_rate))
+    expect_samples_post = int(np.ceil(t_post * sampling_rate))
+
+    t_arr = np.zeros(expect_samples_pre + expect_samples_post)
+    t_arr[:expect_samples_pre] = -np.arange(expect_samples_pre, 0, -1) / sampling_rate
+    t_arr[expect_samples_pre:] = np.arange(expect_samples_post) / sampling_rate
+
+    t_pre_discrete = expect_samples_pre / sampling_rate
+    t_post_discrete = expect_samples_post / sampling_rate
+    peak_idx = expect_samples_pre
+
+    return (
+        t_arr,
+        expect_samples_pre,
+        expect_samples_post,
+        t_pre_discrete,
+        t_post_discrete,
+        peak_idx
+    )
+
+def recut_waveforms(
+        lazy_site,
+        spike_times,
+        elec_id,
+        channel_ids=None,
+        t_pre=0.0005,
+        t_post=0.001,
+        tqdm_fn=None,
+    ):
+    """Recuts sorted spike snippets using the given spike times
+    """
+    if channel_ids is not None:
+        elec_idx = np.where(channel_ids == elec_id)[0][0]
+    else:
+        elec_idx = elec_id
+
+    sampling_rate = lazy_site.get_signal_sampling_rate("filtered")
+
+    t_arr, samples_pre, samples_post, t_pre_discrete, t_post_discrete, peak_idx = get_snippet_size(
+        t_pre,
+        t_post,
+        sampling_rate,
+    )
+    output_waveforms = np.zeros((len(spike_times), samples_pre + samples_post))
+
+    iterator = enumerate(spike_times)
+    if tqdm_fn is not None:
+        pbar = tqdm_fn(total=len(spike_times))
+    else:
+        pbar = None
+
+    def _parallel_slice(spike_idx, peak_time, t_pre_discrete, t_post_discrete):
+        sliced = lazy_site.time_slice(
+            peak_time - t_pre_discrete,
+            peak_time + t_post_discrete,
+            signal="filtered"
+        )
+        return spike_idx, sliced.data[:, elec_idx]
+
+    if concurrent_futures:
+        with concurrent_futures.ThreadPoolExecutor(max_workers=8) as executor:
+            futures = []
+            for spike_idx, peak_time in iterator:
+                futures.append(executor.submit(_parallel_slice, spike_idx, peak_time, t_pre_discrete, t_post_discrete))
+
+            for future in concurrent_futures.as_completed(futures):
+                spike_idx, wf = future.result()
+                if len(wf) != output_waveforms.shape[1]:
+                    raise ValueError("Slice size {} does not match expected {}".format(
+                        wf.shape[0], output_waveforms.shape[1]))
+                output_waveforms[spike_idx] = wf
+                if pbar:
+                    pbar.update(1)
+            pbar.close()
+    else:
+        for spike_idx, peak_time in iterator:
+            spike_idx, wf = _parallel_slice(spike_idx, peak_time, t_pre_discrete, t_post_discrete)
+            if len(wf) != output_waveforms.shape[1]:
+                raise ValueError("Slice size {} does not match expected {}".format(
+                    wf.shape[0], output_waveforms.shape[1]))
+            output_waveforms[spike_idx] = wf
+            if pbar:
+                pbar.update(1)
+        pbar.close()
+
+    return t_arr, output_waveforms, peak_idx, sampling_rate

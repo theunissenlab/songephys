@@ -74,6 +74,24 @@ def split_stims_by_vocalizations(wav, expected_onsets=3):
     return result
 
 
+def to_unit_id(electrode, cluster, site):
+    return "e{}u{}s{}".format(electrode, cluster, site)
+
+
+def from_unit_id(unit_id):
+    u_marker = unit_id.index("u")
+    s_marker = unit_id.index("s")
+    elec = int(unit_id[1:u_marker])
+    unit = int(unit_id[u_marker + 1:s_marker])
+    site = unit_id[s_marker + 1:]
+
+    return {
+        "electrode": elec,
+        "unit": unit,
+        "site": site
+    }
+
+
 def package_unit_lightweight(site, electrode, cluster, ignore_isi_above=0.1, good_isi_cutoff=0.02):
     """
     Create summary information for a single unit, split into separate data structures
@@ -93,7 +111,7 @@ def package_unit_lightweight(site, electrode, cluster, ignore_isi_above=0.1, goo
     labeled_nodes_dict = dict(spike_file.labeled_nodes)
     cluster_node = labeled_nodes_dict[cluster]
 
-    unit_id = "e{}u{}s{}".format(electrode, cluster, site)
+    unit_id = to_unit_id(electrode, cluster, site)
     outputs["id"] = dict(
         unit_id=unit_id,
         site=site,

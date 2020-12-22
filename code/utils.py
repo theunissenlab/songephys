@@ -1,3 +1,4 @@
+import logging
 import time
 from functools import wraps
 
@@ -5,17 +6,24 @@ import numpy as np
 import theano
 
 
+logger = logging.getLogger(__name__)
+
+
 class DeprecatedFunction(Exception):
     pass
 
 
-def deprecated(msg):
+def deprecated(msg, force=True):
     """Mark a function as deprecated. Specify what new function to use in the msg.
     """
     def _wrapper(func):
         @wraps(func)
         def _raiser(*args, **kwargs):
-            raise DeprecatedFunction(msg)
+            if force:
+                raise DeprecatedFunction(msg)
+            else:
+                logger.warn("{}: {}".format(DeprecatedFunction, msg))
+                return func(*args, **kwargs)
         _raiser.__name__ = func.__name__
         return _raiser
     return _wrapper
@@ -50,7 +58,7 @@ def intervals_overlap(interval1, interval2):
     """
     if interval1[0] <= interval2[1] < interval1[1]:
         return True
-    elif interval2[0] <= interval1[1] < interval2[1]:
+    elif interval2[0] <= interval1[1] <= interval2[1]:
         return True
     else:
         return False

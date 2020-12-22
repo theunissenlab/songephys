@@ -446,6 +446,13 @@ class LazySite(object):
 
         self._signals[signal_name] = signals
 
+    @property
+    def signals(self):
+        return list(self._signals.keys())
+
+    def get_signal_sampling_rate(self, signal_name):
+        return self._signals[signal_name][0].sampling_rate
+
     def time_slice(self, t_start, t_stop, signal=None):
         """Access a subset of the data array by time
 

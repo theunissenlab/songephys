@@ -7,12 +7,12 @@ import theano
 from utils import deprecated
 
 
-@deprecated("Use utils.float_x")
+@deprecated("Use utils.float_x", force=True)
 def float_x(x):
     return np.asarray(x, dtype=theano.config.floatX)
 
 
-@deprecated("Use utils.convert_seconds_to_minutes instead")
+@deprecated("Use utils.convert_seconds_to_minutes instead", force=True)
 def convert_mins(t_sec):
     """Convert time in seconds to a string in minutes or hours"""
     if t_sec == np.inf:
@@ -26,7 +26,7 @@ def convert_mins(t_sec):
         return "{:.1f}m".format(minutes)
 
 
-@deprecated("Use utils.estimate_time_remaining")
+@deprecated("Use utils.estimate_time_remaining", force=True)
 def estimate_time_remaining(started_at, fraction_complete):
     time_elapsed = time.time() - started_at
     if fraction_complete:
@@ -36,7 +36,7 @@ def estimate_time_remaining(started_at, fraction_complete):
     return time_elapsed, est_total_time - time_elapsed
 
 
-@deprecated("Use plot_utils.border")
+@deprecated("Use plot_utils.border", force=True)
 def border(ax, left=False, right=False, top=False, bottom=False):
     ax.spines["left"].set_visible(left)
     ax.spines["right"].set_visible(right)
@@ -44,7 +44,7 @@ def border(ax, left=False, right=False, top=False, bottom=False):
     ax.spines["bottom"].set_visible(bottom)
 
 
-@deprecated("Use plot_utils.get_square_dims")
+@deprecated("Use plot_utils.get_square_dims", force=True)
 def get_square_dims(n):
     root = np.sqrt(n)
     if root == np.floor(root):

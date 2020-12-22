@@ -16,6 +16,7 @@ from preprocess.sound.playback_utils import (
     convert_digital_to_metadata,
     get_vocalizer_relation
 )
+from utils import intervals_overlap
 
 import config
 
@@ -136,21 +137,38 @@ def get_default_threshold(mic, window=5):
     return np.median(all_thresholds_list[y_pred == 1]), np.std(all_thresholds_list[y_pred == 1])
 
 
-def check_overlap(interval, check_intervals):
-    t1, t2 = interval
+def check_if_any_interval_overlaps(test_interval, check_intervals):
+    """Checks if test_interval (t1, t2) overlaps any interval in check_intervals
+
+    NOTE: only is guaranteed to be correct for series of check_intervals that are sorted and non-overlapping themselves
+
+    This function was written to check if a given interval for a
+    potential live vocalization overlapped any known playback periods.
+
+    Params
+    ======
+    test_interval (tuple): t1, t2 tuple of interval to check
+    check_intervals (list of tuples):
+        list of tuples of (t_i[0], t_i[1]) to check if interval overlaps.
+        check_intervals should be sorted and nonoverlapping. Otherwise the
+        correctness of this function is not guaranteed
+
+    Returns
+    =======
+    Returns a boolean value True if test_interval is found to
+    overlap with an interval in check_intervals, otherwise
+    False
+    """
+    t1, t2 = test_interval
     check_intervals = np.array(check_intervals)
     if not len(check_intervals):
         return False
 
-    try:
-        idx = np.searchsorted(check_intervals[:, 0], interval[0])
-    except:
-        print(check_intervals.shape)
-        raise
+    idx = np.searchsorted(check_intervals[:, 0], t1)
 
-    if idx > 0 and t1 < check_intervals[idx - 1][1]:
+    if idx != 0 and intervals_overlap(test_interval, check_intervals[idx - 1]):
         return True
-    elif idx < len(check_intervals) and t2 > check_intervals[idx][0]:
+    elif idx < len(check_intervals) and intervals_overlap(test_interval, check_intervals[idx]):
         return True
     else:
         return False
@@ -327,7 +345,7 @@ def cluster_syllables(lazy_mic, syllable_intervals, exclude_intervals=None, pad=
     for t1, t2 in syllable_intervals:
         # Excluded intervals are those that we don't want to detect calls in
         # e.g. playback periods
-        if exclude_intervals is not None and check_overlap((t1, t2), exclude_intervals):
+        if exclude_intervals is not None and check_if_any_interval_overlaps((t1, t2), exclude_intervals):
             continue
         else:
             final_syllable_intervals.append((t1, t2))
@@ -640,7 +658,7 @@ def generate_stim_dicts(digital_codes, sample_rate, playbacks_db):
 def shave_silences(event, loader):
     """Use amplitude envelope to shave off any silent padding"""
     event = dict(event)
-    fs = loader._signals["mic"][0].sampling_rate
+    fs = loader.get_signal_sampling_rate("mic")
 
     if event.get("sound_type") == "silence":
         return event
@@ -691,7 +709,7 @@ def get_surrounding_silence(
     """Return time periods corresponding to silence around given vocal events"""
     silence_events = []
 
-    sr = loader._signals["mic"][0].sampling_rate
+    sr = loader.get_signal_sampling_rate("mic")
 
     for i in np.arange(len(all_events) - 1):
         e1 = all_events[i]

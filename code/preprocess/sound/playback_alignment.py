@@ -11,7 +11,7 @@ from scipy.signal import correlate
 from soundsig.signal import resample_signal
 
 
-def find_alignment(signal, template):
+def _find_alignment(signal, template):
     """Find best index in signal to align template waveform
     """
     correlated = correlate(signal, template, mode="same")
@@ -35,7 +35,7 @@ def compute_realigned_trial_times(
     the audio stimuli to the microphone signal recorded.
 
     For each trial, computes a best alignment to the Intan data, then sets the
-    median over all trials as the offset for all trials.
+    offset for that trial equal to that best alignment.
 
     Parameters
     ----------
@@ -72,12 +72,11 @@ def compute_realigned_trial_times(
 
             stim_sr = wav_object.rate
             wav_data = wav_object.data[:, 0]
-            # assert sr == intan_lazy_mic.sampling_rate
             if stim_sr != intan_sr:
                 _, wav_data  = resample_signal(wav_data, stim_sr, intan_sr)
             _loaded_stim_cache[row.stimulus_name] = wav_data
 
-        estimated_start = (row.time - intan_start_time).total_seconds()  # timedelta
+        estimated_start = (row.time - intan_start_time).total_seconds()
         if estimated_start < 0 or estimated_start > intan_lazy_mic.N / intan_lazy_mic.sampling_rate:
             new_start_times.append(estimated_start)
             continue
@@ -92,7 +91,7 @@ def compute_realigned_trial_times(
         best_score = 0
         best_estimate_index = None
         for i in np.arange(recorded_data.shape[1]):
-            correlated, estimated_index = find_alignment(recorded_data[:, i], wav_data)
+            correlated, estimated_index = _find_alignment(recorded_data[:, i], wav_data)
             score = np.max(np.abs(correlated) / np.max(np.abs(recorded_data[:, i])))
             if score > best_score:
                 best_estimate_index = estimated_index

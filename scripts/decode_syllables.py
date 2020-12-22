@@ -44,7 +44,7 @@ for SITE, syllable_group in syllable_groups.items():
     site = os.path.join(config.DATADIR, "birds", bird, "sites", SITE)
     loader = read_pickle(os.path.join(site, "lazy_data.pkl"))
 
-    fs = loader._signals["mic"][0].sampling_rate
+    fs = loader.get_signal_sampling_rate("mic")
 
     # Get all units at the site
     all_units = []
@@ -206,7 +206,7 @@ for SITE, syllable_group in syllable_groups.items():
     site = os.path.join(config.DATADIR, "birds", bird, "sites", SITE)
     loader = read_pickle(os.path.join(site, "lazy_data.pkl"))
 
-    fs = loader._signals["mic"][0].sampling_rate
+    fs = loader.get_signal_sampling_rate("mic")
 
     # Get all units at the site
     all_units = []

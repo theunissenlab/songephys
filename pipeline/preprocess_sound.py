@@ -112,8 +112,11 @@ class ExportMicrophonesToWav(luigi.Task):
 class CreateMicrophoneAlignedCodes(luigi.Task):
     """Align stimulus playback info with microphone data
 
-    Can be used to validate playback times or to replace
-    digital codes if they are not there.
+    Attempts to align the stimulus wav files to the audio picked up on the
+    microphones to determine what timestamps the trials occured at.
+
+    These timestmaps can be used to validate playback times recorded by
+    our digital codes or to fill in digital codes if they are not there.
 
     Inputs
     ------
@@ -596,11 +599,6 @@ class DetectVocalAndSilentPeriods(luigi.Task):
             allow_pickle=True
         )[()]
 
-        # # this odesnt belong here but i need to do it
-        # vocal_periods["playback"] = [e for e in vocal_periods["playback"] if e["duration"].item() > 1.5]
-        # vocal_periods["live"] = [e for e in vocal_periods["live"] if e["duration"].item() > 1.5]
-
-        # FIXME: fix merge segments to not mess up the overlap trials.
         all_events = np.array(merge_segments(
             vocal_periods["playback"],
             vocal_periods["live"]
