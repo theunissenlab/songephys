@@ -55,18 +55,18 @@ def guided_reassignment(X, y=None, force_clusters=None):
     force_clusters: number of clusters to come up with
     """
     if force_clusters is not None:
-        k = force_clusters
+        k = force_clusters - 1
     elif y is not None:
-        k = len(np.unique(y))
+        k = len(np.unique(y)) - 1
     else:
         k = 2
 
     if y is None:
         y = GaussianMixture(n_components=k, max_iter=1000).fit_predict(X)
     
-    projection = LDA(n_components=2).fit(X, y).transform(X)
+    projection = LDA(n_components=1).fit(X, y).transform(X)
     new_y = isosplit5(projection.T) - 1
-    
+
     if force_clusters is not None and len(np.unique(new_y)) != force_clusters:
         return y
     
@@ -99,7 +99,6 @@ def split_window(wfs, labels, umapped):
 
 def cluster_window(wfs, projected):
     projection = FastICA(n_components=ICA_COMPONENTS, max_iter=1000).fit_transform(wfs)
-
     labels = BayesianGaussianMixture(n_components=GMM_COMPONENTS, max_iter=1000).fit_predict(projection)
 
     labels = split_window(wfs, labels, projected)
@@ -132,7 +131,7 @@ def connect_windows(windows, label_windows, reassign=True):
 
     for i in range(len(windows) - 1):
         # Compare window i and i + 1
-        print("{}/{}".format(i, len(windows)), end="\r")
+        print("Comparing window {}/{}".format(i, len(windows)), end="\r")
 
         # Create links step
         for c1 in np.unique(label_windows[i]):
@@ -165,7 +164,7 @@ def connect_windows(windows, label_windows, reassign=True):
                 
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
-                    lda = LDA(n_components=2).fit(
+                    lda = LDA(n_components=1).fit(
                         all_pts, labels_
                     )
 
@@ -184,10 +183,8 @@ def connect_windows(windows, label_windows, reassign=True):
                     labels = [edge[0][1] for edge in in_edges]
                     prev_node = node[0] - 1
                     curr_node = node[0]
-
                     selector = np.where(label_windows[curr_node] == node[1])[0]
-
-                    discriminator = LDA(n_components=n_in_edges).fit(
+                    discriminator = LDA(n_components=n_in_edges - 1).fit(
                         windows[prev_node][1][np.isin(label_windows[prev_node], labels)],
                         label_windows[prev_node][np.isin(label_windows[prev_node], labels)]
                     )
