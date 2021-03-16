@@ -74,7 +74,7 @@ def _get_stim_dirs(csv_files, stimuli_directory):
     return stim_dirs
 
 
-class ExportMicrophonesToWav(luigi.Task):
+class ExportSessionMicrophonesToWav(luigi.Task):
     """Write the microphone data from Nix file to a wav file
     """
     session_dir = luigi.Parameter()
@@ -101,12 +101,40 @@ class ExportMicrophonesToWav(luigi.Task):
         mic_data = np.array(mic_signal)
         mic_data_minus_mean = mic_data - np.mean(mic_data, axis=0)
 
-        samplerate = int(mic_signal.sampling_rate.item())
+        # Some of the sampling rates on the mic signals have a floating point error
+        # resulting in sampling rates that look like 24999.99999999999...
+        # Instead, assume the sampling rate is supposed to be an integer, and round the sampling rate
+        samplerate = int(round(mic_signal.sampling_rate.item()))
         channels = mic_data_minus_mean.shape[1]
 
         with sf.SoundFile(self.output().path, "w", samplerate=samplerate, channels=channels) as soundfile:
             logger.info("Writing mic data to {}".format(self.output().path))
             soundfile.write(np.array(mic_data_minus_mean))
+
+
+class ExportMicrophonesToWav(luigi.Task):
+
+    site_dir = luigi.Parameter()
+
+    def requires(self):
+        self.session_info = load_yaml(
+                os.path.join(self.site_dir, "sessions.yaml")
+        )
+        for session in self.session_info["sessions"]:
+            session_dir = os.path.join(
+                    self.site_dir,
+                    "..",
+                    "..",
+                    "sessions",
+                    session["id"]
+            )
+            yield ExportSessionMicrophonesToWav(session_dir=session_dir)
+
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir, "dummyfile0123456"))
+
+    def run(self):
+        pass
 
 
 class CreateMicrophoneAlignedCodes(luigi.Task):
@@ -500,7 +528,7 @@ class MergeLiveCalls(luigi.Task):
         np.save(self.output().path, combined_result)
 
 
-class CreateSoundsepAutodetectedPeriods(luigi.Task):
+class CreateAutodetectedPeriods(luigi.Task):
     site_dir = luigi.Parameter()
 
     def requires(self):
