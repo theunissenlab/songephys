@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import luigi
+import tqdm
 
 import suss.io
 import numpy as np
@@ -92,18 +93,26 @@ class DownloadPeckingTestData(luigi.Task):
             trial_file.write(resp.content)
 
 
+
+
 class PackageUnits(luigi.Task):
     """This task also injects the reward in... maybe a better place to do it but why not here for now... and always
     """
     site_dir = luigi.Parameter()
+    force = luigi.BoolParameter(default=False)
 
     def output(self):
         packaged_dir = os.path.join(self.site_dir, "packaged_unit_stim_responses")
+        threshold_dir = os.path.join(self.site_dir, "packaged_unit_threshold_metadata")
         waveform_dir = os.path.join(self.site_dir, "packaged_unit_waveforms")
-        finished_marker = os.path.join(self.site_dir, "packaged_unit_stim_responses", ".luigi_task_finished")
+        if not self.force:
+            finished_marker = os.path.join(self.site_dir, "packaged_unit_stim_responses", ".luigi_task_finished")
+        else:
+            finished_marker = "asdfasdfasdfblahsldkfhalsdjfa"
 
         return {
             "packaged_folder": luigi.LocalTarget(packaged_dir),
+            "threshold_metadata_folder": luigi.LocalTarget(threshold_dir),
             "waveform_folder": luigi.LocalTarget(waveform_dir),
             "task_finished": luigi.LocalTarget(finished_marker)
         }
@@ -129,15 +138,22 @@ class PackageUnits(luigi.Task):
         if not os.path.exists(waveform_dir):
             os.makedirs(waveform_dir)
 
+        threshold_dir = self.output()["threshold_metadata_folder"].path
+        if not os.path.exists(threshold_dir):
+            os.makedirs(threshold_dir)
+
         site = os.path.basename(self.site_dir)
 
-        for elec, sort_result in enumerate(self.input()["sort_results"]):
+        for elec, sort_result in tqdm.tqdm(
+                    enumerate(self.input()["sort_results"]),
+                    total=len(self.input()["sort_results"])
+                ):
             sorted_file = suss.io.read_pickle(sort_result.path)
             clusters = sorted(list(dict(sorted_file.labeled_nodes).keys()))
             for cluster in clusters:
                 out = package_unit_lightweight(site, elec, cluster)
                 if out is None:
-                    print("Skipped {} {} {}".format(site, elec, cluster))
+                    # print("Skipped {} {} {}".format(site, elec, cluster))
                     continue
 
                 np.savez(
@@ -160,9 +176,14 @@ class PackageUnits(luigi.Task):
                 out["responses"].to_pickle(
                     os.path.join(self.output()["packaged_folder"].path, out["id"])
                 )
-                print("Saved {} {} {}".format(site, elec, cluster))
 
-        Path(self.output()["task_finished"].path).touch()
+                np.savez(
+                    os.path.join(self.output()["threshold_metadata_folder"].path, out["id"]),
+                    **out["threshold_metadata"]
+                )
+
+        if not self.force:
+            Path(self.output()["task_finished"].path).touch()
 
 
 class RecutWaveformSnippets(luigi.Task):
@@ -328,6 +349,26 @@ class StackAllUnits(luigi.Task):
         df["stimulus_file"] = df["file"]
         df = df.drop("file", axis=1)
         df.to_pickle(self.output().path)
+
+
+class BackupPackageUnits(luigi.Task):
+    def output(self):
+        return luigi.LocalTarget("imacrazyperson")
+
+    def requires(self):
+        return SetupSiteList()
+
+    def run(self):
+        with open(self.input().path, "r") as sitelist:
+            sites = sitelist.readlines()
+        sites = [s.strip() for s in sites]
+
+        dfs = []
+        for site in sites:
+            subject = site.split("_")[0]
+            site_dir = os.path.join("data", "birds", subject, "sites", site)
+            old_dir = os.path.join(site_dir, "packaged_unit_stim_responses")
+            shutil.move(old_dir, "{}.0.bak".format(old_dir))
 
 
 class PackageStimuli(luigi.Task):

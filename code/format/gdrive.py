@@ -34,7 +34,7 @@ except CredentialsNotFound:
     logger.warning("Google Drive authentication failed. Need to set up gdrive authentication:\n"
         "python -m gdrive_access.setup_credentials --dir {}".format(config.GDRIVE_CREDENTIALS_DIR))
 else:
-    root = g.get_root("Intan Ephys Data")
+    root = g.find("Intan Ephys Data")
 
 
 class EphysSiteDownloader(object):
