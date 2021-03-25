@@ -1,5 +1,4 @@
 import os
-import shutil
 
 import numpy as np
 import luigi
@@ -138,24 +137,26 @@ class DownloadSession(luigi.Task):
     def run(self):
         """Use the yaml file to download RHDs and pyoperant csvs for this session
         """
-        if gdrive.root is None:
-            raise Exception("Not authenticated with Google Drive; "
-                            "cannot download raw data files")
-
-        if not len(self.site_dirs):
-            raise Exception("No sites were found with sessions.yaml containing {}".format(self.session_dir))
-
+        
         # Get the lab name from the first site
         # This is needed for the download function to adjust
         # for slightly different directory structure on google drive
         session_config = load_yaml(os.path.join(self.site_dirs[0], "sessions.yaml"))
         LAB_NAME = session_config.get("lab", "theunissen")
+        
 
-        gdrive.downloaders[LAB_NAME].download_session(
+        if not len(self.site_dirs):
+            raise Exception("No sites were found with sessions.yaml containing {}".format(self.session_dir))
+            
+        g = gdrive.downloaders[LAB_NAME]
+
+        g.download_session(
             self.session_name,
             save_to=self.session_dir,
             pyoperant_files=self.pyoperants,
         )
+        
+
 
 
 class DownloadSite(luigi.Task):

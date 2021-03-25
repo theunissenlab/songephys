@@ -42,9 +42,9 @@ def parse_filelist(filelist_path):
         for line in filelist.readlines():
             line = line.strip()
             if name is None:
-                if line not in ["theunissen", "seewiesen", "test"]:
+                if line not in ["theunissen", "seewiesen", "seewiesenCloud", "test"]:
                     raise ValueError("The first line of filelist must be "
-                                     "either 'theunissen', 'seewiesen', or 'test'")
+                                     "either 'theunissen', 'seewiesen', 'seewiesenCloud' or 'test'")
                 name = line
                 continue
 

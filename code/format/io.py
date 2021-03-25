@@ -17,7 +17,7 @@ def load_block(filename):
 
 def load_yaml(filename):
     with open(filename, "r") as datafile:
-        data = yaml.load(datafile.read())
+        data = yaml.load(datafile.read(), Loader = yaml.FullLoader)
     return data
 
 

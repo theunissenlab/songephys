@@ -14,27 +14,23 @@ Intan Ephys Data/
 from __future__ import print_function
 import logging
 import os
-import time
 
+# For gdrive downloads
 from gdrive_access import GDriveCommands
-from gdrive_access.errors import CredentialsNotFound, NotFoundError
+from gdrive_access.errors import CredentialsNotFound
 
+# For owncloud downloads
+from format.io import load_yaml
+import owncloud
+
+# The config file is in code and has a bnuch of globa variables - mostly for spike sorting
 import config
+import zipfile
 
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.StreamHandler())
 logger.setLevel(logging.DEBUG)
-
-
-try:
-    g = GDriveCommands(os.path.join(config.GDRIVE_CREDENTIALS_DIR, "settings.yaml"))
-except CredentialsNotFound:
-    root = None
-    logger.warning("Google Drive authentication failed. Need to set up gdrive authentication:\n"
-        "python -m gdrive_access.setup_credentials --dir {}".format(config.GDRIVE_CREDENTIALS_DIR))
-else:
-    root = g.get_root("Intan Ephys Data")
 
 
 class EphysSiteDownloader(object):
@@ -45,7 +41,39 @@ class EphysSiteDownloader(object):
     files as they are downloaded, etc, inherit from this class and override/define
     the needed functions
     """
-
+    
+    def __init__(self, lab):
+        self.lab = lab
+        
+    def connect(self):
+        
+        if (self.lab != 'seewiesenCloud'):
+            self.cloud = 'gdrive'
+            try:
+                self.g = GDriveCommands(os.path.join(config.GDRIVE_CREDENTIALS_DIR, "settings.yaml"))
+            except CredentialsNotFound:
+                self.root = None
+                logger.warning("Google Drive authentication failed. Need to set up gdrive authentication:\n"
+                           "python -m gdrive_access.setup_credentials --dir {}".format(config.GDRIVE_CREDENTIALS_DIR))
+            else:
+                self.root = self.g.get_root("Intan Ephys Data")
+        else:
+            self.cloud = 'owncloud'
+            self.g = owncloud.Client('https://owncloud.gwdg.de')
+            loginData = load_yaml(os.path.join(os.environ.get('PROJECT_ROOT'), 'owncloud.yaml'))  
+            
+            try:
+                self.g.login(loginData['user'], loginData['key'])
+            except:
+                self.root = None
+                logger.warning("Could not log on to Owncloud drive")
+            else:
+                self.root = '/'
+            
+    def close(self):
+        if (self.cloud == 'owncloud'):
+            self.g.logout()
+            
     def bird(self, session_id):
         return session_id.split("_")[0]
 
@@ -64,22 +92,35 @@ class EphysSiteDownloader(object):
         Uses site_id to find the files on google drive
         """
         bird = self.bird(site_id)
+        self.connect()
+        
+        if (self.root == None):
+            return
 
         downloaded = []
         for pyoperant_file in csv_list:
             print(self.pyoperant_drive(bird))
             try:
-                csv_file = g.find(self.pyoperant_drive(bird), pyoperant_file)
-            except NotFoundError:
+                if (self.cloud == 'gdrive'):
+                    csv_file = self.g.find(self.pyoperant_drive(bird), pyoperant_file)
+                elif (self.cloud == 'owncloud'):
+                    csv_file = self.pyoperant_drive(bird)+ pyoperant_file
+                    self.g.file_info(csv_file)
+                                       
+            except:
                 logger.warning("File {} not found! "
                                "Skipping...".format(pyoperant_file))
                 continue
 
-            download_dest = os.path.join(save_to, csv_file["title"])
-            g.download_file(csv_file, download_dest)
+            download_dest = os.path.join(save_to, pyoperant_file)
+            if (self.cloud == 'gdrive'):
+                self.g.download_file(csv_file, download_dest)
+            elif (self.cloud == 'owncloud'):
+                self.g.get_file(csv_file, download_dest)
             downloaded.append(download_dest)
 
         logger.info("Downloaded: {}".format(downloaded))
+        self.close()
         return downloaded
 
 
@@ -104,6 +145,9 @@ class EphysSiteDownloader(object):
                 (e.g. "GreYel3594M_trialdata_20170912164335.csv")
         """
         bird = self.bird(session_id)
+        self.connect()
+        if (self.root == None) :
+            return
 
         if session_id.endswith(".rhd"):
             session_id = os.path.splitext(session_id)[0]
@@ -117,8 +161,13 @@ class EphysSiteDownloader(object):
         raw_dir = os.path.join(session_dir, "raw")
         stimuli_dir = os.path.join(session_dir, "stimuli")
         try:
-            rhd_file = g.find(self.bird_drive(bird), "RHD", "{}.rhd".format(session_id))
-        except NotFoundError:
+            if (self.cloud == 'gdrive'):
+                rhd_file = self.g.find(self.rhd_drive(bird), "{}.rhd".format(session_id))
+            elif (self.cloud == 'owncloud'):
+                rhd_file = self.rhd_drive(bird) + "{}.rhd".format(session_id)
+                self.g.file_info(rhd_file)
+                
+        except:
             raise Exception("Rhd file not found")
 
         if not os.path.exists(raw_dir):
@@ -127,15 +176,22 @@ class EphysSiteDownloader(object):
             os.makedirs(stimuli_dir)
 
         if os.path.exists(os.path.join(raw_dir, "{}.rhd".format(session_id))):
-            logger.info("{} already downloaded. "
-                        "Not downloading...".format(rhd_file["title"]))
+            logger.info("{}.rhd already downloaded. "
+                        "Not downloading...".format(session_id))
         else:
-            logger.info("Downloading {} to {}".format(rhd_file["title"], raw_dir))
+            logger.info("Downloading {}.rhd to {}".format(session_id, raw_dir))
 
-            g.download_file(
-                rhd_file,
-                os.path.join(raw_dir, rhd_file["title"])
-            )
+            if (self.cloud == 'gdrive'):
+                self.g.download_file(
+                        rhd_file,
+                        os.path.join(raw_dir, rhd_file["title"])
+                        )
+            elif (self.cloud == 'owncloud'):
+                self.g.get_file(
+                        rhd_file,
+                        os.path.join(raw_dir, "{}.rhd".format(session_id))
+                        )
+                
 
         csv_string = ""
 
@@ -144,72 +200,123 @@ class EphysSiteDownloader(object):
                 pyoperant_file = "{}.csv".format(pyoperant_file)
 
             try:
-                csv_file = g.find(self.pyoperant_drive(bird), pyoperant_file)
-            except NotFoundError:
+                if (self.cloud == 'gdrive'):
+                    csv_file = self.g.find(self.pyoperant_drive(bird), pyoperant_file)
+                elif (self.cloud == 'owncloud'):
+                    csv_file = self.pyoperant_drive(bird) + pyoperant_file
+                    self.g.file_info(csv_file)
+                    
+            except:
                 logger.warning("File {} not found! "
                                "Skipping...".format(pyoperant_file))
                 continue
 
-            logger.info("Downloading {} to {}".format(csv_file["title"], raw_dir))
-            g.download_file(csv_file, raw_dir)
+            logger.info("Downloading {} to {}".format(pyoperant_file, raw_dir))
+            
+            if (self.cloud == 'gdrive'):
+                self.g.download_file(csv_file, os.path.join(raw_dir, pyoperant_file) )
+            elif (self.cloud == 'owncloud'):
+                self.g.get_file(csv_file, os.path.join(raw_dir, pyoperant_file) )
 
-            with open(os.path.join(raw_dir, csv_file["title"]), "rb") as csvfile:
+            with open(os.path.join(raw_dir, pyoperant_file), "rb") as csvfile:
                 csv_string += csvfile.read().decode("utf-8")
 
         # We can load the csvs and check which stimulus directories to download
         if pyoperant_files:
-            stimuli_folders = g.ls(self.stimuli_drive(bird))
-            for stimuli_folder in stimuli_folders:
-                # TODO (check if this is needed)
-                if stimuli_folder["title"] in csv_string:
-                    download_to = os.path.join(stimuli_dir, stimuli_folder["title"])
-                    logger.info("Downloading {} to {}".format(
-                        stimuli_folder["title"],
-                        download_to
-                    ))
-                    g.download_folder(stimuli_folder, download_to)
-
+            if (self.cloud == 'gdrive'):
+                stimuli_folders = self.g.ls(self.stimuli_drive(bird))
+                for stimuli_folder in stimuli_folders:
+                    # TODO (check if this is needed)
+                    if stimuli_folder["title"] in csv_string:
+                        download_to = os.path.join(stimuli_dir, stimuli_folder["title"])
+                        logger.info("Downloading {} to {}".format(
+                                stimuli_folder["title"],
+                                download_to
+                                ))
+                        self.g.download_folder(stimuli_folder, download_to)
+            elif (self.cloud == 'owncloud'):
+                stimuli_folders = self.g.list(self.stimuli_drive(bird))
+                for stimuli_folder in stimuli_folders:
+                    if stimuli_folder.get_name() in csv_string:
+                        download_to = os.path.join(stimuli_dir, stimuli_folder.get_name()+'.zip')
+                        logger.info("Downloading {} to {}".format(
+                                stimuli_folder.get_name(),
+                                download_to
+                                ))
+                        self.g.get_directory_as_zip(stimuli_folder.get_path(), download_to)
+                        # Unzip
+                        with zipfile.ZipFile(download_to, 'r') as zip_ref:
+                            zip_ref.extractall(stimuli_dir)
+        self.close()
 
 class TheunissenDownloader(EphysSiteDownloader):
 
     def bird_drive(self, bird):
-        return g.find(root, bird)
+        return self.g.find(self.root, bird)
+    
+    def rhd_drive(self, bird):
+        return self.g.find(self.root, bird, 'RHD')
 
     def pyoperant_drive(self, bird):
-        return g.find(root, bird, "pyoperant")
+        return self.g.find(self.root, bird, "pyoperant")
 
     def stimuli_drive(self, bird):
-        return g.find(root, bird, "stimuli")
+        return self.g.find(self.root, bird, "stimuli")
 
 
 class SeewiesenDownloader(EphysSiteDownloader):
 
     def bird_drive(self, bird):
-        return g.find(root, "Seewiesen", bird)
+        return self.g.find(self.root, "Seewiesen", bird)
+    
+    def rhd_drive(self, bird):
+        return self.g.find(self.root, "Seewiesen", bird)
 
     def pyoperant_drive(self, bird):
-        return g.find(root, "Seewiesen", bird)
+        return self.g.find(self.root, "Seewiesen", bird)
 
     def stimuli_drive(self, bird):
-        return g.find(root, "Seewiesen", "Stimuli", "Bird1")
+        return self.g.find(self.root, "Seewiesen", "Stimuli", "Bird1")
+
+class SeewiesenOwncloudDownloader(EphysSiteDownloader):
+
+    def bird_drive(self, bird):
+        return "/Seewiesen/" + bird + "/"
+    
+    def rhd_drive(self, bird):
+        return "/Seewiesen/" + bird + "/"
+    
+    def pyoperant_drive(self, bird):
+        return "/Seewiesen/" + bird + "/"
+
+    def stimuli_drive(self, bird):
+        return "/Seewiesen" + "/Stimuli" + "/Bird1/"
+
 
 
 class TestDownloader(EphysSiteDownloader):
     """Set up a test folder of data and use this to point to it"""
-    test_root = g.find(root, "SongephysTestPipelineData")
+    def __init__(self, lab):
+        super().__init__(lab)
+        # self.test_root = self.g.find(self.root, "SongephysTestPipelineData")
+        # I broke this... it will have to be done in connect somehow...
 
     def bird_drive(self, bird):
-        return g.find(self.test_root, bird)
-
+        return self.g.find(self.test_root, bird)
+    
+    def rhd_drive(self, bird):
+        return self.g.find(self.test_root, bird, "RHD")
+    
     def pyoperant_drive(self, bird):
-        return g.find(self.test_root, bird, "pyoperant")
+        return self.g.find(self.test_root, bird, "pyoperant")
 
     def stimuli_drive(self, bird):
-        return g.find(self.test_root, bird, "stimuli")
+        return self.g.find(self.test_root, bird, "stimuli")
 
 
 downloaders = {
-    "seewiesen": SeewiesenDownloader(),
-    "theunissen": TheunissenDownloader(),
-    "test": TestDownloader(),
+    "seewiesen": SeewiesenDownloader(lab ='seewiesen'),
+    "seewiesenCloud" : SeewiesenOwncloudDownloader(lab='seewiesenCloud'),
+    "theunissen": TheunissenDownloader(lab='theunissen'),
+    "test": TestDownloader(lab='theunissen')
 }
