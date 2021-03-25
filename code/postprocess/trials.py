@@ -159,7 +159,7 @@ def package_unit_lightweight(site, electrode, cluster, ignore_isi_above=0.1, goo
     t_stop = np.fix(tmax) + 2
     kde_time = np.linspace(t_start, t_stop, int(t_stop - t_start) + 1)
     kde_density = np.exp(kde.score_samples(kde_time[:, None]))
-    kde_density = kde_density * len(spike_times) / np.sum(kde_density)
+    kde_density = kde_density * len(spike_times)
 
     # Find time periods where isi violations are low
     isi_violations = spike_times[:-1][np.diff(spike_times, axis=0) < 0.001]
@@ -168,7 +168,7 @@ def package_unit_lightweight(site, electrode, cluster, ignore_isi_above=0.1, goo
     else:
         isi_violation_kde = KernelDensity(kernel="gaussian", bandwidth=10.0, rtol=1e-2).fit(isi_violations[:, None])
         isi_violation_density = np.exp(isi_violation_kde.score_samples(kde_time[:, None]))
-        isi_violation_density = isi_violation_density * len(isi_violations) / np.sum(isi_violation_density)
+        isi_violation_density = isi_violation_density * len(isi_violations)
     isi_violation_rate = isi_violation_density / kde_density
     below_threshold_filter = isi_violation_rate < good_isi_cutoff
 
@@ -183,6 +183,14 @@ def package_unit_lightweight(site, electrode, cluster, ignore_isi_above=0.1, goo
     prestim_buffer = 1.0
     duration = 8.0  # (includes the prestim_buffer)
 
+    threshold_metadata = {
+        "t_arr": kde_time,
+        "spike_rate": kde_density,
+        "isi_violation_rate": isi_violation_density,
+        "isi_violations_per_spike": isi_violation_rate,
+        "spike_rate_threshold": rate_threshold,
+        "isi_violations_per_spike_threshold": good_isi_cutoff,
+    }
 
     # lazy_data = np.load(os.path.join(bird_dir, subject, "sites", site, "lazy.npy"), allow_pickle=True)[()]
 
@@ -203,11 +211,7 @@ def package_unit_lightweight(site, electrode, cluster, ignore_isi_above=0.1, goo
                 (spike_times >= t0) & (spike_times < (t0 + duration))
             ] - t0 - prestim_buffer)
 
-            # Trials with no spikes get lumped in with "bad trials"
-            if len(local_spikes[-1]):
-                local_good_trials.append(row["KeepTrial"])
-            else:
-                local_good_trials.append(False)
+            local_good_trials.append(row["KeepTrial"])
 
         good_spikes = [local_spikes[j] for j in range(len(local_spikes)) if local_good_trials[j]]
         output_rows.append({
@@ -230,10 +234,13 @@ def package_unit_lightweight(site, electrode, cluster, ignore_isi_above=0.1, goo
 
     outputs["responses"] = pd.DataFrame(output_rows)
 
+    threshold_metadata["unit_id"] = outputs["id"]["unit_id"]
+
     return {
         "id": outputs["id"]["unit_id"],
         "waveforms": outputs["waveforms"],
-        "responses": outputs["responses"]
+        "responses": outputs["responses"],
+        "threshold_metadata": threshold_metadata,
     }
 
 

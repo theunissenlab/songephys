@@ -41,12 +41,12 @@ class EphysSiteDownloader(object):
     files as they are downloaded, etc, inherit from this class and override/define
     the needed functions
     """
-    
+
     def __init__(self, lab):
         self.lab = lab
-        
+
     def connect(self):
-        
+
         if (self.lab != 'seewiesenCloud'):
             self.cloud = 'gdrive'
             try:
@@ -60,8 +60,8 @@ class EphysSiteDownloader(object):
         else:
             self.cloud = 'owncloud'
             self.g = owncloud.Client('https://owncloud.gwdg.de')
-            loginData = load_yaml(os.path.join(os.environ.get('PROJECT_ROOT'), 'owncloud.yaml'))  
-            
+            loginData = load_yaml(os.path.join(os.environ.get('PROJECT_ROOT'), 'owncloud.yaml'))
+
             try:
                 self.g.login(loginData['user'], loginData['key'])
             except:
@@ -69,11 +69,11 @@ class EphysSiteDownloader(object):
                 logger.warning("Could not log on to Owncloud drive")
             else:
                 self.root = '/'
-            
+
     def close(self):
         if (self.cloud == 'owncloud'):
             self.g.logout()
-            
+
     def bird(self, session_id):
         return session_id.split("_")[0]
 
@@ -93,7 +93,7 @@ class EphysSiteDownloader(object):
         """
         bird = self.bird(site_id)
         self.connect()
-        
+
         if (self.root == None):
             return
 
@@ -106,7 +106,7 @@ class EphysSiteDownloader(object):
                 elif (self.cloud == 'owncloud'):
                     csv_file = self.pyoperant_drive(bird)+ pyoperant_file
                     self.g.file_info(csv_file)
-                                       
+
             except:
                 logger.warning("File {} not found! "
                                "Skipping...".format(pyoperant_file))
@@ -166,7 +166,7 @@ class EphysSiteDownloader(object):
             elif (self.cloud == 'owncloud'):
                 rhd_file = self.rhd_drive(bird) + "{}.rhd".format(session_id)
                 self.g.file_info(rhd_file)
-                
+
         except:
             raise Exception("Rhd file not found")
 
@@ -191,7 +191,7 @@ class EphysSiteDownloader(object):
                         rhd_file,
                         os.path.join(raw_dir, "{}.rhd".format(session_id))
                         )
-                
+
 
         csv_string = ""
 
@@ -205,14 +205,14 @@ class EphysSiteDownloader(object):
                 elif (self.cloud == 'owncloud'):
                     csv_file = self.pyoperant_drive(bird) + pyoperant_file
                     self.g.file_info(csv_file)
-                    
+
             except:
                 logger.warning("File {} not found! "
                                "Skipping...".format(pyoperant_file))
                 continue
 
             logger.info("Downloading {} to {}".format(pyoperant_file, raw_dir))
-            
+
             if (self.cloud == 'gdrive'):
                 self.g.download_file(csv_file, os.path.join(raw_dir, pyoperant_file) )
             elif (self.cloud == 'owncloud'):
@@ -253,7 +253,7 @@ class TheunissenDownloader(EphysSiteDownloader):
 
     def bird_drive(self, bird):
         return self.g.find(self.root, bird)
-    
+
     def rhd_drive(self, bird):
         return self.g.find(self.root, bird, 'RHD')
 
@@ -268,7 +268,7 @@ class SeewiesenDownloader(EphysSiteDownloader):
 
     def bird_drive(self, bird):
         return self.g.find(self.root, "Seewiesen", bird)
-    
+
     def rhd_drive(self, bird):
         return self.g.find(self.root, "Seewiesen", bird)
 
@@ -282,10 +282,10 @@ class SeewiesenOwncloudDownloader(EphysSiteDownloader):
 
     def bird_drive(self, bird):
         return "/Seewiesen/" + bird + "/"
-    
+
     def rhd_drive(self, bird):
         return "/Seewiesen/" + bird + "/"
-    
+
     def pyoperant_drive(self, bird):
         return "/Seewiesen/" + bird + "/"
 
@@ -303,10 +303,10 @@ class TestDownloader(EphysSiteDownloader):
 
     def bird_drive(self, bird):
         return self.g.find(self.test_root, bird)
-    
+
     def rhd_drive(self, bird):
         return self.g.find(self.test_root, bird, "RHD")
-    
+
     def pyoperant_drive(self, bird):
         return self.g.find(self.test_root, bird, "pyoperant")
 

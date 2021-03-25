@@ -27,7 +27,7 @@ pyocclient>=0.6
 -e git://github.com/theunissenlab/python-neo.git@master#egg=neo
 
 # Google drive api access
--e git://github.com/theunissenlab/gdrive_python.git@v0.0.2#egg=gdrive_access
+-e git://github.com/theunissenlab/gdrive_python.git@v0.0.3#egg=gdrive_access
 
 # Spike sorting library
 # For now, install by cloning and setting the path
