@@ -113,7 +113,8 @@ def graph_to_labels(label_windows, G):
     clusts = 6
 
     label_i = 0
-    for subgraph in list(nx.weakly_connected_component_subgraphs(G)):
+    subgraphs = [G.subgraph(c) for c in nx.weakly_connected_components(G)]
+    for subgraph in subgraphs:
         if len(subgraph.nodes) <= 2:
             continue
         for window_idx, cluster_label in subgraph.nodes:
