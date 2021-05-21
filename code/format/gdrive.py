@@ -27,6 +27,8 @@ import owncloud
 import config
 import zipfile
 
+import numpy as np
+
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.StreamHandler())
@@ -194,6 +196,7 @@ class EphysSiteDownloader(object):
 
 
         csv_string = ""
+        stim_dir_list = []
 
         for pyoperant_file in pyoperant_files:
             if not pyoperant_file.endswith(".csv"):
@@ -218,35 +221,53 @@ class EphysSiteDownloader(object):
             elif (self.cloud == 'owncloud'):
                 self.g.get_file(csv_file, os.path.join(raw_dir, pyoperant_file) )
 
-            with open(os.path.join(raw_dir, pyoperant_file), "rb") as csvfile:
-                csv_string += csvfile.read().decode("utf-8")
+            with open(os.path.join(raw_dir, pyoperant_file), "r") as csvfile:
+                csvlines = csvfile.readlines()
+                for csvline in csvlines:
+                    csvtoken = csvline.split(',')
+                    if (csvtoken[0] == 'session'):
+                        continue
+                    stim_dir_path = csvtoken[3].replace('\\','/')
+                    stim_dir_list.append(stim_dir_path.split('/')[-2])
+                    csv_string += stim_dir_path
+
+            stim_dir_list = np.unique(stim_dir_list)
+
 
         # We can load the csvs and check which stimulus directories to download
         if pyoperant_files:
+            stim_foldernames = []
             if (self.cloud == 'gdrive'):
                 stimuli_folders = self.g.ls(self.stimuli_drive(bird))
                 for stimuli_folder in stimuli_folders:
-                    # TODO (check if this is needed)
-                    if stimuli_folder["title"] in csv_string:
-                        download_to = os.path.join(stimuli_dir, stimuli_folder["title"])
+                    stim_foldername = stimuli_folder["title"]
+                    stim_foldernames.append(stim_foldername)
+                    if stim_foldername in csv_string:
+                        download_to = os.path.join(stimuli_dir, stim_foldername)
                         logger.info("Downloading {} to {}".format(
-                                stimuli_folder["title"],
+                                stim_foldername,
                                 download_to
                                 ))
                         self.g.download_folder(stimuli_folder, download_to)
             elif (self.cloud == 'owncloud'):
                 stimuli_folders = self.g.list(self.stimuli_drive(bird))
                 for stimuli_folder in stimuli_folders:
-                    if stimuli_folder.get_name() in csv_string:
-                        download_to = os.path.join(stimuli_dir, stimuli_folder.get_name()+'.zip')
+                    stim_foldername = stimuli_folder.get_name()
+                    stim_foldernames.append(stim_foldername)
+                    if stim_foldername in csv_string:
+                        download_to = os.path.join(stimuli_dir, stim_foldername+'.zip')
                         logger.info("Downloading {} to {}".format(
-                                stimuli_folder.get_name(),
+                                stim_foldername,
                                 download_to
                                 ))
                         self.g.get_directory_as_zip(stimuli_folder.get_path(), download_to)
                         # Unzip
                         with zipfile.ZipFile(download_to, 'r') as zip_ref:
                             zip_ref.extractall(stimuli_dir)
+            # Check to see of all files where found
+            if not set(stim_dir_list).issubset(set(stim_foldernames)) :
+                logger.info("Stim download error: missing stim folders {} in {}".format(stim_dir_list, stim_foldernames))
+
         self.close()
 
 class TheunissenDownloader(EphysSiteDownloader):
