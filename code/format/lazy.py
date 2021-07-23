@@ -538,8 +538,6 @@ def create_lazy_signals_from_nix(nix_file, output_mic, output_elec, batch_size):
     batch_size : int
         Size of chunks to write to disk at a time
     """
-
-
     nix = NixIO(nix_file)
     block = nix.read_block(lazy=True)
     segment = block.segments[0]

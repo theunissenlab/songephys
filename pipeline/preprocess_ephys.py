@@ -1,279 +1,152 @@
-"""
-Ephys Data Pipeline
+"""Ephys Data Pipeline
 
-Run like this:
-
-Need to test:
-    Merging functions
-    Spike sorting functions
+``luigi -m preprocess_ephys PreprocessSite --site-dir SITE_DIR``
 """
 
 from collections import defaultdict
 import os
-import luigi
+import time
 
+import luigi
 import numpy as np
 import matplotlib.pyplot as plt
-
 from soundsig.sound import spectrogram
 from soundsig.signal import bandpass_filter
-import suss.io
 from suss.core import SpikeDataset
+import suss.io
 
 from format.io import load_yaml
-from format.lazy import (
-    LazySignal,
-    LazySite,
-)
-from preprocess.ephys.filter import context_based_filtering
+from format.wav import AudioFile, MultiWavReader
+from preprocess.ephys.filter import common_average_filter
 from preprocess.ephys.detect import extract_spikes
-from preprocess.ephys.newsort import sort as new_sort, create_hierarchy
+from preprocess.ephys.sort import sort, create_hierarchy
 
-from file_setup import SiteConfig, GenerateLazyFiles
+from file_setup import Nix2Wav, SiteConfig, SessionConfig, DefineSessions
+from pipeline_utils import get_session_sites
 import config
 
 
-class FilterSignals(luigi.Task):
-    """Filter out noise from electrode signals
-
-    1. Highpass
-    2. Common average referencing
-    3. Linear filtering during periods of correlated activity
-
-    Inputs
-    ------
-    session_dir : str
-        Path to session
-
-    Outputs a filtered memmap, noise periods that were filtered
-    with the linear filtering method, detected spike times and
-    waveforms for all channels, and updates the lazy_signals lookup
-    object.
+class FilterEphys(luigi.Task):
+    """Apply filters to sections of
     """
-
     session_dir = luigi.Parameter()
 
     def requires(self):
-        return GenerateLazyFiles(self.session_dir)
+        return {
+            "config": SessionConfig(self.session_dir),
+            "wavs": Nix2Wav(self.session_dir)
+        }
 
     def output(self):
         raw_dir = os.path.join(self.session_dir, "raw")
-
-        filtered_path = luigi.LocalTarget(
-            os.path.join(raw_dir, "filtered.memmap"))
-        noise_path = luigi.LocalTarget(
-            os.path.join(self.session_dir, "noise.npy"))
-
-        return {
-            "filtered_memmap": filtered_path,
-            "noise_events": noise_path,
-            "lazy_signals": self.input()["lazy_signals"],
-        }
+        return luigi.LocalTarget(os.path.join(raw_dir, "ephys_filtered.wav"))
 
     def run(self):
-        outputs = self.output()
-        signals = np.load(self.input()["lazy_signals"].path, allow_pickle=True)[()]
-        signal = signals["raw"]
+        config = self.input()["config"].data()
+        input_file = AudioFile(self.input()["wavs"]["ephys.wav"].path)
+        output_file = AudioFile.create(
+            self.output().path,
+            samplerate=input_file.sampling_rate,
+            channels=input_file.channels)
 
-        output_signal = LazySignal(
-            signal.N,
-            signal.M,
-            outputs["filtered_memmap"].path,
-            signal.sampling_rate,
-        )
-
-        _, noise_events = context_based_filtering(
-            signal,
-            output_signal,
-            signal.sampling_rate,
-            65536
-        )
-
-        signals["filtered"] = output_signal
-        np.save(outputs["lazy_signals"].path, signals)
-        np.save(outputs["noise_events"].path, noise_events)
+        try:
+            common_average_filter(
+                input_file,
+                output_file,
+                batch_size=65536,
+                channel_groups=[np.arange(a, b) for a, b in config["filtering"]["ephys.wav"]],
+            )
+        except:
+            output_file.close()
+            os.remove(output_file.path)
+            raise
 
 
-class DetectSpikes(luigi.Task):
-    """Extract spike events from a filtered signal
-
-    Inputs
-    ------
-    session_dir : str
-        Path to session
-
-    Outputs one suss.core.SpikeDataset in a pickle file
-    for each electrode
-    """
-
+class DetectSpikesOnElectrode(luigi.Task):
     session_dir = luigi.Parameter()
+    electrode_idx = luigi.IntParameter()
 
     def requires(self):
-        return FilterSignals(self.session_dir)
+        return FilterEphys(self.session_dir)
 
     def output(self):
         sorting_dir = os.path.join(self.session_dir, "spikes")
-
         if not os.path.exists(sorting_dir):
             os.makedirs(sorting_dir)
 
-        return dict(
-            (e, luigi.LocalTarget(os.path.join(
-                sorting_dir,
-                "spike_waveforms-e{}.pkl".format(e))))
-            for e in config.ELECTRODES
-        )
+        return luigi.LocalTarget(os.path.join(sorting_dir, "spike_waveforms-e{}.pkl".format(self.electrode_idx)))
 
     def run(self):
-        signals = np.load(self.input()["lazy_signals"].path, allow_pickle=True)[()]
-        sampling_rate = signals["filtered"].sampling_rate
-        spike_radius = int(config.SPIKE_WIDTH * sampling_rate)
+        input_file = AudioFile(self.input().path)
+
+        if self.electrode_idx >= input_file.channels:
+            raise ValueError("Cannot read electrode {} on file {} with {} channels".format(self.electrode_idx, self.input().path, input_file.channels))
+
+        spike_radius = int(config.SPIKE_WIDTH * input_file.sampling_rate)
 
         spikes = extract_spikes(
-            signals["filtered"],
+            input_file,
+            channel=self.electrode_idx,
             # Compute threshold in 5 minute windows
-            batch_size=int(sampling_rate * 60 * 5),
+            batch_size=int(input_file.sampling_rate * 60 * 5),
             threshold_std=config.SPIKE_THRESHOLD_STD,
             spike_radius=spike_radius,
-            channel_ids=config.ELECTRODES
         )
 
-        for elec in config.ELECTRODES:
-            spike_dataset = SpikeDataset(
-                spikes[elec]["indices"] / sampling_rate,
-                spikes[elec]["waveforms"],
-                sample_rate=sampling_rate,
-                labels=None
-            )
-            suss.io.save_pickle(
-                self.output()[elec].path,
-                spike_dataset
-            )
+        spike_dataset = SpikeDataset(
+            spikes["indices"] / input_file.sampling_rate,
+            spikes["waveforms"],
+            sample_rate=input_file.sampling_rate,
+            labels=None
+        )
+
+        suss.io.save_pickle(
+            self.output().path,
+            spike_dataset
+        )
 
 
-class MergeLazySignals(luigi.Task):
-    """Merge Lazy signals from each session into a single lookup LazySite object
-    """
-
-    site_dir = luigi.Parameter()
+class DetectSpikesInSession(luigi.Task):
+    session_dir = luigi.Parameter()
 
     def requires(self):
-        self.session_info = load_yaml(
-            os.path.join(self.site_dir, "sessions.yaml")
-        )
-        for session in self.session_info["sessions"]:
-            session_dir = os.path.join(
-                    self.site_dir,
-                    "..",
-                    "..",
-                    "sessions",
-                    session["id"]
-            )
-            yield FilterSignals(session_dir=session_dir)
+        return FilterEphys(self.session_dir)
 
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir, "lazy.npy"))
+        # A bit hacky -- to know what the output is going to be, this task
+        # needs to know about how many ephys channels there are. However, this
+        # method might be evaluated before the first file has even been downloaded
+        # or the configuration file is even first set up!
+        site_dirs, _ = get_session_sites(self.session_dir)
+        if not len(site_dirs):
+            return DetectSpikesOnElectrode(self.session_dir, 0).output()
 
-    def run(self):
-        lazy_signals_raw = []
-        lazy_signals_mic = []
-        lazy_signals_filtered = []
-        signal_times = []
-        for previous_result, session in zip(self.input(), self.session_info["sessions"]):
-            session_sigs = np.load(previous_result["lazy_signals"].path, allow_pickle=True)[()]
-            lazy_signals_mic.append(session_sigs["mic"])
-            lazy_signals_raw.append(session_sigs["raw"])
-            lazy_signals_filtered.append(session_sigs["filtered"])
-            signal_times.append(session["t"])
+        config_path = os.path.join(site_dirs[0], "site_config.yaml")
+        if not os.path.exists(config_path):
+            return DetectSpikesOnElectrode(self.session_dir, 0).output()
 
-        new_site = LazySite(
-            signal_times,
-            mic=lazy_signals_mic,
-            raw=lazy_signals_raw,
-            filtered=lazy_signals_filtered
-        )
+        config = load_yaml(config_path)
+        if "nix2wav" not in config:
+            return DetectSpikesOnElectrode(self.session_dir, 0).output()
 
-        np.save(self.output().path, new_site)
-
-
-class CheckLiveCalls(luigi.Task):
-    """Make a plot that shows examples of clusters of live vocalizations
-    """
-
-    site_dir = luigi.Parameter()
-
-    def requires(self):
-        # Imported here to avoid circular imports
-        from preprocess_sound import MergeLiveCalls
-
-        return {
-            "lazy_site": MergeLazySignals(self.site_dir),
-            "calls": MergeLiveCalls(self.site_dir)
-        }
-
-    def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir, "live_calls.png"))
-
-    def run(self):
-        call_periods = np.load(self.input()["calls"].path, allow_pickle=True)[()]
-        lazy_site = np.load(self.input()["lazy_site"].path, allow_pickle=True)[()]
-
-        idx = defaultdict(int)
-        fig = plt.figure(figsize=(0.4, 1))
-
-        for period in call_periods:
-            if idx[period["label"]] > 20:
-                continue
+        channels = 0
+        for k, idx in config["nix2wav"]["ephys.wav"]:
+            if isinstance(idx, int):
+                channels += idx
             else:
-                ax = fig.add_axes([
-                    idx[period["label"]],
-                    period["label"],
-                    1,
-                    1
-                ])
-                t1 = period["start_time"].item()
-                t2 = (period["start_time"] + period["duration"]).item()
-                sig = lazy_site.time_slice(t1, t2, signal="mic")
-                sig = sig.data
-                sig = sig - np.mean(sig, axis=0)
-                sig = bandpass_filter(
-                    sig.T,
-                    lazy_site.get_signal_sampling_rate("mic"),
-                    1000,
-                    8000
-                ).T
+                channels += idx[1] - idx[0]
 
-                i = np.argmax(np.sum(sig, axis=0))
+        for ch in range(channels):
+            yield DetectSpikesOnElectrode(self.session_dir, ch).output()
 
-                t_spec, f_spec, spec, _ = spectrogram(
-                    sig[:, i],
-                    30000,
-                    1000,
-                    50,
-                    min_freq=250,
-                    max_freq=8000,
-                    cmplx=False
-                )
-
-                ax.pcolormesh(t_spec, f_spec, spec, cmap="Greys")
-
-                ax.spines['top'].set_visible(False)
-                ax.spines['left'].set_visible(False)
-                ax.set_yticks([])
-                ax.set_yticklabels([])
-                ax.set_xticks([])
-                ax.set_xticklabels([])
-
-                if idx[period["label"]] == 0:
-                    ax.set_ylabel(period["label"])
-
-                idx[period["label"]] += 1
-
-        fig.savefig(self.output().path, format="png", bbox_inches='tight')
+    def run(self):
+        input_file = AudioFile(self.input().path)
+        for channel in range(input_file.channels):
+            yield DetectSpikesOnElectrode(session_dir=self.session_dir, electrode_idx=channel)
 
 
-class MergeSpikeDatasets(luigi.Task):
-    """Merge together multiple blocks via offsets
+class CombineSiteSpikes(luigi.Task):
+    """Merge together multiple sessions via offsets
 
     The sessions and relative offsets must be defined in a
     sessions.yaml file in the site directory.
@@ -285,53 +158,47 @@ class MergeSpikeDatasets(luigi.Task):
     site_dir = luigi.Parameter()
 
     def requires(self):
-        inputs = {
-            "session_spikes": [],
-            "session_config": SiteConfig(site_dir=self.site_dir)
-        }
-        session_config = load_yaml(os.path.join(self.site_dir, "sessions.yaml"))
-
-        for session in session_config["sessions"]:
-            session_dir = os.path.join(
-                    self.site_dir,
-                    "..",
-                    "..",
-                    "sessions",
-                    session["id"]
-            )
-            inputs["session_spikes"].append(DetectSpikes(session_dir=session_dir))
-
-        return inputs
+        return DefineSessions(self.site_dir)
 
     def output(self):
         sorting_dir = os.path.join(self.site_dir, "spikes")
         if not os.path.exists(sorting_dir):
             os.makedirs(sorting_dir)
 
+        # TODO: relying on a preset config.N_ELECTRODES is flimsy, but this method
+        # can be run before any data is actually downloaded or configured yet.
+        # Maybe it would be better to stuff this as a key in the site_config.yaml
+        # file instead.
         return dict(
             (e, luigi.LocalTarget(os.path.join(
                 sorting_dir,
                 "spike_waveforms-e{}.pkl".format(e))))
-            for e in config.ELECTRODES
+            for e in range(config.N_ELECTRODES)
         )
 
     def run(self):
-        inputs = self.input()
-        session_config = load_yaml(inputs["session_config"].path)
+        config = self.input().data()
+        session_offsets = [session["t"] for session in config["sessions"]]
+        sessions_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions")
 
-        block_offsets = [session["t"] for session in session_config["sessions"]]
+        spike_results = []
+        for session in config["sessions"]:
+            detected = yield DetectSpikesInSession(os.path.join(sessions_dir, session["id"]))
+            spike_results.append(list(detected))
 
-        for elec in config.ELECTRODES:
+        n_electrodes = len(list(spike_results[0]))
+
+        for electrode_idx in range(n_electrodes):
             spike_datasets = [
-                suss.io.read_pickle(spike_result[elec].path)
-                for spike_result in inputs["session_spikes"]
+                suss.io.read_pickle(spike_result[electrode_idx].path)
+                for spike_result in spike_results
             ]
 
             # join together the spike times and waveforms
             # add the session start time to all times in each session
             spike_times = np.concatenate([
                 data.times + offset
-                for data, offset in zip(spike_datasets, block_offsets)
+                for data, offset in zip(spike_datasets, session_offsets)
             ])
             waveforms = np.concatenate([data.waveforms for data in spike_datasets])
             new_dataset = SpikeDataset(
@@ -339,7 +206,7 @@ class MergeSpikeDatasets(luigi.Task):
                 waveforms,
                 sample_rate=spike_datasets[0].sample_rate
             )
-            suss.io.save_pickle(self.output()[elec].path, new_dataset)
+            suss.io.save_pickle(self.output()[electrode_idx].path, new_dataset)
 
 
 class SortSpikes(luigi.Task):
@@ -362,15 +229,11 @@ class SortSpikes(luigi.Task):
     """
 
     site_dir = luigi.Parameter()
-    electrode = luigi.parameter.NumericalParameter(
-        var_type=int,
-        min_value=config.ELECTRODES[0],
-        max_value=config.ELECTRODES[-1] + 1
-    )
-    # add upgoing /  downgoing parameter
+    electrode_idx = luigi.IntParameter()
+    # add upgoing /  downgoing parameter?
 
     def requires(self):
-        return MergeSpikeDatasets(self.site_dir)
+        return CombineSiteSpikes(self.site_dir)
 
     def output(self):
         sorting_dir = os.path.join(self.site_dir, "sort_results")
@@ -378,15 +241,15 @@ class SortSpikes(luigi.Task):
             os.makedirs(sorting_dir)
 
         return luigi.LocalTarget(
-            os.path.join(sorting_dir, "sorted-e{}.pkl".format(self.electrode))
+            os.path.join(sorting_dir, "sorted-e{}.pkl".format(self.electrode_idx))
         )
 
     def run(self):
-        dataset = suss.io.read_pickle(self.input()[self.electrode].path)
+        dataset = suss.io.read_pickle(self.input()[self.electrode_idx].path)
         peaks = dataset.waveforms[:, dataset.waveforms.shape[1] // 2]
         times = dataset.times[peaks < 0]
         waveforms = dataset.waveforms[peaks < 0]
-        t, w, l = new_sort(times, waveforms)
+        t, w, l = sort(times, waveforms)
         result = create_hierarchy(t, w, l, 1000)
         suss.io.save_pickle(self.output().path, result)
 
@@ -398,8 +261,12 @@ class PrepareSorting(luigi.Task):
     site_dir = luigi.Parameter()
 
     def requires(self):
-        for elec in config.ELECTRODES:
-            yield SortSpikes(site_dir=self.site_dir, electrode=elec)
+        # TODO: relying on a preset config.N_ELECTRODES is flimsy, but this method
+        # can be run before any data is actually downloaded or configured yet.
+        # Maybe it would be better to stuff this as a key in the site_config.yaml
+        # file instead.
+        for elec in range(config.N_ELECTRODES):
+            yield SortSpikes(site_dir=self.site_dir, electrode_idx=elec)
 
     def run(self):
         pass
@@ -407,10 +274,7 @@ class PrepareSorting(luigi.Task):
 
 class ManualSorting(luigi.Task):
     site_dir = luigi.Parameter()
-    electrode = luigi.parameter.NumericalParameter(
-        var_type=int,
-        min_value=config.ELECTRODES[0],
-        max_value=config.ELECTRODES[-1] + 1)
+    electrode_idx = luigi.IntParameter()
 
     def output(self):
         sorting_dir = os.path.join(self.site_dir, "manually_curated")
@@ -441,7 +305,6 @@ class PreprocessSite(luigi.Task):
 
     def requires(self):
         return PrepareSorting(self.site_dir)
-        pass
 
     def run(self):
         pass

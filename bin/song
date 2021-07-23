@@ -1,0 +1,130 @@
+#!/usr/bin/env python
+import os
+
+import pprint
+import click
+
+
+@click.group()
+def cli():
+    pass
+
+
+@click.group()
+def info():
+    pass
+
+
+@click.command("datadir")
+def info_datadir():
+    click.echo("data")
+
+info.add_command(info_datadir)
+
+
+@click.group()
+def rhd():
+    pass
+
+
+@click.command("rhd-header")
+@click.argument("filename", type=click.Path(exists=True))
+def rhd_header(filename):
+    from intanutil import read_header
+    with open(filename, "rb") as fid:
+        header = read_header.read_header(fid)
+    click.echo(pprint.pformat(header, indent=4))
+
+
+@click.command("wav-info")
+@click.argument("filename", type=click.Path(exists=True))
+def wav_info(filename):
+    import soundfile
+    with soundfile.SoundFile(filename, "r") as fid:
+        info = {
+            "sampling_rate": fid.samplerate,
+            "frames": fid.frames,
+            "channels": fid.channels
+        }
+    click.echo(pprint.pformat(info, indent=4))
+
+
+@click.command()
+@click.argument("filename", type=click.Path(exists=True))
+def rhd2nix(filename):
+    from intanutil import read_header
+    with open(filename, "rb") as fid:
+        header = read_header.read_header(fid)
+    click.echo(pprint.pformat(header, indent=4))
+
+
+@click.command("create-site")
+@click.argument("site_dir", type=click.Path())
+def create_site(site_dir):
+    from format.download import downloaders
+    from format.io import load_yaml, save_yaml
+    if not os.path.exists(site_dir):
+        os.makedirs(site_dir)
+
+    config_path = os.path.join(site_dir, "site_config.yaml")
+
+    if os.path.exists(config_path):
+        if not click.confirm("{} already exists. Do you want to overwrite it?".format(config_path)):
+            return
+
+    valid_downloaders = list(downloaders.keys())
+    download_type = None
+    while not download_type:
+        download_type = input("Download Type [choose from: {}]: ".format(valid_downloaders))
+        if download_type not in valid_downloaders:
+            click.echo("Download type {} invalid. Choose from {}".format(download_type, valid_downloaders))
+            download_type = None
+
+    click.echo("Type or paste all .rhd and .csv files for the site separated by line breaks\n"
+	  "To end recording Press Ctrl+d on Linux/Mac on Crtl+z on Windows")
+
+    filelist = []
+    try:
+        while True:
+            filelist.append(input())
+    except EOFError:
+        pass
+
+    filelist = [line.strip() for line in filelist]
+    filelist = [line for line in filelist if line.endswith("csv") or line.endswith("rhd")]
+
+    click.echo("Have filelist {}".format(filelist))
+
+    default_experiment_name = os.path.basename(site_dir).split("_")[0]
+    experiment_name = input("Experiment Name [default='{}']: ".format(default_experiment_name))
+    experiment_name = experiment_name.strip() or default_experiment_name
+
+    click.echo("Okay. Saving {}".format(config_path))
+
+    save_yaml(config_path, {
+        "download_type": download_type,
+        "experiment_name": experiment_name,
+        "filelist": filelist
+    })
+
+    click.echo("Download files with 'song download-site {}'".format(site_dir))
+
+
+@click.command("download-site")
+@click.argument("site_dir", type=click.Path(exist=True))
+def download_site(site_dir):
+    import luigi
+    from file_setup import DownloadSite
+    luigi.build([DownloadSite(site_dir=site_dir), local_scheduler=True])
+
+
+cli.add_command(info)
+cli.add_command(rhd_header)
+cli.add_command(wav_info)
+cli.add_command(create_site)
+cli.add_command(download_site)
+
+# cli.add_command(rhd)
+
+if __name__ == "__main__":
+    cli()

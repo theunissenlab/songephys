@@ -12,6 +12,7 @@ from neo.io import NixIO
 
 from format.io import load_yaml
 from format.intan_utils import timestamp_from_intan_filename
+from format.wav import AudioFile
 from preprocess.sound.playback_utils import (
     convert_digital_to_metadata,
     convert_pyoperant_csvs,
@@ -24,13 +25,13 @@ from preprocess.sound.playback_alignment import (
 from preprocess.sound.detect import (
     detect_call_and_syllable_dicts_from_lazy,
     generate_stim_dicts,
-    generate_vocal_periods_dicts_from_lazy,
-    get_surrounding_silence,
-    shave_silences,
+    playback_columns,
+    autodetected_columns,
+    # generate_vocal_periods_dicts_from_lazy,
 )
 from preprocess.sound.stimuli import merge_segments
-from preprocess_ephys import MergeLazySignals
-from file_setup import GenerateLazyFiles, Rhd2Nix
+# from preprocess_ephys import MergeLazySignals
+from file_setup import Nix2Wav, Rhd2Nix, SiteConfig
 
 import config
 
@@ -74,69 +75,6 @@ def _get_stim_dirs(csv_files, stimuli_directory):
     return stim_dirs
 
 
-class ExportSessionMicrophonesToWav(luigi.Task):
-    """Write the microphone data from Nix file to a wav file
-    """
-    session_dir = luigi.Parameter()
-
-    def requires(self):
-        return Rhd2Nix(self.session_dir)
-
-    def output(self):
-        segmentation_dir = os.path.join(self.session_dir, "segmentation")
-        if not os.path.exists(segmentation_dir):
-            os.makedirs(segmentation_dir)
-
-        return luigi.LocalTarget(os.path.join(segmentation_dir, "mic.wav"))
-
-    def run(self):
-        nix = NixIO(self.input().path)
-        block = nix.read_block(lazy=True)
-
-        for signal in block.segments[0].analogsignals:
-            if signal.annotations["neo_name"] == "Board ADC":
-                mic_signal = signal
-
-        mic_signal = nix.load_lazy_object(mic_signal)
-        mic_data = np.array(mic_signal)
-        mic_data_minus_mean = mic_data - np.mean(mic_data, axis=0)
-
-        # Some of the sampling rates on the mic signals have a floating point error
-        # resulting in sampling rates that look like 24999.99999999999...
-        # Instead, assume the sampling rate is supposed to be an integer, and round the sampling rate
-        samplerate = int(round(mic_signal.sampling_rate.item()))
-        channels = mic_data_minus_mean.shape[1]
-
-        with sf.SoundFile(self.output().path, "w", samplerate=samplerate, channels=channels) as soundfile:
-            logger.info("Writing mic data to {}".format(self.output().path))
-            soundfile.write(np.array(mic_data_minus_mean))
-
-
-class ExportMicrophonesToWav(luigi.Task):
-
-    site_dir = luigi.Parameter()
-
-    def requires(self):
-        self.session_info = load_yaml(
-                os.path.join(self.site_dir, "sessions.yaml")
-        )
-        for session in self.session_info["sessions"]:
-            session_dir = os.path.join(
-                    self.site_dir,
-                    "..",
-                    "..",
-                    "sessions",
-                    session["id"]
-            )
-            yield ExportSessionMicrophonesToWav(session_dir=session_dir)
-
-    def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir, "dummyfile0123456"))
-
-    def run(self):
-        pass
-
-
 class CreateMicrophoneAlignedCodes(luigi.Task):
     """Align stimulus playback info with microphone data
 
@@ -157,9 +95,7 @@ class CreateMicrophoneAlignedCodes(luigi.Task):
     session_dir = luigi.Parameter()
 
     def requires(self):
-        return {
-            "lazy_signals": GenerateLazyFiles(self.session_dir),
-        }
+        return Nix2Wav(self.session_dir)
 
     def output(self):
         raw_dir = os.path.join(self.session_dir, "raw")
@@ -169,39 +105,29 @@ class CreateMicrophoneAlignedCodes(luigi.Task):
         )
 
     def run(self):
+        input_file = AudioFile(os.path.join(self.input()["mic.wav"].path))
+
         input_directory = os.path.join(self.session_dir, "raw")
         stimuli_directory = os.path.join(self.session_dir, "stimuli")
-
         csv_files = sorted(glob.glob(os.path.join(input_directory, "*.csv")))
 
         # Identify and locate the stimulus directory (e.g. TutFamBos)
         # associated with each pyoperant csv
         stim_dirs = _get_stim_dirs(csv_files, stimuli_directory)
 
-        signals = np.load(
-            self.input()["lazy_signals"]["lazy_signals"].path,
-            allow_pickle=True
-        )[()]
-        lazy_mic = signals["mic"]
-        max_time = lazy_mic.N / lazy_mic.sampling_rate
+        max_time = input_file.frames / input_file.sampling_rate
 
         new_codes = []
         for csv_file, stim_dir in zip(csv_files, stim_dirs):
-            playback_df = read_pyoperant_csv(
-                csv_file,
-                stim_dir
-            )
+            playback_df = read_pyoperant_csv(csv_file, stim_dir)
             session_start_timestamp = timestamp_from_intan_filename(self.session_dir)
 
-            aligned_times = compute_realigned_trial_times(
-                playback_df,
-                session_start_timestamp,
-                lazy_mic
-            )
+            aligned_times = compute_realigned_trial_times(playback_df, session_start_timestamp, input_file)
+
             new_codes.extend(create_replacement_codes(
                 playback_df,
                 aligned_times,
-                lazy_mic.sampling_rate,
+                input_file.sampling_rate,
                 max_time
             ))
 
@@ -287,76 +213,50 @@ class CombinePlaybackMetadata(luigi.Task):
                 self.output().path)
 
 
-class FindVocalPeriods(luigi.Task):
-    """Locate time periods containing either live or playback sounds
+class PlaybacksCSV(luigi.Task):
+    """Locate time periods containing playback sounds
 
     Represents each time period by a dictionary with a start and stop
-    time. Saves a list of live periods and playback periods.
+    time. Saves a list of playback periods.
     """
 
     session_dir = luigi.Parameter()
 
     def requires(self):
         return {
+            "wav_files": Nix2Wav(self.session_dir),
             "aligned_codes": CreateMicrophoneAlignedCodes(self.session_dir),
-            "lazy_signals": GenerateLazyFiles(self.session_dir),
             "playback_metadata": CombinePlaybackMetadata(self.session_dir),
             "nix_file": Rhd2Nix(self.session_dir)
         }
 
     def output(self):
         segmentation_dir = os.path.join(self.session_dir, "segmentation")
-        segment_data_file = "vocal_periods.npy"
+        segment_data_file = "playback_segments.csv"
         return luigi.LocalTarget(
             os.path.join(segmentation_dir, segment_data_file)
         )
 
     def run(self):
-        signals = np.load(self.input()["lazy_signals"]["lazy_signals"].path, allow_pickle=True)[()]
-        mic = signals["mic"]
-
-        ######################################################
-        ### First search for periods of live vocalizations ###
-        ######################################################
-
-        live_dicts = generate_vocal_periods_dicts_from_lazy(mic)
-        live_dicts = [
-            seg_dict for seg_dict in live_dicts
-            if (
-                config.MIN_SEGMENT_LENGTH <=
-                seg_dict["duration"].item() <=
-                config.MAX_SEGMENT_LENGTH
-            )
-        ]
-
-        logger.info("Found {} live vocalizations".format(len(live_dicts)))
-        logger.info("{} between {} and {}".format(
-            len(live_dicts),
-            config.MIN_SEGMENT_LENGTH,
-            config.MAX_SEGMENT_LENGTH
-        ))
-
-        #################################
-        ### Identify playback periods ###
-        #################################
+        # Live vocalization detection is now delegated to the FindLiveCalls task
+        mic = AudioFile(self.input()["wav_files"]["mic.wav"].path)
 
         try:
             playbacks_db = pd.read_pickle(self.input()["playback_metadata"].path)
         except:
             logger.warning("No pyoperant file found (no playbacks)")
             playback_dicts = []
-            segment_dicts = live_dicts
         else:
             nix = NixIO(self.input()["nix_file"].path)
             block = nix.read_block(lazy=True)
 
             if not len(block.segments[0].events):
                 stimulus_codes = np.load(self.input()["aligned_codes"].path, allow_pickle=True)[()]
-                sampling_rate = mic.sampling_rate / pq.s
+                sampling_rate = mic.sampling_rate
             else:
                 digital_signals = nix.load_lazy_object(block.segments[0].events[0])
                 stimulus_codes = convert_digital_to_metadata(digital_signals)
-                sampling_rate = digital_signals.annotations["sampling_rate"]
+                sampling_rate = digital_signals.annotations["sampling_rate"].item()
 
             playback_dicts = generate_stim_dicts(
                     stimulus_codes,
@@ -366,29 +266,10 @@ class FindVocalPeriods(luigi.Task):
             logger.info("Identified {} playback periods".format(
                 len(playback_dicts))
             )
-            # TODO: be more careful about how we do overlaps
-            # maybe just wnat to include all overlaps, even if duplciated
-            segment_dicts = merge_segments(playback_dicts, live_dicts)
-
             nix.close()
 
-        ####################################
-        ### Save identified time periods ###
-        ####################################
-
-        logger.info("Identified {} segments, ({} playback, {} live)".format(
-                len(segment_dicts),
-                len(playback_dicts),
-                len(segment_dicts) - len(playback_dicts)
-        ))
-
-        np.save(
-            self.output().path,
-            {
-                "live": live_dicts,
-                "playback": playback_dicts
-            }
-        )
+        df = pd.DataFrame(playback_dicts, columns=playback_columns)
+        df.to_csv(self.output().path, index=False)
 
 
 class FindLiveCalls(luigi.Task):
@@ -397,25 +278,21 @@ class FindLiveCalls(luigi.Task):
 
     def requires(self):
         return {
-            "lazy_signals": GenerateLazyFiles(self.session_dir),
+            "wav_files": Nix2Wav(self.session_dir),
             "vocal_periods": FindVocalPeriods(self.session_dir),
         }
 
     def output(self):
         segmentation_dir = os.path.join(self.session_dir, "segmentation")
-        segment_data_file = "call_periods.npy"
+        segment_data_file = "autodetected_segments.csv"
         return luigi.LocalTarget(
             os.path.join(segmentation_dir, segment_data_file)
         )
 
     def run(self):
-        signals = np.load(self.input()["lazy_signals"]["lazy_signals"].path, allow_pickle=True)[()]
-        mic = signals["mic"]
+        mic = AudioFile(self.input()["wav_files"]["mic.wav"].path)
 
-        playback_periods = np.load(
-            self.input()["vocal_periods"].path,
-            allow_pickle=True
-        )[()]["playback"]
+        playback_periods = pd.read_csv(self.input()["vocal_periods"].path)
 
         ######################################################
         ### First search for periods of live vocalizations ###
@@ -423,65 +300,59 @@ class FindLiveCalls(luigi.Task):
 
         exclude_intervals = [
             (
-                period["start_time"].item() + 0.5,
-                period["start_time"].item() + period["duration"].item() - 0.5
-            ) for period in playback_periods
+                period.start_time,
+                period.start_time + period.duration
+            ) for period in playback_periods.itertuples()
         ]
 
+        # This function tries to find the smallest pieces of vocalizations, e.g. syllables
+        # Should modify this function if you want to group them up as songs
         seg_dicts = detect_call_and_syllable_dicts_from_lazy(
-            mic, exclude_intervals, window=5
+            mic, exclude_intervals, split_into_smallest_chunks=True, window=5
         )
 
-        np.save(
-            self.output().path,
-            seg_dicts
-        )
+        df = pd.DataFrame(seg_dicts, columns=autodetected_columns)
+        df.to_csv(self.output().path, index=False)
 
 
-class MergeVocalPeriods(luigi.Task):
-    """Merge together vocal period dicts
+class MergePlaybacksCSV(luigi.Task):
+    """Merge together vocal period dicts from all sessions in a site
 
     The sessions and relative offsets must be defined in a
     sessions.yaml file in the site directory. This function
-    takes the vocal periods (both live and playback) for each
+    takes the playback periods for each
     session and just adds the specified offset to each one.
     """
 
     site_dir = luigi.Parameter()
 
     def requires(self):
-        self.session_info = load_yaml(
-                os.path.join(self.site_dir, "sessions.yaml")
-        )
-        for session in self.session_info["sessions"]:
-            session_dir = os.path.join(
-                    self.site_dir,
-                    "..",
-                    "..",
-                    "sessions",
-                    session["id"]
-            )
-            yield FindVocalPeriods(session_dir=session_dir)
+        config_task = SiteConfig(self.site_dir, required_keys=["sessions"])
+
+        yield config_task
+
+        config = config_task.output().data()
+
+        for session in config["sessions"]:
+            session_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions", session["id"])
+            yield PlaybacksCSV(session_dir=session_dir)
 
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir, "vocal_periods.npy"))
+        return luigi.LocalTarget(os.path.join(self.site_dir, "playback_segments.csv"))
 
     def run(self):
-        block_offsets = [
-                session["t"] * pq.s
-                for session in self.session_info["sessions"]
-        ]
-        vocal_period_data = [np.load(s.path, allow_pickle=True)[()] for s in self.input()]
+        config = self.input()[0].data()
+        playback_csvs = self.input()[1:]
+        session_offsets = [session["t"] for session in config["sessions"]]
 
-        combined_result = defaultdict(list)
-        for vocal_periods, offset in zip(vocal_period_data, block_offsets):
-            for key in vocal_periods:
-                for period in vocal_periods[key]:
-                    period["start_time"] += offset
-                combined_result[key] += vocal_periods[key]
-        combined_result = dict(combined_result)
+        # vocal_period_data = [np.load(s.path, allow_pickle=True)[()] for s in self.input()]
+        vocal_period_data = [pd.read_csv(s.path) for s in playback_csvs]
 
-        np.save(self.output().path, combined_result)
+        for vocal_periods, offset in zip(vocal_period_data, session_offsets):
+            vocal_periods["start_time"] += offset
+
+        df = pd.concat(vocal_period_data, axis=0)
+        df.to_csv(self.output().path, index=False)
 
 
 class MergeLiveCalls(luigi.Task):
@@ -510,22 +381,22 @@ class MergeLiveCalls(luigi.Task):
             yield FindLiveCalls(session_dir=session_dir)
 
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir, "call_periods.npy"))
+        return luigi.LocalTarget(os.path.join(self.site_dir, "autodetected_segments.csv"))
 
     def run(self):
         block_offsets = [
-                session["t"] * pq.s
-                for session in self.session_info["sessions"]
+            session["t"]
+            for session in self.session_info["sessions"]
         ]
-        vocal_period_data = [list(np.load(s.path, allow_pickle=True)[()]) for s in self.input()]
+        # vocal_period_data = [list(np.load(s.path, allow_pickle=True)[()]) for s in self.input()]
+        vocal_period_data = [pd.read_csv(s.path) for s in self.input()]
 
-        combined_result = []
         for vocal_periods, offset in zip(vocal_period_data, block_offsets):
-            for period in vocal_periods:
-                period["start_time"] += offset
-            combined_result = combined_result + vocal_periods
+            vocal_periods["start_time"] += offset
 
-        np.save(self.output().path, combined_result)
+        df = pd.concat(vocal_period_data, axis=0)
+        df.to_csv(self.output().path, index=False)
+        # np.save(self.output().path, combined_result)
 
 
 class CreateAutodetectedPeriods(luigi.Task):
@@ -539,7 +410,7 @@ class CreateAutodetectedPeriods(luigi.Task):
 
     def run(self):
         """
-        Removes the dependency on pyquantities from the call_periods.npy file and
+        Removes the dependency on pyquantities from the a.npy file and
         converts it into a pandas dataframe
         """
         periods = np.load(self.input().path, allow_pickle=True)[()]
@@ -578,8 +449,8 @@ class CreateLabelingSaveFile(luigi.Task):
 
         playback_df = pd.DataFrame([
             {
-                "t_start": period["start_time"].item() + 0.5,
-                "t_stop": period["start_time"].item() + period["duration"].item() - 0.5
+                "t_start": period["start_time"].item(),
+                "t_stop": period["start_time"].item() + period["duration"].item()
             } for period in vocal_periods["playback"]
         ])
 
@@ -602,52 +473,3 @@ class CreateLabelingSaveFile(luigi.Task):
             "sources": [playback_source_dict],
             "autodetect": autodetect_table
         })
-
-
-class DetectVocalAndSilentPeriods(luigi.Task):
-
-    site_dir = luigi.Parameter()
-
-    def requires(self):
-        return {
-            "lazy_site": MergeLazySignals(self.site_dir),
-            "vocal_periods": MergeVocalPeriods(self.site_dir)
-        }
-
-    def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir, "vocal_periods_with_silence.npy"))
-
-    def run(self):
-        lazy_site = np.load(
-            self.input()["lazy_site"].path,
-            allow_pickle=True
-        )[()]
-        vocal_periods = np.load(
-            self.input()["vocal_periods"].path,
-            allow_pickle=True
-        )[()]
-
-        all_events = np.array(merge_segments(
-            vocal_periods["playback"],
-            vocal_periods["live"]
-        ))
-
-        silent_periods = get_surrounding_silence(
-            all_events,
-            lazy_site,
-            channel=0,
-            min_duration=1.0,
-            min_sound=0.002,
-        )
-
-        all_events = sorted(
-            np.concatenate([all_events, silent_periods]),
-            key=lambda e: e["start_time"]
-        )
-
-        all_events = np.array([
-            shave_silences(event, lazy_site)
-            for event in all_events
-        ])
-
-        np.save(self.output().path, all_events)

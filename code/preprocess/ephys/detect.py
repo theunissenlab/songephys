@@ -79,45 +79,42 @@ def get_spike_snippets(signal, spike_indices, spike_radius):
 
 
 def extract_spikes(
-        signal_loader,
+        signal_file,
+        channel,
         batch_size,
         threshold_std,
         spike_radius,
-        channel_ids,
     ):
     """Get spikes and times from signal on all channels
     """
-    elec_spike_indices = defaultdict(list)
-    elec_spike_wfs = defaultdict(list)
+    elec_spike_indices = []
+    elec_spike_wfs = []
 
-    for batch_idx, chunk in signal_loader.batches(batch_size):
-        for elec_idx, sig in enumerate(chunk.swapaxes(0, 1)):
-            indices = detect_spike_times(
-                sig,
-                threshold_std=threshold_std,
-                spike_radius=spike_radius,
-                min_spacing=config.MIN_SPIKE_THRESHOLD_SPACING
-            )
-            waveforms = get_spike_snippets(sig, indices, spike_radius)
+    for batch_idx, chunk in signal_file.batches(batch_size):
+        sig = chunk[:, channel]
+        indices = detect_spike_times(
+            sig,
+            threshold_std=threshold_std,
+            spike_radius=spike_radius,
+            min_spacing=config.MIN_SPIKE_THRESHOLD_SPACING
+        )
+        waveforms = get_spike_snippets(sig, indices, spike_radius)
 
-            if len(indices):
-                elec_spike_indices[channel_ids[elec_idx]].append(indices + batch_idx)
-                elec_spike_wfs[channel_ids[elec_idx]].append(waveforms)
-    
-    results = {}
-    for elec in channel_ids:
-        if len(elec_spike_indices[elec]):
-            results[elec] = {
-                "indices": np.concatenate(elec_spike_indices[elec]),
-                "waveforms": np.concatenate(elec_spike_wfs[elec])
-            }
-        else:
-            results[elec] = {
-                "indices": np.zeros((0,)),
-                "waveforms": np.zeros((0, spike_radius * 2))
-            }
+        if len(indices):
+            elec_spike_indices.append(indices + batch_idx)
+            elec_spike_wfs.append(waveforms)
 
-    return results
+
+    if len(elec_spike_indices):
+        return {
+            "indices": np.concatenate(elec_spike_indices),
+            "waveforms": np.concatenate(elec_spike_wfs)
+        }
+    else:
+        return {
+            "indices": np.zeros((0,)),
+            "waveforms": np.zeros((0, spike_radius * 2))
+        }
 
 
 def get_snippet_size(t_pre, t_post, sampling_rate):
@@ -163,6 +160,7 @@ def get_snippet_size(t_pre, t_post, sampling_rate):
         t_post_discrete,
         peak_idx
     )
+
 
 def recut_waveforms(
         lazy_site,

@@ -5,13 +5,13 @@ import logging
 import time
 
 import numpy as np
+import tqdm
 from soundsig.signal import highpass_filter, lowpass_filter
 
 from preprocess.ephys.detect import (
     detect_spike_times,
     get_spike_snippets
 )
-from preprocess.ephys._timelagged_filter import TimelaggedFilterer
 from utils import convert_seconds_to_minutes, estimate_time_remaining
 
 import config
@@ -22,300 +22,68 @@ logger.addHandler(logging.StreamHandler())
 logger.setLevel(logging.DEBUG)
 
 
-timelagged_filterer = TimelaggedFilterer(block_width=config.FILTER_BLOCK)
-from statsmodels.tsa.api import VAR
-
-DELAYVAR = 4 #config.N_LAGS
-
-
-def var_filter(x):
-    X = np.asarray(x)
-    modelVAR = VAR(np.asarray(X))
-    resultsVAR = modelVAR.fit(DELAYVAR)
-
-    #  To prevent overfitting (in the sense of spike removal) we delete info from own channel
-    paramsDEL = resultsVAR.params[:,:]
-
-    nelec = paramsDEL.shape[1]   # This is the number of electrodes also equal to sig.shape[1]
-    nlags = (paramsDEL.shape[0]-1)//nelec  # This is also equal to DELAYS
-    for i in range(nelec):
-        for j in range(nlags):
-            paramsDEL[j*nelec+1+i, i] = 0;
-
-    # Generate predictions but adjust their gain using OLS
-    predX = modelVAR.predict(paramsDEL, lags = nlags)
-    for i in range(nelec):
-        meanX = np.mean(X[nlags:, i])   # Should be close to zero since from high-pass
-        meanpredX = np.mean(predX[:,i]) # Should also be close to zero
-        gain = np.sum((predX[:,i]-meanpredX)*(X[nlags:,i]-meanX))/np.sum((predX[:,i]-meanpredX)*(predX[:,i]-meanpredX))
-        predX[:,i] = gain*predX[:,i]
-
-
-    X[DELAYVAR:] = predX
-    return X
-
-def context_based_filtering(
-        signal_loader,
-        output_signal,
-        sampling_rate,
+def common_average_filter(
+        input_audiofile,
+        output_audiofile,
         batch_size,
+        channel_groups=None,
     ):
-    """Filter ephys signals (in batches) and extract spikes
+    """Filter ephys signals (in batches)
 
-    Iterate over signal loader in batches, and write to an output_signal
+    Iterate over signal loader in batches of batch_size and subtract
+    the common average from each channel. Add the ``channel_groups`` parameter to
+    perform this operation over subsets of channels (e.g. if some channels
+    have a shared noise source that independent of the others)
+
+    The filtered data is written directly to the output_audiofile. The output_audiofile will
+    be extended to the length of the input_audiofile.
 
     Args
     ----
-    signal_loader : format.lazy.LazySignal
+    input_audiofile : format.wav.AudioFile
         Input signal to read unfiltered data from
-    output_signal : format.lazy.LazySignal
+    output_audiofile : format.wav.AudioFile
         Output signal to write filtered data to
-    sampling_rate : int or float
-        Sampling rate of signal in Hz
     batch_size : int
         Size of windows to filter in samples
-    
-    Returns a tuple of length two:
-        0: a LazySignal output signal
-        1: a list of intervals which were labeled as noise due to correlated events.
+    channel_groups : Optional[List[ArrayLike]]
+        A list of array-like indexes by which the input data should be grouped
+        for filtering. The ArrayLike objects should be arrays of integers used to
+        index into the 2nd dimension of the input_audiofile data (the channel
+        dimension). For example, to seperately filter the first 16 channels from the
+        last 15 channels, use ``channel_groups = [np.arange(16), np.arange(16, 32)]``
     """
-    _start_time = time.time()
+    if channel_groups is None:
+        channel_groups = [np.arange(input_audiofile.channels)]
 
-    spike_radius = int(config.SPIKE_WIDTH * sampling_rate)
+    batch_starts = np.arange(0, input_audiofile.frames, batch_size)
+
+    output_audiofile.open(
+        readonly=False,
+        channels=input_audiofile.channels,
+        subtype="FLOAT",
+        samplerate=input_audiofile.sampling_rate)
 
     all_noise_intervals = []
-    for batch_idx, chunk in signal_loader.batches(batch_size):
-        base_signal = basic_filter(chunk, sampling_rate)
-        highpass_signals = common_average_reference(base_signal)
+    for start in tqdm.tqdm(batch_starts):
+        _, block = input_audiofile.read(start, start + batch_size)
 
-        noise_intervals = []
+        for channel_indices in channel_groups:
+            chunk = block[:, channel_indices]
+            # Highpass filter followed by mean subtraction
+            chunk = highpass_filter(
+                chunk.T,
+                input_audiofile.sampling_rate,
+                config.HIGHPASS_CUTOFF
+            ).T
+            chunk = common_average_reference(chunk)
+            block[:, channel_indices] = chunk
 
-        '''
-        events, snippets, corrs = find_correlated_events(
-            highpass_signals,
-            spike_radius
-        )
+        output_audiofile.write(start, block)
 
-        # Check for correlations that meet criteria
-        # Criterion: 20% of electrode pairs have abs(correlation) >= 0.4
-        is_noisy = np.array([
-            np.mean(np.abs(corr) > 0.5) > 0.2 for corr in corrs
-        ]) | np.array([np.mean(np.abs(corr) > 0.2) > 0.6 for corr in corrs])
-        noise_intervals = create_noise_intervals(
-            events[is_noisy],
-            5 * spike_radius
-        )
-        noise_snippets = [
-            highpass_signals[i1:i2] for i1, i2 in noise_intervals
-        ]
+    output_audiofile.close()
 
-        if not len(noise_snippets):
-            clean_snippets = []
-        else:
-            # FIXME: The filtering is not working - basically zero-ing out
-
-            # Do a time-lagged filter to remove cross-channel correlations
-            clean_snippets = filter_snippets(
-                noise_snippets,
-                filter_fn=lambda x: timelagged_filterer.filter(x, config.N_LAGS)
-                #filter_fn=var_filter
-            )
-
-        if clean_snippets is not None:
-            # Compare to clean to see if we want to replace or zero out
-            for old_snippet, new_snippet, (i1, i2) in zip(
-                        noise_snippets,
-                        clean_snippets,
-                        noise_intervals
-                    ):
-                for channel_idx, clean_sig in enumerate(new_snippet.T):
-                    # Check 1: Std of signal is not increased by new filtering
-                    #if np.std(clean_sig) > np.std(old_snippet[:, channel_idx]):
-                    #    logging.warning("erro1")
-                        # Variance of new signal too high
-                    #    continue
-
-                    # Check 2: Std of signal is not more than twice the
-                    # surrounding signal
-                    baseline_std = np.std(highpass_signals[
-                        max(0, i1 - 5 * spike_radius):i2 + 5 * spike_radius,
-                        channel_idx
-                    ])
-                    # if np.std(clean_sig) > baseline_std * 2:
-                    #    logging.warning("erro2")
-
-                    #    highpass_signals[i1:i2, channel_idx] = 0.0
-                    #    continue
-
-                    highpass_signals[i1:i2, channel_idx] = clean_sig
-        '''
-
-        if output_signal is None:
-            logger.info("Output signal is None. Not saving anywhere.")
-            # yield highpass_signals, base_signal, noise_intervals         
-        else:
-            output_signal.write(
-                highpass_signals,
-                highpass_signals.shape[0],
-                batch_idx)
-        if len(noise_intervals):
-            all_noise_intervals.append([
-                (i + batch_idx, j + batch_idx)
-                for i, j in noise_intervals
-            ])
-
-        elapsed, remaining = estimate_time_remaining(
-            _start_time, batch_idx / signal_loader.N)
-        logger.info(
-            "Filtering {}/{} in {}... "
-            "Est. remaining: {}".format(
-                batch_idx,
-                signal_loader.N,
-                convert_seconds_to_minutes(elapsed),
-                convert_seconds_to_minutes(remaining)
-            )
-        )
-
-    if len(all_noise_intervals):
-        all_noise_intervals = np.concatenate(all_noise_intervals)
-
-    return output_signal, all_noise_intervals
-
-
-'''
-def context_based_filtering(
-        signal_loader,
-        output_signal,
-        sampling_rate,
-        batch_size,
-    ):
-    """Filter ephys signals (in batches) and extract spikes
-
-    Iterate over signal loader in batches, and write to an output_signal
-
-    Args
-    ----
-    signal_loader : format.lazy.LazySignal
-        Input signal to read unfiltered data from
-    output_signal : format.lazy.LazySignal
-        Output signal to write filtered data to
-    sampling_rate : int or float
-        Sampling rate of signal in Hz
-    batch_size : int
-        Size of windows to filter in samples
-    
-    Returns a tuple of length two:
-        0: a LazySignal output signal
-        1: a list of intervals which were labeled as noise due to correlated events.
-    """
-    _start_time = time.time()
-
-    spike_radius = int(config.SPIKE_WIDTH * sampling_rate)
-    # all_noise_snippets = []
-    all_noise_intervals = []
-    for batch_idx, chunk in signal_loader.batches(batch_size):
-        base_signal = basic_filter(chunk, sampling_rate)
-        highpass_signals = common_average_reference(base_signal)
-        events, snippets, corrs = find_correlated_events(
-            highpass_signals,
-            spike_radius
-        )
-
-        # Check for correlations that meet criteria
-        # Criterion: 20% of electrode pairs have abs(correlation) >= 0.4
-        is_noisy = np.array([
-            np.mean(np.abs(corr) > 0.5) > 0.2 for corr in corrs
-        ]) | np.array([np.mean(np.abs(corr) > 0.2) > 0.6 for corr in corrs])
-        noise_intervals = create_noise_intervals(
-            events[is_noisy],
-            5 * spike_radius
-        )
-        noise_snippets = [
-            highpass_signals[i1:i2] for i1, i2 in noise_intervals
-        ]
-
-        if len(noise_intervals):
-            all_noise_intervals.append([
-                (i + batch_idx, j + batch_idx)
-                for i, j in noise_intervals
-            ])
-            # all_noise_snippets.append(
-            #     noise_snippets
-            # )
-
-        elapsed, remaining = estimate_time_remaining(
-            _start_time, batch_idx / signal_loader.N)
-        logger.info(
-            "Filtering {}/{} in {}... "
-            "Est. remaining: {}".format(
-                batch_idx,
-                signal_loader.N,
-                convert_mins(elapsed),
-                convert_mins(remaining)
-            )
-        )
-        logger.warning("{:.2f}".format(np.sum([
-            np.sum(np.diff(x)) for x in all_noise_intervals
-        ]) / sampling_rate / 60.0))
-
-    if len(all_noise_intervals):
-        all_noise_intervals = np.concatenate(all_noise_intervals)
-        # all_noise_snippets = np.concatenate(all_noise_snippets)
-
-
-    if not len(noise_snippets):
-        clean_snippets = []
-    else:
-        # Do a time-lagged filter to remove cross-channel correlations
-        clean_snippets = filter_snippets(
-            noise_snippets,
-            filter_fn=lambda x: timelagged_filterer.filter(x, config.N_LAGS)
-            #filter_fn=var_filter
-        )
-
-    if clean_snippets is not None:
-        # Compare to clean to see if we want to replace or zero out
-        for old_snippet, new_snippet, (i1, i2) in zip(
-                    noise_snippets,
-                    clean_snippets,
-                    noise_intervals
-                ):
-            yield new_snippet, old_snippet, (i1, i2)
-
-                # for channel_idx, clean_sig in enumerate(new_snippet.T):
-                #     # Check 1: Std of signal is not increased by new filtering
-                #     #if np.std(clean_sig) > np.std(old_snippet[:, channel_idx]):
-                #     #    logging.warning("erro1")
-                #         # Variance of new signal too high
-                #     #    continue
-
-                #     # Check 2: Std of signal is not more than twice the
-                #     # surrounding signal
-                #     baseline_std = np.std(highpass_signals[
-                #         max(0, i1 - 5 * spike_radius):i2 + 5 * spike_radius,
-                #         channel_idx
-                #     ])
-                #     # if np.std(clean_sig) > baseline_std * 2:
-                #     #    logging.warning("erro2")
-
-                #     #    highpass_signals[i1:i2, channel_idx] = 0.0
-                #     #    continue
-
-                #     highpass_signals[i1:i2, channel_idx] = clean_sig
-
-    return output_signal, all_noise_intervals
-'''
-
-
-def basic_filter(unfiltered_signal, sampling_rate):
-    """Simple highpass"""
-    base_signal = highpass_filter(
-        unfiltered_signal.T,
-        sampling_rate,
-        config.HIGHPASS_CUTOFF
-    ).T
-
-    return base_signal
+    return output_audiofile
 
 
 def common_average_reference(signal):
@@ -323,8 +91,11 @@ def common_average_reference(signal):
     return signal - np.mean(signal, axis=1)[:, None]
 
 
+
 def find_correlated_events(signal, event_radius):
     """Detect threshold crossings that are correlated across channels
+
+    Note: Not in use as of commit 4d2da7d53753279cc2b33fd494f2b5615b8c7cdc
 
     Return the indices of the events, the snippets of the signal during
     those events, and the correlation matrix across electrodes during
@@ -342,7 +113,7 @@ def find_correlated_events(signal, event_radius):
     all_spike_indices = np.array(sorted(list(all_spike_indices)))
 
     snippets = get_spike_snippets(
-        signal, 
+        signal,
         all_spike_indices,
         event_radius)
 
@@ -371,7 +142,7 @@ def _consolidate_intervals(intervals):
     for idx, (i1, i2) in enumerate(intervals):
         if last_start is None:
             last_start = i1
-        
+
         if idx + 1 >= len(intervals):
             new_intervals.append((last_start, i2))
             break

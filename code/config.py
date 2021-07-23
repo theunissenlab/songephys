@@ -10,18 +10,30 @@ if not PROJECT_ROOT:
     raise Exception("PROJECT_ROOT env variable not set")
 DATADIR = os.path.join(PROJECT_ROOT, "data")
 TMPDIR = os.path.join(PROJECT_ROOT, "data", "tmp")
+
+
+########################
+### File downloading ###
+########################
 GDRIVE_CREDENTIALS_DIR = os.path.join(PROJECT_ROOT, "tlab_gdrive_credentials")
+OWNCLOUD_URL = None
+OWNCLOUD_URL = "https://owncloud.gwdg.de"
+OWNCLOUD_CREDENTIALS_FILE = os.path.join(PROJECT_ROOT, "owncloud.yaml")
+
+# Raw file locations (can be used instead of downloading the files) used in
+# songephys.code.format.download.LocalSymlinker
+# Fill in with paths to local locations of files, with {bird} as a wildcard for the subject folder name
+LOCAL_RAW_FILES = {
+    "rhd_drive": os.path.join(DATADIR, "local_raw_storage", "{experiment_name}"),
+    "pyoperant_drive": os.path.join(DATADIR, "local_raw_storage", "{experiment_name}"),
+    "stimuli_drive": os.path.join(DATADIR, "local_raw_storage", "{experiment_name}", "Stimuli"),
+}
 
 #################
 ### filtering ###
 #################
 
-USE_TENSORFLOW = False
 HIGHPASS_CUTOFF = 300.0
-NOISE_WINDOW = 0.1
-NOISE_CORR_THRESHOLD = 0.005
-FILTER_BLOCK = 600
-N_LAGS = 9
 
 #################################
 ### Audio segmentation params ###
@@ -29,7 +41,6 @@ N_LAGS = 9
 
 # TODO: eliminate song padding parameters
 PAD_SONG_BEFORE = .5   # Time to pad detected song segments (in seconds)
-PAD_SONG_AFTER = .5
 AUTODETECT_FUSE_DURATION = PAD_SONG_BEFORE
 AUTODETECT_SHORTEST_DURATION = 0.5
 AUTODETECT_IGNORE_DURATION = 0.05
@@ -52,6 +63,7 @@ MIN_SPIKE_THRESHOLD_SPACING = 8
 # - for our 16 channel recordings this is range(8, 24)
 # - for our 32 channel recordings this is range(0, 32)
 ELECTRODES = range(0, 32)
+N_ELECTRODES = 30
 
 #################
 ### web views ###

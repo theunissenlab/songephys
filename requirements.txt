@@ -2,7 +2,7 @@ Cython>=0.28.2
 flask>=0.12.2
 hdbscan>=0.8.22
 h5py>=2.7.0
-ipython==5.4.1
+ipython>=5.4.1
 jupyter>=1.0.0
 luigi==2.6.2
 matplotlib>=2.2.2
@@ -22,6 +22,8 @@ pyocclient>=0.6
 quantities>=0.12.4
 wavio>=0.0.4
 soundfile
+PyYAML>=5.1
+click
 
 # Load intan rhd format code
 -e git://github.com/theunissenlab/load_intan_rhd_format.git@master#egg=intanutil
@@ -30,7 +32,7 @@ soundfile
 -e git://github.com/theunissenlab/python-neo.git@master#egg=neo
 
 # Google drive api access
--e git://github.com/theunissenlab/gdrive_python.git@v0.0.3#egg=gdrive_access
+-e git://github.com/theunissenlab/gdrive_python.git@v0.1.1#egg=gdrive_access
 
 # Spike sorting library
 # For now, install by cloning and setting the path

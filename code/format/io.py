@@ -23,4 +23,4 @@ def load_yaml(filename):
 
 def save_yaml(filename, data):
     with open(filename, "w") as datafile:
-        yaml.dump(data, datafile, default_flow_style=False)
+        yaml.dump(data, datafile, default_flow_style=None)

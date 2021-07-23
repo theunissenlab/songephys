@@ -61,7 +61,7 @@ def compute_realigned_trial_times(
     new_start_times = []
     shifts = []
 
-    intan_sr = intan_lazy_mic.sampling_rate 
+    intan_sr = intan_lazy_mic.sampling_rate
 
     _loaded_stim_cache = {}
     for row_idx, row in playback_df.iterrows():
@@ -77,7 +77,7 @@ def compute_realigned_trial_times(
             _loaded_stim_cache[row.stimulus_name] = wav_data
 
         estimated_start = (row.time - intan_start_time).total_seconds()
-        if estimated_start < 0 or estimated_start > intan_lazy_mic.N / intan_lazy_mic.sampling_rate:
+        if estimated_start < 0 or estimated_start > intan_lazy_mic.frames / intan_lazy_mic.sampling_rate:
             new_start_times.append(estimated_start)
             continue
 
@@ -90,13 +90,24 @@ def compute_realigned_trial_times(
 
         best_score = 0
         best_estimate_index = None
+
         for i in np.arange(recorded_data.shape[1]):
             correlated, estimated_index = _find_alignment(recorded_data[:, i], wav_data)
             score = np.max(np.abs(correlated) / np.max(np.abs(recorded_data[:, i])))
+            if np.max(np.abs(recorded_data[:, i])) == 0:
+                # This probably means that the data is corrupted - the microphones were off
+                # or the signal didnt make it into the system. Here we probably can't do much better than
+                # using the approximate start time with the average of the data we've seen before
+                print("(!) WARNING while computing playback codes: mic data appears corrupted in time window {} to {}".format(
+                    estimated_start - window,
+                    estimated_start + row.duration + window
+                ))
+                best_estimate_index = estimated_start + (np.mean(shifts) if len(shifts) else 0)
+
             if score > best_score:
                 best_estimate_index = estimated_index
-        
-        new_start_times.append((estimated_start - window) + best_estimate_index/ intan_sr)
+
+        new_start_times.append((estimated_start - window) + best_estimate_index / intan_sr)
         shifts.append(new_start_times[-1] - estimated_start)
 
     print("Offsetting playbacks by best correlation\n"

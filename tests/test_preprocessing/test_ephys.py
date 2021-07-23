@@ -8,14 +8,11 @@ from preprocess.ephys.detect import (
     extract_spikes,
     get_spike_snippets
 )
-from preprocess.ephys.filter import (
-    _consolidate_intervals,
-    basic_filter, 
-    common_average_reference,
-    create_noise_intervals,
-    filter_snippets,
+from preprocess.ephys.utils import (
+    consolidate_intervals,
     find_correlated_events,
 )
+from preprocess.ephys.filter import common_average_reference
 
 
 class TestFilter(unittest.TestCase):
@@ -65,39 +62,10 @@ class TestFilter(unittest.TestCase):
 
     def test_consolidate_intervals(self):
         intervals = [(0, 4), (2, 7), (9, 11)]
-        self.assertSequenceEqual(_consolidate_intervals(intervals), [(0, 7), (9, 11)])
+        self.assertSequenceEqual(consolidate_intervals(intervals), [(0, 7), (9, 11)])
 
         intervals = [(3, 5), (5, 7), (9, 11)]
-        self.assertSequenceEqual(_consolidate_intervals(intervals), [(3, 7), (9, 11)])
-
-    def test_create_noise_intervals(self):
-        windows = create_noise_intervals([4, 7, 18], 4)
-        np.testing.assert_array_equal(windows, [[0, 11], [14, 22]])
-
-    def test_filter_snippets(self):
-        sig = np.array([
-            np.arange(20),
-            np.arange(20)
-        ]).T
-
-        noise_snippets = [
-            np.random.random(size=(20, 16)),
-            np.random.random(size=(30, 16)),
-            np.random.random(size=(40, 16)),
-            np.random.random(size=(50, 16)),
-        ]
-
-        # Goal: test that signal filtering works by making sure we get the piece
-        # that we expect back out
-        with mock.patch("config.FILTER_BLOCK", 1):
-            result = filter_snippets(noise_snippets, lambda x: x)
-            self.assertEqual(len(result), len(noise_snippets))
-            for x, y in zip(result, noise_snippets):
-                np.testing.assert_array_equal(x, y)
-
-        with mock.patch("config.FILTER_BLOCK", 100000000):
-            result = filter_snippets(noise_snippets, lambda x: x)
-            self.assertIsNone(result)
+        self.assertSequenceEqual(consolidate_intervals(intervals), [(3, 7), (9, 11)])
 
 
 class TestSpikeDetect(unittest.TestCase):

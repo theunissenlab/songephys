@@ -118,7 +118,7 @@ def _parse_ladder_filename_data(fname):
         metadata["source_sex"] = None
         metadata["source"] = "test"
         metadata["stim_class"] = "Ladder"
-    
+
     return metadata
 
 
@@ -156,7 +156,7 @@ def _transform_pyoperant_csv(df, stim_loc):
         filename = os.path.basename(path)
         dirname = os.path.basename(os.path.dirname(path))
         # print(os.path.join(stim_loc, "..", dirname, filename))
-        return os.path.join(stim_loc, "..", dirname, filename)
+        return os.path.join(stim_loc, dirname, filename)
 
     df["stimulus_name"] = df["stimulus_name"].apply(
         locate_stimulus_directory
@@ -237,7 +237,6 @@ def convert_pyoperant_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, dest_path)
 
     if not all([a == b for a, b in zip(pyoperant_lengths, digital_lengths)]):
         raise Exception("Wrong number of trials detected in pyoperants and digital signal: {} and {}".format(pyoperant_lengths, digital_lengths))
-
 
     new_df = pd.concat(pyoperant_dataframes)
     new_df = new_df.sort_values("time")
