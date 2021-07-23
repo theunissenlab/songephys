@@ -1,0 +1,30 @@
+download_type: seewiesen2
+experiment_name: ZF17M_ZF18F
+filelist: 
+  - ZF17M_3t_ZF18F_3t_210715_120857.rhd
+  - ZF17M_3t_ZF18F_3t_210715_123857.rhd
+  - ZF17M_3t_ZF18F_3t_210715_124903.rhd
+  - ZF17M_3t_ZF18F_3t_210715_142656.rhd
+  - ZF17M_3t_ZF18F_3t_210715_145656.rhd
+  - ZF17M_3t_ZF18F_3t_210715_152403.rhd
+  - ZF17M_3t_ZF18F_3t_210715_155403.rhd
+  - ZF17M_3t_ZF18F_3t_210715_160715.rhd
+  - ZF17M_3t_ZF18F_3t_210715_163720.rhd
+  - ZF17M_ZF18F_trialdata_20210715120746.csv
+  - ZF17M_ZF18F_trialdata_20210715142514.csv
+  - ZF17M_ZF18F_trialdata_20210715152314.csv
+  - ZF17M_ZF18F_trialdata_20210715160557.csv
+filtering:
+  ephys.wav:
+  - [0, 15]
+  - [15, 30]
+nix2wav:
+  ephys.wav:
+  - [Amplifier, [0, 15]]
+  - [Amplifier, [16, 31]]
+  mic.wav:
+  - [Amplifier, 15]
+  - [Amplifier, 31]
+  - [Board ADC, [0, 3]]
+  motion.wav:
+  - [AUX Input, [0, 6]]

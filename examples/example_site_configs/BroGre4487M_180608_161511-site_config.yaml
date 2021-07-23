@@ -1,0 +1,19 @@
+download_type: theunissen
+experiment_name: BroGre4497M
+filelist:
+- BroGre4497M_180608_161511.rhd
+- BroGre4497M_trialdata_20180608161015.csv
+- BroGre4497M_trialdata_20180608162210.csv
+- BroGre4497M_180608_174511.rhd
+- BroGre4497M_180608_180330.rhd
+- BroGre4497M_trialdata_20180608180249.csv
+- BroGre4497M_180608_185721.rhd
+- BroGre4497M_trialdata_20180608185927.csv
+nix2wav:
+    ephys.wav:
+        - ["Amplifier", [0, 16]]
+    mic.wav:
+        - ["Board ADC", [0, 2]]
+filtering:
+    ephys.wav:
+        - [0, 16]
