@@ -99,23 +99,88 @@ def create_site(site_dir):
     experiment_name = input("Experiment Name [default='{}']: ".format(default_experiment_name))
     experiment_name = experiment_name.strip() or default_experiment_name
 
-    click.echo("Okay. Saving {}".format(config_path))
-
-    save_yaml(config_path, {
+    config_data = {
         "download_type": download_type,
         "experiment_name": experiment_name,
         "filelist": filelist
-    })
+    }
+
+    click.echo("Next, choose from a preset electrode configuration of ones we've used before.")
+    click.echo("0 : None of the below")
+    click.echo("1 : 16 channel, 1 mic")
+    click.echo("2 : 16 channel, 2 mic")
+    click.echo("3 : 32 channel, 1 mic")
+    click.echo("4 : 32 channel, 2 mic")
+    click.echo("5 : 2 subj [0-14 ephys][15 mic][16-30 ephys][31 mic], 3 mic, 6 motion")
+    click.echo("6 : 1 subj [0-14 ephys][15 mic], 3 mic, 3 motion")
+
+    valid_elec_configs = list(range(9))
+    elec_config = None
+    while elec_config is None:
+        elec_config = input("Preset electrode config [0-8]:")
+        try:
+            elec_config = int(elec_config)
+        except:
+            elec_config = None
+
+        if elec_config not in valid_elec_configs:
+            click.echo("Electrode condig {} invalid. Choose from {}".format(elec_config, valid_elec_configs))
+            elec_config = None
+
+    if elec_config == 0:
+        pass
+    elif elec_config == 1:
+        config_data["nix2wav"] = {
+            "ephys.wav": [["Amplifier", [0, 16]]],
+            "mic.wav": [["Board ADC", 0]]
+        }
+        config_data["filtering"] = {"ephys.wav": [[0, 16]]}
+    elif elec_config == 2:
+        config_data["nix2wav"] = {
+            "ephys.wav": [["Amplifier", [0, 16]]],
+            "mic.wav": [["Board ADC", [0, 2]]]
+        }
+        config_data["filtering"] = {"ephys.wav": [[0, 16]]}
+    elif elec_config == 3:
+        config_data["nix2wav"] = {
+            "ephys.wav": [["Amplifier", [0, 32]]],
+            "mic.wav": [["Board ADC", 0]]
+        }
+        config_data["filtering"] = {"ephys.wav": [[0, 32]]}
+    elif elec_config == 4:
+        config_data["nix2wav"] = {
+            "ephys.wav": [["Amplifier", [0, 32]]],
+            "mic.wav": [["Board ADC", [0, 2]]]
+        }
+        config_data["filtering"] = {"ephys.wav": [[0, 32]]}
+    elif elec_config == 5:
+        config_data["nix2wav"] = {
+            "ephys.wav": [["Amplifier", [0, 15]], ["Amplifier", [16, 31]]],
+            "mic.wav": [["Amplifier", 15], ["Amplifier", 31], ["Board ADC", [0, 3]]],
+            "motion.wav": [["AUX Input", [0, 6]]],
+        }
+        config_data["filtering"] = {"ephys.wav": [[0, 15], [15, 30]]}
+    elif elec_config == 6:
+        config_data["nix2wav"] = {
+            "ephys.wav": [["Amplifier", [0, 15]]],
+            "mic.wav": [["Amplifier", 15], ["Board ADC", [0, 3]]],
+            "motion.wav": [["AUX Input", [0, 3]]],
+        }
+        config_data["filtering"] = {"ephys.wav": [[0, 15]]}
+
+    click.echo("Okay. Saving {}".format(config_path))
+
+    save_yaml(config_path, config_data)
 
     click.echo("Download files with 'song download-site {}'".format(site_dir))
 
 
 @click.command("download-site")
-@click.argument("site_dir", type=click.Path(exist=True))
+@click.argument("site_dir", type=click.Path(exists=True))
 def download_site(site_dir):
     import luigi
     from file_setup import DownloadSite
-    luigi.build([DownloadSite(site_dir=site_dir), local_scheduler=True])
+    luigi.build([DownloadSite(site_dir=site_dir)], local_scheduler=True)
 
 
 cli.add_command(info)
