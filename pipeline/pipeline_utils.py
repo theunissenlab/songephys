@@ -239,6 +239,9 @@ def get_session_sites(session_path):
             raise
             continue
 
+        if "sessions" not in session_config:
+            continue
+
         for session in session_config["sessions"]:
             if session["id"] == session_name:
                 site_dirs.append(site_dir)

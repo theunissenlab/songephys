@@ -304,7 +304,10 @@ class PreprocessSite(luigi.Task):
     site_dir = luigi.Parameter()
 
     def requires(self):
-        return PrepareSorting(self.site_dir)
+        return [
+            DefineSessions(self.site_dir),
+            PrepareSorting(self.site_dir)
+        ]
 
     def run(self):
         pass

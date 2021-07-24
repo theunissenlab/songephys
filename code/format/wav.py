@@ -240,15 +240,15 @@ class AudioFile:
             The first dimension is the sample index, the second dimension is the channel
             axis.
         """
-        read_start = i0
+        idx = np.arange(i0, i1)
+        read_start = max(i0, 0)
         read_stop = min(i1, self.frames)
 
-        idx = np.arange(i0, i1)
+        if read_start >= self.frames or read_stop <= 0:
+            return idx, np.zeros((i1 - i0, self.channels))
 
         if self.is_closed():
             self.open()
-
-        n = i1 - i0
 
         pad_zeros_before = max(0 - i0, 0)
         pad_zeros_after = max(i1 - self.frames, 0)
@@ -344,11 +344,10 @@ class MultiWavReader:
             and endpoint (exclusive) of the AudioFile, audiofile.
         """
         start_frame = time_to_index(start, self.sampling_rate)
-        frame = 0
-        for f in self.files:
+        for i, f in enumerate(self.files):
+            frame = time_to_index(self.start_times[i], self.sampling_rate)
             if frame + f.frames >= start_frame:
                 yield ((frame, frame + f.frames), f)
-            frame += f.frames
 
     def close_files(self):
         for f in self.files:
@@ -404,8 +403,10 @@ class MultiWavReader:
             return final_result
 
         last_file_t, last_file_obj = self._get_session_by_time(stop)
+        last_file_t /= self.sampling_rate
 
         for (file_t, _), file_obj in self.iter_files(start=start):
+            file_t /= self.sampling_rate
             result = file_obj.time_slice(start - file_t, stop - file_t)
             result.t += file_t
             final_result.data[final_result.t >= file_t] = result.data[final_result.t >= file_t]
