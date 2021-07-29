@@ -266,7 +266,7 @@ class PrepareSorting(luigi.Task):
         # Maybe it would be better to stuff this as a key in the site_config.yaml
         # file instead.
         for elec in range(config.N_ELECTRODES):
-            yield SortSpikes(site_dir=self.site_dir, electrode_idx=elec)
+            yield ManualSorting(site_dir=self.site_dir, electrode_idx=elec)
 
     def run(self):
         pass
@@ -304,8 +304,10 @@ class PreprocessSite(luigi.Task):
     site_dir = luigi.Parameter()
 
     def requires(self):
+        from preprocess_sound import MergePlaybacksCSV
         return [
             DefineSessions(self.site_dir),
+            MergePlaybacksCSV(self.site_dir),
             PrepareSorting(self.site_dir)
         ]
 

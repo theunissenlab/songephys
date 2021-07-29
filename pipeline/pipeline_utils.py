@@ -233,8 +233,6 @@ def get_session_sites(session_path):
         try:
             session_config = load_yaml(os.path.join(site_dir, "site_config.yaml"))
         except:
-            print("EXCEPTION!!!!")
-            raise
             continue
 
         if "sessions" not in session_config:
