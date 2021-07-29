@@ -134,39 +134,57 @@ def create_site(site_dir):
             "ephys.wav": [["Amplifier", [0, 16]]],
             "mic.wav": [["Board ADC", 0]]
         }
-        config_data["filtering"] = {"ephys.wav": [[0, 16]]}
+        config_data["filtering"] = {
+            "ephys.wav": [[0, 16]],
+            "mic.wav": [[0, 1]]
+        }
     elif elec_config == 2:
         config_data["nix2wav"] = {
             "ephys.wav": [["Amplifier", [0, 16]]],
             "mic.wav": [["Board ADC", [0, 2]]]
         }
-        config_data["filtering"] = {"ephys.wav": [[0, 16]]}
+        config_data["filtering"] = {
+            "ephys.wav": [[0, 16]],
+            "mic.wav": [[0, 2]]
+        }
     elif elec_config == 3:
         config_data["nix2wav"] = {
             "ephys.wav": [["Amplifier", [0, 32]]],
             "mic.wav": [["Board ADC", 0]]
         }
-        config_data["filtering"] = {"ephys.wav": [[0, 32]]}
+        config_data["filtering"] = {
+            "ephys.wav": [[0, 32]],
+            "mic.wav": [[0, 1]]
+        }
     elif elec_config == 4:
         config_data["nix2wav"] = {
             "ephys.wav": [["Amplifier", [0, 32]]],
             "mic.wav": [["Board ADC", [0, 2]]]
         }
-        config_data["filtering"] = {"ephys.wav": [[0, 32]]}
+        config_data["filtering"] = {
+            "ephys.wav": [[0, 32]],
+            "mic.wav": [[0, 2]]
+        }
     elif elec_config == 5:
         config_data["nix2wav"] = {
             "ephys.wav": [["Amplifier", [0, 15]], ["Amplifier", [16, 31]]],
             "mic.wav": [["Amplifier", 15], ["Amplifier", 31], ["Board ADC", [0, 3]]],
             "motion.wav": [["AUX Input", [0, 6]]],
         }
-        config_data["filtering"] = {"ephys.wav": [[0, 15], [15, 30]]}
+        config_data["filtering"] = {
+            "ephys.wav": [[0, 15], [15, 30]],
+            "mic.wav": [[0, 2], [2, 5]],
+        }
     elif elec_config == 6:
         config_data["nix2wav"] = {
             "ephys.wav": [["Amplifier", [0, 15]]],
             "mic.wav": [["Amplifier", 15], ["Board ADC", [0, 3]]],
             "motion.wav": [["AUX Input", [0, 3]]],
         }
-        config_data["filtering"] = {"ephys.wav": [[0, 15]]}
+        config_data["filtering"] = {
+            "ephys.wav": [[0, 15]],
+            "mic.wav": [[0, 1], [1, 4]],
+        }
 
     click.echo("Okay. Saving {}".format(config_path))
 

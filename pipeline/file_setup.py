@@ -213,7 +213,7 @@ class Rhd2Nix(luigi.Task):
     session_dir : str
         Path to session
 
-    Outputs a nix file as segmentation/{session_name}.nix
+    Outputs a nix file as raw/{session_name}.nix
     """
 
     session_dir = luigi.Parameter()
@@ -225,12 +225,18 @@ class Rhd2Nix(luigi.Task):
         }
 
     def output(self):
-        segmentation_dir = os.path.join(self.session_dir, "segmentation")
-        if not os.path.exists(segmentation_dir):
-            os.makedirs(segmentation_dir)
+        raw_dir = os.path.join(self.session_dir, "raw")
+        if not os.path.exists(raw_dir):
+            os.makedirs(raw_dir)
 
         nix_filename = "{}.nix".format(session_basename(self.session_dir))
-        return luigi.LocalTarget(os.path.join(segmentation_dir, nix_filename))
+
+        # Temporarily move nix file from segmentation dir to raw dir
+        if os.path.exists(os.path.join(self.session_dir, "segmentation", nix_filename)):
+            import shutil
+            shutil.move(os.path.join(self.session_dir, "segmentation", nix_filename), os.path.join(raw_dir, nix_filename))
+
+        return luigi.LocalTarget(os.path.join(raw_dir, nix_filename))
 
     def run(self):
         rhd_file = self.input()["files"]["rhd"].path
@@ -257,16 +263,19 @@ class Rhd2Nix(luigi.Task):
 
 
 class Nix2Wav(luigi.Task):
-    """Create memmapped array on disk for lazy loading
+    """Write analogsignals to disk as wav files (RF64 format)
+
+    Outputs files for the microphone and electrode data arrays,
+    and also writes the mapping between the channels in these files
+    to their original channels into the configuration file.
+
+    The microphone data is also normalized and zero-centered according
+    to the filter groups defined in the config "filtering" key
 
     Inputs
     ------
     session_dir : str
         Path to session
-
-    Outputs memmapped files for the microphone and electrode data arrays,
-    and also writes the mapping between the channels in these files
-    to their original channels into the configuration file.
     """
 
     session_dir = luigi.Parameter()
@@ -274,7 +283,7 @@ class Nix2Wav(luigi.Task):
     def requires(self):
         return {
             "nix": Rhd2Nix(self.session_dir),
-            "config": SessionConfig(self.session_dir, ["nix2wav"])
+            "config": SessionConfig(self.session_dir, ["nix2wav", "filtering"])
         }
 
     def output(self):
@@ -304,23 +313,32 @@ class Nix2Wav(luigi.Task):
                 self.output()["mic.wav"].path,
                 "w+",
                 samplerate=arrays["mic"]["sampling_rate"],
+                format="RF64",
                 subtype="FLOAT",
                 channels=arrays["mic"]["data"].shape[1]) as f:
+            print(type(arrays["mic"]["data"]))
+            arrays["mic"]["data"] = np.array(arrays["mic"]["data"])
+            arrays["mic"]["data"] -= np.median(arrays["mic"]["data"], axis=0)
+            for group_start, group_end in config["filtering"]["mic.wav"]:
+                arrays["mic"]["data"][:, group_start:group_end] /= np.max(np.abs(arrays["mic"]["data"][:, group_start:group_end]))
             f.write(arrays["mic"]["data"])
 
-        with soundfile.SoundFile(
-                self.output()["ephys.wav"].path,
-                "w+",
-                samplerate=arrays["ephys"]["sampling_rate"],
-                subtype="FLOAT",
-                channels=arrays["ephys"]["data"].shape[1]) as f:
-            f.write(arrays["ephys"]["data"])
+        if not os.path.exists(self.output()["ephys.wav"].path):
+            with soundfile.SoundFile(
+                    self.output()["ephys.wav"].path,
+                    "w+",
+                    samplerate=arrays["ephys"]["sampling_rate"],
+                    format="RF64",
+                    subtype="FLOAT",
+                    channels=arrays["ephys"]["data"].shape[1]) as f:
+                f.write(arrays["ephys"]["data"])
 
         if "motion" in arrays and arrays["motion"]["data"] is not None:
             with soundfile.SoundFile(
                     self.output()["motion.wav"].path,
                     "w+",
                     samplerate=arrays["motion"]["sampling_rate"],
+                    format="RF64",
                     subtype="FLOAT",
                     channels=arrays["motion"]["data"].shape[1]) as f:
                 f.write(arrays["motion"]["data"])

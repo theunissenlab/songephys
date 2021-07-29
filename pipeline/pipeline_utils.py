@@ -227,8 +227,6 @@ def get_session_sites(session_path):
         "{}*".format(prefix)
     ))
 
-    print(potential_site_dirs)
-
     site_dirs = []
     pyoperants = []
     for site_dir in potential_site_dirs:

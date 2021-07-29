@@ -56,11 +56,12 @@ def common_average_filter(
     if channel_groups is None:
         channel_groups = [np.arange(input_audiofile.channels)]
 
-    batch_starts = np.arange(0, input_audiofile.frames, batch_size)
+    batch_starts = np.arange(0, input_audiofile.frames + batch_size, batch_size)
 
     output_audiofile.open(
         readonly=False,
         channels=input_audiofile.channels,
+        format="RF64",
         subtype="FLOAT",
         samplerate=input_audiofile.sampling_rate)
 

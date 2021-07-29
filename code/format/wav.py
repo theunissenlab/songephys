@@ -123,6 +123,8 @@ class LoadedTimeSlice(object):
 
 class AudioFile:
     """Container for a audio file on disk
+
+    Uses the RF64 format instead of WAV becuase WAV is limited to 4GB on disk.
     Arguments
     ---------
     path : str
@@ -134,7 +136,7 @@ class AudioFile:
         if os.path.exists(path):
             raise IOError("File at {} already exists".format(path))
 
-        with soundfile.SoundFile(path, "w+", subtype="FLOAT", samplerate=samplerate, channels=channels) as f:
+        with soundfile.SoundFile(path, "w+", format="RF64", subtype="FLOAT", samplerate=samplerate, channels=channels) as f:
             pass
 
         return AudioFile(path)
@@ -263,7 +265,7 @@ class AudioFile:
 
         return idx, data
 
-    def write(self, i0: int,  data: np.ndarray):
+    def write(self, i0: int, data: np.ndarray):
         if self.is_closed() or self.is_readonly():
             self.open(readonly=False)
 
