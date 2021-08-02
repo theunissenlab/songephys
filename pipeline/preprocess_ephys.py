@@ -283,13 +283,13 @@ class ManualSorting(luigi.Task):
 
         return luigi.LocalTarget(os.path.join(
             sorting_dir,
-            "curated-e{}.pkl".format(self.electrode)
+            "curated-e{}.pkl".format(self.electrode_idx)
         ))
 
     def requires(self):
         return SortSpikes(
             site_dir=self.site_dir,
-            electrode=self.electrode
+            electrode_idx=self.electrode_idx
         )
 
     def run(self):
