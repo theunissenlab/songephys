@@ -22,14 +22,14 @@ from preprocess.ephys.detect import extract_spikes
 from preprocess.ephys.sort import sort, create_hierarchy
 
 from file_setup import Nix2Wav, SiteConfig, SessionConfig, DefineSessions
-from pipeline_utils import get_session_sites
+from pipeline_utils import SiteParameter, SessionParameter, get_session_sites
 import config
 
 
 class FilterEphys(luigi.Task):
     """Apply filters to sections of
     """
-    session_dir = luigi.Parameter()
+    session_dir = SessionParameter()
 
     def requires(self):
         return {
@@ -63,7 +63,7 @@ class FilterEphys(luigi.Task):
 
 
 class DetectSpikesOnElectrode(luigi.Task):
-    session_dir = luigi.Parameter()
+    session_dir = SessionParameter()
     electrode_idx = luigi.IntParameter()
 
     def requires(self):
@@ -107,7 +107,7 @@ class DetectSpikesOnElectrode(luigi.Task):
 
 
 class DetectSpikesInSession(luigi.Task):
-    session_dir = luigi.Parameter()
+    session_dir = SessionParameter()
 
     def requires(self):
         return FilterEphys(self.session_dir)
@@ -155,7 +155,7 @@ class CombineSiteSpikes(luigi.Task):
     combining the data from all sessions defined in the site config file.
     """
 
-    site_dir = luigi.Parameter()
+    site_dir = SiteParameter()
 
     def requires(self):
         return DefineSessions(self.site_dir)
@@ -228,7 +228,7 @@ class SortSpikes(luigi.Task):
     Outputs a suss.core.ClusterDataset with clusters of clusters of spikes
     """
 
-    site_dir = luigi.Parameter()
+    site_dir = SiteParameter()
     electrode_idx = luigi.IntParameter()
     # add upgoing /  downgoing parameter?
 
@@ -258,7 +258,7 @@ class PrepareSorting(luigi.Task):
     """Placeholder to trigger automated spike sorting for on all channels
     """
 
-    site_dir = luigi.Parameter()
+    site_dir = SiteParameter()
 
     def requires(self):
         # TODO: relying on a preset config.N_ELECTRODES is flimsy, but this method
@@ -273,7 +273,7 @@ class PrepareSorting(luigi.Task):
 
 
 class ManualSorting(luigi.Task):
-    site_dir = luigi.Parameter()
+    site_dir = SiteParameter()
     electrode_idx = luigi.IntParameter()
 
     def output(self):
@@ -301,7 +301,7 @@ class PreprocessSite(luigi.Task):
     """Preprocess ephys data for entire site
     """
 
-    site_dir = luigi.Parameter()
+    site_dir = SiteParameter()
 
     def requires(self):
         from preprocess_sound import MergePlaybacksCSV

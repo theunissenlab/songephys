@@ -1,14 +1,46 @@
 import glob
 import os
 import config
+import pathlib
 import tempfile
 
 import pandas as pd
+from luigi import Parameter
 
 from format.download import downloaders
 from format.intan_utils import timestamp_from_intan_filename
 from format.io import load_yaml
 from utils import intervals_overlap
+
+import config
+
+
+class SiteParameter(Parameter):
+    def normalize(self, x):
+        # Checks that the site directory is
+        # 1. in a folder called 'sites'
+        # 2. has no trailing slash
+        # normpath removes the trailing slash
+        x = os.path.normpath(x)
+        containing_folder = os.path.dirname(x)
+        if os.path.basename(containing_folder) != "sites":
+            raise ValueError("The site parameter {} is not in a directory called sites".format(x))
+
+        return x
+
+
+class SessionParameter(Parameter):
+    def normalize(self, x):
+        # Checks that the session directory is
+        # 1. in a folder called 'sessions'
+        # 2. has no trailing slash
+        # normpath removes the trailing slash
+        x = os.path.normpath(x)
+        containing_folder = os.path.dirname(x)
+        if os.path.basename(containing_folder) != "sessions":
+            raise ValueError("The session-dir parameter {} is not in a directory called sessions".format(x))
+
+        return x
 
 
 def group_raw_files(filelist):

@@ -11,6 +11,8 @@ from format.lazy import create_lazy_signals_from_nix
 from format.wav import get_wavfile_data_from_nix
 from targets import YamlTarget
 from pipeline_utils import (
+    SessionParameter,
+    SiteParameter,
     associate_pyoperant_csvs_to_rhds,
     get_session_sites,
     parse_filelist,
@@ -25,7 +27,7 @@ class SiteFileList(luigi.Task):
         SITE/
             filelist [output]
     """
-    site_dir = luigi.Parameter()
+    site_dir = SiteParameter()
 
     def output(self):
         return luigi.LocalTarget(os.path.join(self.site_dir, "filelist"))
@@ -35,7 +37,7 @@ class SiteFileList(luigi.Task):
 
 
 class SiteConfig(luigi.Task):
-    site_dir = luigi.Parameter()
+    site_dir = SiteParameter()
     required_keys = luigi.ListParameter(default=["download_type", "experiment_name", "filelist"])
 
     def output(self):
@@ -47,7 +49,7 @@ class SiteConfig(luigi.Task):
 
 
 class SessionConfig(luigi.Task):
-    session_dir = luigi.Parameter()
+    session_dir = SessionParameter()
     required_keys = luigi.ListParameter(default=["download_type", "experiment_name", "filelist", "sessions"])
 
     def output(self):
@@ -62,7 +64,7 @@ class SessionConfig(luigi.Task):
 
 
 class SignalsConfig(luigi.Task):
-    site_dir = luigi.Parameter()
+    site_dir = SiteParameter()
 
     def output(self):
         return YamlTarget(
@@ -99,7 +101,7 @@ class DefineSessions(luigi.Task):
     Uses timestamps of RHD filenames and timestamps within pyoperant CSV
     files to figure out which CSVs go with which RHDs
     """
-    site_dir = luigi.Parameter()
+    site_dir = SiteParameter()
 
     def requires(self):
         return SiteConfig(self.site_dir)
@@ -137,7 +139,7 @@ class DownloadSession(luigi.Task):
     and puts in an rhd file and 0+ pyoperant files
     """
 
-    session_dir = luigi.Parameter()
+    session_dir = SessionParameter()
     force = luigi.BoolParameter(default=False)
 
     def requires(self):
@@ -185,7 +187,7 @@ class DownloadSession(luigi.Task):
 
 
 class DownloadSite(luigi.Task):
-    site_dir = luigi.Parameter()
+    site_dir = SiteParameter()
     force = luigi.BoolParameter(default=False)
 
     def output(self):
@@ -216,7 +218,7 @@ class Rhd2Nix(luigi.Task):
     Outputs a nix file as raw/{session_name}.nix
     """
 
-    session_dir = luigi.Parameter()
+    session_dir = SessionParameter()
 
     def requires(self):
         return {
@@ -278,7 +280,7 @@ class Nix2Wav(luigi.Task):
         Path to session
     """
 
-    session_dir = luigi.Parameter()
+    session_dir = SessionParameter()
 
     def requires(self):
         return {
@@ -363,7 +365,7 @@ class Nix2Wav(luigi.Task):
 class Site2Wav(luigi.Task):
     """Save all of site's raw data into wav files
     """
-    site_dir = luigi.Parameter()
+    site_dir = SiteParameter()
 
     def requires(self):
         return SiteConfig(site_dir=self.site_dir, required_keys=["nix2wav", "filtering"])

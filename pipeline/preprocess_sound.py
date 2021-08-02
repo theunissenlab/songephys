@@ -31,8 +31,9 @@ from preprocess.sound.detect import (
 )
 from preprocess.sound.stimuli import merge_segments
 # from preprocess_ephys import MergeLazySignals
-from file_setup import Nix2Wav, Rhd2Nix, SiteConfig
 
+from file_setup import Nix2Wav, Rhd2Nix, SiteConfig
+from pipeline_utils import SiteParameter, SessionParameter
 import config
 
 
@@ -92,7 +93,7 @@ class CreateMicrophoneAlignedCodes(luigi.Task):
 
     Outputs a numpy array of trial codes for alignment of data to trials
     """
-    session_dir = luigi.Parameter()
+    session_dir = SessionParameter()
 
     def requires(self):
         return Nix2Wav(self.session_dir)
@@ -159,7 +160,7 @@ class CombinePlaybackMetadata(luigi.Task):
     for all playbacks in the session,
     """
 
-    session_dir = luigi.Parameter()
+    session_dir = SessionParameter()
 
     def requires(self):
         return {
@@ -220,7 +221,7 @@ class PlaybacksCSV(luigi.Task):
     time. Saves a list of playback periods.
     """
 
-    session_dir = luigi.Parameter()
+    session_dir = SessionParameter()
 
     def requires(self):
         return {
@@ -274,7 +275,7 @@ class PlaybacksCSV(luigi.Task):
 
 class FindLiveCalls(luigi.Task):
 
-    session_dir = luigi.Parameter()
+    session_dir = SessionParameter()
 
     def requires(self):
         return {
@@ -324,7 +325,7 @@ class MergePlaybacksCSV(luigi.Task):
     session and just adds the specified offset to each one.
     """
 
-    site_dir = luigi.Parameter()
+    site_dir = SiteParameter()
 
     def requires(self):
         config_task = SiteConfig(self.site_dir, required_keys=["sessions"])
@@ -364,7 +365,7 @@ class MergeLiveCalls(luigi.Task):
     session and just adds the specified offset to each one.
     """
 
-    site_dir = luigi.Parameter()
+    site_dir = SiteParameter()
 
     def requires(self):
         self.session_info = load_yaml(
@@ -400,7 +401,7 @@ class MergeLiveCalls(luigi.Task):
 
 
 class CreateAutodetectedPeriods(luigi.Task):
-    site_dir = luigi.Parameter()
+    site_dir = SiteParameter()
 
     def requires(self):
         return MergeLiveCalls(self.site_dir)
@@ -429,7 +430,7 @@ class CreateLabelingSaveFile(luigi.Task):
     the live call periods (from FindLiveCalls/MergeLiveCalls) as well as storing
     the playback periods as a preset source
     """
-    site_dir = luigi.Parameter()
+    site_dir = SiteParameter()
 
     def requires(self):
         return {
