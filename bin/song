@@ -102,7 +102,8 @@ def create_site(site_dir):
     config_data = {
         "download_type": download_type,
         "experiment_name": experiment_name,
-        "filelist": filelist
+        "filelist": filelist,
+        "playback_mic_channels": None
     }
 
     click.echo("Next, choose from a preset electrode configuration of ones we've used before.")
@@ -117,7 +118,7 @@ def create_site(site_dir):
     valid_elec_configs = list(range(9))
     elec_config = None
     while elec_config is None:
-        elec_config = input("Preset electrode config [0-8]:")
+        elec_config = input("Preset electrode config [0-6]:")
         try:
             elec_config = int(elec_config)
         except:
@@ -185,6 +186,39 @@ def create_site(site_dir):
             "ephys.wav": [[0, 15]],
             "mic.wav": [[0, 1], [1, 4]],
         }
+
+    click.echo("Which microphone channel(s) would capture playback audio?")
+    click.echo("Separate each with a comma or leave blank to use all.")
+    click.echo("(this is only important if there are no digital codes for synchronizing playbacks to intan)")
+
+    ch = 0
+    if "nix2wav" in config_data:
+        for k, v in config_data["nix2wav"]["mic.wav"]:
+            if isinstance(v, list):
+                for i in range(*v):
+                    click.echo("{}: {} {}".format(ch, k, i))
+                    ch += 1
+            else:
+                click.echo("{}: {} {}".format(ch, k, v))
+                ch += 1
+
+    valid = False
+    while valid is False:
+        response = input("Mic channels with playback (separated by commas, default all): ")
+        response = response.strip()
+
+        if response == "":
+            playback_channels = None
+            valid = True
+        else:
+            try:
+                playback_channels = [int(x) for x in response.strip().split(",")]
+            except:
+                click.echo("Invalid input")
+            else:
+                valid = True
+
+    config_data["playback_mic_channels"] = playback_channels
 
     click.echo("Okay. Saving {}".format(config_path))
 

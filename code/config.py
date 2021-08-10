@@ -26,7 +26,7 @@ OWNCLOUD_CREDENTIALS_FILE = os.path.join(PROJECT_ROOT, "owncloud.yaml")
 LOCAL_RAW_FILES = {
     "rhd_drive": os.path.join(DATADIR, "local_raw_storage", "{experiment_name}"),
     "pyoperant_drive": os.path.join(DATADIR, "local_raw_storage", "{experiment_name}"),
-    "stimuli_drive": os.path.join(DATADIR, "local_raw_storage", "{experiment_name}", "Stimuli"),
+    "stimuli_drive": os.path.join(DATADIR, "local_raw_storage", "{experiment_name}", "Stimuli", "Playback"),
 }
 
 #################

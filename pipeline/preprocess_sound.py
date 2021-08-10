@@ -32,7 +32,7 @@ from preprocess.sound.detect import (
 from preprocess.sound.stimuli import merge_segments
 # from preprocess_ephys import MergeLazySignals
 
-from file_setup import Nix2Wav, Rhd2Nix, SiteConfig
+from file_setup import Nix2Wav, Rhd2Nix, SiteConfig, SessionConfig
 from pipeline_utils import SiteParameter, SessionParameter
 import config
 
@@ -106,6 +106,9 @@ class CreateMicrophoneAlignedCodes(luigi.Task):
         )
 
     def run(self):
+        config_file = yield SessionConfig(self.session_dir)
+        config = config_file.data()
+
         input_file = AudioFile(os.path.join(self.input()["mic.wav"].path))
 
         input_directory = os.path.join(self.session_dir, "raw")
@@ -123,7 +126,13 @@ class CreateMicrophoneAlignedCodes(luigi.Task):
             playback_df = read_pyoperant_csv(csv_file, stim_dir)
             session_start_timestamp = timestamp_from_intan_filename(self.session_dir)
 
-            aligned_times = compute_realigned_trial_times(playback_df, session_start_timestamp, input_file)
+            aligned_times = compute_realigned_trial_times(
+                    playback_df,
+                    session_start_timestamp,
+                    input_file,
+                    playback_channels=config.get("playback_mic_channels"),
+                    window=1.0
+            )
 
             new_codes.extend(create_replacement_codes(
                 playback_df,

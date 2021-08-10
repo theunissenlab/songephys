@@ -20,22 +20,6 @@ from pipeline_utils import (
 )
 
 
-class SiteFileList(luigi.Task):
-    """Checks if a file list file exists
-
-    sites/
-        SITE/
-            filelist [output]
-    """
-    site_dir = SiteParameter()
-
-    def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir, "filelist"))
-
-    def run(self):
-        raise Exception("The filelist file must be manually created")
-
-
 class SiteConfig(luigi.Task):
     site_dir = SiteParameter()
     required_keys = luigi.ListParameter(default=["download_type", "experiment_name", "filelist"])
