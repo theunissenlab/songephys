@@ -22,13 +22,13 @@ KS_THRESHOLD = 0.5
 
 def lda_2d(wfs, labels, l1, l2):
     """Project waveforms into space discriminting l1 (or l1 and l2)
-    
+
     Return the data divided into l1, l2 and other
     """
     labels_ = np.zeros_like(labels)
     labels_[labels == l1] = 1
     labels_[labels == l2] = 2
-    
+
     if len(np.unique(labels_)) > 2:
         lda = LDA(n_components=3).fit(wfs, labels_)
     else:
@@ -47,7 +47,7 @@ def lda_2d(wfs, labels, l1, l2):
 
 def guided_reassignment(X, y=None, force_clusters=None):
     """Reassign datapoints into new clusters
-    
+
     Args
     ----
     X: data array
@@ -63,13 +63,13 @@ def guided_reassignment(X, y=None, force_clusters=None):
 
     if y is None:
         y = GaussianMixture(n_components=k, max_iter=1000).fit_predict(X)
-    
+
     projection = LDA(n_components=1).fit(X, y).transform(X)
     new_y = isosplit5(projection.T) - 1
 
     if force_clusters is not None and len(np.unique(new_y)) != force_clusters:
         return y
-    
+
     return new_y
 
 
@@ -108,7 +108,7 @@ def cluster_window(wfs, projected):
 
 def graph_to_labels(label_windows, G):
     total_labels = -1 * np.ones(np.sum([len(win) for win in label_windows]))
-    
+
     step = 2000
     clusts = 6
 
@@ -123,7 +123,7 @@ def graph_to_labels(label_windows, G):
                 label_windows[window_idx] == cluster_label,
                 label_i)
         label_i += 1
-    
+
     return total_labels
 
 
@@ -162,7 +162,7 @@ def connect_windows(windows, label_windows, reassign=True):
                     np.zeros(len(pts1)),
                     np.ones(len(pts2))
                 ])
-                
+
                 with warnings.catch_warnings():
                     warnings.simplefilter("ignore")
                     lda = LDA(n_components=1).fit(
@@ -170,7 +170,7 @@ def connect_windows(windows, label_windows, reassign=True):
                     )
 
                 k, p = scipy.stats.ks_2samp(lda.transform(pts1).flatten(), lda.transform(pts2).flatten())
-                
+
                 if 1 - k > 0.5:
                     G.add_edge((i, c1), (i + 1, c2))
 
@@ -244,7 +244,7 @@ def sort(times, waveforms):
     ) == True
     waveforms_to_fit = waveforms[selector]
     waveforms_to_fit = waveforms_to_fit[::int(np.ceil(len(waveforms_to_fit) / 100000))]
-    
+
     full_umap = umap.UMAP(
         n_components=3, n_neighbors=4, min_dist=0.1
     ).fit(waveforms_to_fit)
@@ -290,6 +290,7 @@ def sort(times, waveforms):
         PCA(n_components=20).fit_transform(waveforms[updated_labels == -1]),
         times[updated_labels == -1, None] / 3600.0
     ])
+    print('Starting isosplit for leftover')
     leftover_labels = isosplit5(
         umap.UMAP(n_components=3, n_neighbors=10, min_dist=0.1).fit_transform(
             time_joined
@@ -297,6 +298,8 @@ def sort(times, waveforms):
     )
 
     for l in np.unique(leftover_labels):
+        print('Starting isosplit for leftover label', l)
+        # NEED to check for duplicate data here...  now isosplit5 will return -1 when that happens
         sublabels = isosplit5(waveforms[updated_labels == -1][leftover_labels == l].T)
         select = np.where(leftover_labels == l)[0]
         np.put(
@@ -320,7 +323,7 @@ def create_hierarchy(times, waveforms, labels, step=2000):
         (times[i:i+step], waveforms[i:i+step], labels[i:i+step])
         for i in range(0, len(waveforms), step)
     ]
-    
+
     labels = []
     cluster_map = {}
 
@@ -339,9 +342,9 @@ def create_hierarchy(times, waveforms, labels, step=2000):
                 labels.append(label_map[label])
             else:
                 labels.append(-1)
-                
+
     dataset = SpikeDataset(times, waveforms)
     new_dataset = dataset.cluster(labels)
     final_dataset = new_dataset.cluster([cluster_map.get(l, -1) for l in new_dataset.labels])
-    
+
     return final_dataset
