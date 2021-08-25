@@ -107,7 +107,7 @@ class CreateMicrophoneAlignedCodes(luigi.Task):
 
     def run(self):
         config_file = yield SessionConfig(self.session_dir)
-        config = config_file.data()
+        session_config = config_file.data()
 
         input_file = AudioFile(os.path.join(self.input()["mic.wav"].path))
 
@@ -130,7 +130,7 @@ class CreateMicrophoneAlignedCodes(luigi.Task):
                     playback_df,
                     session_start_timestamp,
                     input_file,
-                    playback_channels=config.get("playback_mic_channels"),
+                    playback_channels=session_config.get("playback_mic_channels"),
                     window=1.0
             )
 
@@ -341,9 +341,9 @@ class MergePlaybacksCSV(luigi.Task):
 
         yield config_task
 
-        config = config_task.output().data()
+        site_config = config_task.output().data()
 
-        for session in config["sessions"]:
+        for session in site_config["sessions"]:
             session_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions", session["id"])
             yield PlaybacksCSV(session_dir=session_dir)
 
@@ -351,9 +351,9 @@ class MergePlaybacksCSV(luigi.Task):
         return luigi.LocalTarget(os.path.join(self.site_dir, "playback_segments.csv"))
 
     def run(self):
-        config = self.input()[0].data()
+        site_config = self.input()[0].data()
         playback_csvs = self.input()[1:]
-        session_offsets = [session["t"] for session in config["sessions"]]
+        session_offsets = [session["t"] for session in site_config["sessions"]]
 
         # vocal_period_data = [np.load(s.path, allow_pickle=True)[()] for s in self.input()]
         vocal_period_data = [pd.read_csv(s.path) for s in playback_csvs]

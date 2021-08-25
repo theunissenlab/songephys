@@ -55,8 +55,8 @@ class TestFilter(unittest.TestCase):
         indices, snippets, corrs = find_correlated_events(sig, 2)
 
         np.testing.assert_array_equal(indices, [6, 12])
-        np.testing.assert_array_equal(sig[4:8], snippets[0])
-        np.testing.assert_array_equal(sig[10:14], snippets[1])
+        np.testing.assert_array_equal(sig[4:9], snippets[0])
+        np.testing.assert_array_equal(sig[10:15], snippets[1])
         np.testing.assert_array_equal(corrs[0], [[0, 1], [1, 0]])
         np.testing.assert_array_equal(corrs[1], [[0, -1], [-1, 0]])
 
@@ -84,12 +84,13 @@ class TestSpikeDetect(unittest.TestCase):
             1, 3, 1, 0, 0, 0, 0, 0, 0, 1,
             3, 1, 0, 0, 0, 0, 0, 0, 0, 0,
         ])
-        times = detect_spike_times(sig, threshold_std=1, spike_radius=2)
+        times = detect_spike_times(sig, threshold_std=1, samples_pre=2, samples_post=3)
         np.testing.assert_array_equal(times, [6, 11, 20])
 
         times = detect_spike_times(sig,
             threshold_std=1,
-            spike_radius=2,
+            samples_pre=2,
+            samples_post=3,
             min_spacing=5)
         np.testing.assert_array_equal(times, [6, 20])
 
@@ -99,57 +100,63 @@ class TestSpikeDetect(unittest.TestCase):
             1, 3, 1, 0, 0, 0, 0, 0, 0, 1,
             3, 1, 0, 0, 0, 0, 0, 0, 0, 0,
         ])
-        snippets = get_spike_snippets(sig, [6, 11, 12, 15], spike_radius=2)
+        snippets = get_spike_snippets(sig, [6, 11, 12, 15], samples_pre=2, samples_post=3)
         self.assertEqual(len(snippets), 4)
-        np.testing.assert_array_equal(snippets[0], [0, 1, 3, 1])
-        np.testing.assert_array_equal(snippets[1], [0, 1, 3, 1])
-        np.testing.assert_array_equal(snippets[2], [1, 3, 1, 0])
-        np.testing.assert_array_equal(snippets[3], [0, 0, 0, 0])
+        np.testing.assert_array_equal(snippets[0], [0, 1, 3, 1, 0, 0])
+        np.testing.assert_array_equal(snippets[1], [0, 1, 3, 1, 0, 0])
+        np.testing.assert_array_equal(snippets[2], [1, 3, 1, 0, 0, 0])
+        np.testing.assert_array_equal(snippets[3], [0, 0, 0, 0, 0, 0])
 
     def test_extract_spikes(self):
         # Mock the lazy loading signal loader
         # Two batches, 2 channels
         mock_lazy_loader = mock.MagicMock()
-        mock_lazy_loader.batches.return_value = iter([
-            (
-                0, 
-                np.array([
-                    [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0],
-                    [1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1],
-                    [0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                ]).T
-            ),
-            (
-                15, 
-                np.array([
-                    [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    [1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1],
-                    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                ]).T
-            )
-        ])
+        mock_lazy_loader.sampling_rate = 1
 
         # Channel 0: Spikes at 3, 10, 18, 25
         # Channel 1: Spikes at 7, 10
         # Channel 2: No spikes should be detected with threshold = 2std
         # Channel 3: Spike at 5
 
-        result = extract_spikes(
-            mock_lazy_loader,
-            batch_size=15,
-            threshold_std=2,
-            spike_radius=2,
-            channel_ids=[8, 9, 10, 11]
-        )
+        result = []
+        for i in range(4):
+            mock_lazy_loader.batches.return_value = iter([
+                (
+                    0,
+                    np.array([
+                        [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+                        [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0],
+                        [1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1],
+                        [0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    ]).T
+                ),
+                (
+                    15,
+                    np.array([
+                        [0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0],
+                        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                        [1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1],
+                        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    ]).T
+                )
+            ])
 
-        np.testing.assert_array_equal(result[8]["indices"], [3, 10, 18, 25])
-        np.testing.assert_array_equal(result[9]["indices"], [7, 10])
-        np.testing.assert_array_equal(result[10]["indices"], [])
-        np.testing.assert_array_equal(result[11]["indices"], [5])
+            result.append(extract_spikes(
+                mock_lazy_loader,
+                channel=i,
+                batch_size=15,
+                threshold_std=0.5,
+                t_pre=2,
+                t_post=3,
+                min_time_between_spikes=1
+            ))
 
-        np.testing.assert_array_equal(result[8]["waveforms"], [[0, 0, 1, 0]] * 4)
-        np.testing.assert_array_equal(result[9]["waveforms"], [[0, 0, 1, 0]] * 2)
-        np.testing.assert_array_equal(result[10]["waveforms"], np.zeros((0, 4)))
-        np.testing.assert_array_equal(result[11]["waveforms"], [[0, 0, 2, 0]])
+        np.testing.assert_array_equal(result[0]["indices"], [3, 10, 18, 25])
+        np.testing.assert_array_equal(result[1]["indices"], [7, 10])
+        np.testing.assert_array_equal(result[2]["indices"], [])
+        np.testing.assert_array_equal(result[3]["indices"], [5])
+
+        np.testing.assert_array_equal(result[0]["waveforms"], [[0, 0, 1, 0, 0, 0]] * 4)
+        np.testing.assert_array_equal(result[1]["waveforms"], [[0, 0, 1, 0, 0, 1], [0, 0, 1, 0, 0, 0]])
+        np.testing.assert_array_equal(result[2]["waveforms"], np.zeros((0, 6)))
+        np.testing.assert_array_equal(result[3]["waveforms"], [[0, 0, 2, 0, 0, 0]])

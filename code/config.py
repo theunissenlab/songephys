@@ -55,9 +55,10 @@ VOCALIZATION_AMPLITUDE_THRESHOLD = 1.5
 SPIKE_THRESHOLD_STD = 4
 Z_THRESHOLD = 4.0       # number of standard deviations to threshold initial spike detection
 Z_SPIKE_LIMIT = 30.0    # upper bound of spikes to detect (because larger are probably noise...)
-# TODO: replace this with time pre-spike and time-post spike (allow for asymmetric spike snippets)
+# TODO: This is being replaced by the variable spike_sorting.seconds_before_peak and spike_sorting.seconds_after_peak
+# in the site_config.yaml files
 SPIKE_WIDTH = 0.0006    # in seconds
-MIN_SPIKE_THRESHOLD_SPACING = 8
+MIN_SPIKE_THRESHOLD_SPACING = 0.0003
 
 # Define electrode numbers in order
 # - for our 16 channel recordings this is range(8, 24)

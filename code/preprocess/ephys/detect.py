@@ -11,25 +11,27 @@ import numpy as np
 import config
 
 
-def detect_spike_times(signal, threshold_std=3, spike_radius=20, min_spacing=1):
+def detect_spike_times(signal, threshold_std=3, samples_pre=20, samples_post=20, min_spacing=1):
     """Get indices of peaks in signal crossing threshold
 
-    Args
-    ----
+    Parameters
+    ----------
     signal : np.ndarray
         1D signal
-
-    Kwargs
-    ------
-    threshold_std : int or float
+    threshold_std : int | float
         Threshold in stds to detect spikes
-    spike_radius : int
-        Radius of time window of spike detection in samples
+    samples_pre : int
+        Number of samples to include per snippet preceding the peak index
+    samples_post : int
+        Number of samples to include per snippet after the peak index
     min_spacing : int
         Minimum number of samples separating two spikes
 
-    Returns an array of indexes at which putative spike peaks in input
-    signal are located
+    Returns
+    -------
+    spike_times : np.ndarray[int]
+        An array of indexes relative to the start of ``signal`` of spike peaks
+        that cross the given threshold
     """
     threshold = threshold_std * np.std(signal)
     mask = np.where(np.abs(signal) >= threshold)[0]
@@ -44,8 +46,10 @@ def detect_spike_times(signal, threshold_std=3, spike_radius=20, min_spacing=1):
         spike_ind = np.argmax(np.abs(signal[mask[start_ind]:mask[stop_ind] + 1]))
         spike_ind = mask[start_ind] + np.int(spike_ind)
 
-        if (spike_ind - spike_radius < 0) or (spike_ind + spike_radius > len(signal)):
+        # Reject peaks that occur too close to the edge of the signal
+        if (spike_ind - samples_pre < 0) or (spike_ind + samples_post + 1 > len(signal)):
             pass
+        # Reject peaks that are larger than config.Z_SPIKE_LIMIT times the threshold
         elif np.abs(signal[spike_ind]) > (config.Z_SPIKE_LIMIT * threshold):
             pass
         else:
@@ -55,50 +59,91 @@ def detect_spike_times(signal, threshold_std=3, spike_radius=20, min_spacing=1):
     return np.array(spikes_found).astype(np.int)
 
 
-def get_spike_snippets(signal, spike_indices, spike_radius):
+def get_spike_snippets(signal, spike_indices, samples_pre: int, samples_post: int):
     """Get waveform snippets from raw signal based on peak locations
 
-    Args
-    ----
+    Parameters
+    ----------
     signal : np.ndarray
-        1D signal
-    spike_indices : np.ndarray
-        Array of index values where spikes are centered
-    spike_width : int
-        Radius of time window of spike detection in samples
+        A signal of length N
+    spike_indices : np.ndarray[int]
+        Array of integer index values where spikes peak
+    samples_pre : int
+        Number of samples to include per snippet preceding the peak index
+    samples_post : int
+        Number of samples to include per snippet after the peak index
 
-    Returns a 2d (N x M) array where N is the number of spikes and M is the
-    size of a waveform (spike_radius * 2)
+    Returns
+    -------
+    snippets : np.ndarray
+        A 2d (N x M) array where N is the number of spikes and M is the
+        size of a waveform (samples_pre + samples_post + 1)
     """
     wfs = []
     for spike_idx in spike_indices:
-        spike_wf = signal[spike_idx - spike_radius:spike_idx + spike_radius]
+        spike_wf = signal[spike_idx - samples_pre:spike_idx + samples_post + 1]
         wfs.append(spike_wf)
 
     return np.array([np.array(wf) for wf in wfs])
 
 
 def extract_spikes(
-        signal_file,
-        channel,
-        batch_size,
-        threshold_std,
-        spike_radius,
+        signal_file: 'format.wav.AudioFile',
+        channel: int,
+        batch_size: int,
+        threshold_std: float,
+        t_pre: float,
+        t_post: float,
+        min_time_between_spikes: float
     ):
-    """Get spikes and times from signal on all channels
+    """Get spike times and spike waveforms from a signal
+
+    Reads the data in chunks of ``batch_size``, detects spikes by
+    threshold crossings, and extracts snippets with the requested duration.
+
+    Parameters
+    ----------
+    signal_file : format.wav.AudioFile
+        The ephys signal in AudioFile format (which allows for reading in chunks)
+    channel : int
+        Channel in signal_file to detect spikes on
+    batch_size : int
+        Number of samples per chunk
+    threshold_std : float
+        Number of standard deviations of the signal to set threshold
+    t_pre : float
+        Size of spike snippet before peak in seconds
+    t_post : float
+        Size of spike snippet after peak in seconds
+
+    Returns
+    -------
+    spikes : dict
+        A dictionary with the following keys "indicies" and "waveforms":
+
+        indices : np.ndarray[int]
+            A 1D array of indices showing spike peaks relative to the start of ``signal_file``
+        waveforms : np.ndarray[float]
+            An array of shape (N, M), where N is the number of spikes detected, and M
+            is the size of a spike snippet, defined by ``t_pre`` and ``t_post``
     """
     elec_spike_indices = []
     elec_spike_wfs = []
+
+    _, samples_pre, samples_post, _, _, _ = calculate_snippet_dimensions(
+            t_pre, t_post, signal_file.sampling_rate)
+    min_spacing = int(round(min_time_between_spikes * signal_file.sampling_rate))
 
     for batch_idx, chunk in signal_file.batches(batch_size):
         sig = chunk[:, channel]
         indices = detect_spike_times(
             sig,
             threshold_std=threshold_std,
-            spike_radius=spike_radius,
-            min_spacing=config.MIN_SPIKE_THRESHOLD_SPACING
+            samples_pre=samples_pre,
+            samples_post=samples_post,
+            min_spacing=min_spacing,
         )
-        waveforms = get_spike_snippets(sig, indices, spike_radius)
+        waveforms = get_spike_snippets(sig, indices, samples_pre, samples_post)
 
         if len(indices):
             elec_spike_indices.append(indices + batch_idx)
@@ -113,11 +158,11 @@ def extract_spikes(
     else:
         return {
             "indices": np.zeros((0,)),
-            "waveforms": np.zeros((0, spike_radius * 2))
+            "waveforms": np.zeros((0, samples_pre + samples_post + 1))
         }
 
 
-def get_snippet_size(t_pre, t_post, sampling_rate):
+def calculate_snippet_dimensions(t_pre, t_post, sampling_rate):
     """Compute number of samples and time array for snipping waveforms
 
     Previous code used a snippet "radius" (equal time cut before and after peak)
@@ -180,7 +225,7 @@ def recut_waveforms(
 
     sampling_rate = lazy_site.get_signal_sampling_rate("filtered")
 
-    t_arr, samples_pre, samples_post, t_pre_discrete, t_post_discrete, peak_idx = get_snippet_size(
+    t_arr, samples_pre, samples_post, t_pre_discrete, t_post_discrete, peak_idx = calculate_snippet_dimensions(
         t_pre,
         t_post,
         sampling_rate,

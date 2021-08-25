@@ -21,33 +21,129 @@ from pipeline_utils import (
 
 
 class SiteConfig(luigi.Task):
+    """Verify config file exists and specific keys exist
+
+    Use as a dependency in requires() to make sure a task can only be run
+    if the given configuration keys are defined
+
+    Example Usage
+    -------------
+    >>> class ExampleTask(luigi.Task):
+    ...     REQUIRED_KEYS = ["required_key_1", "required_key_2"]
+    ...     site_dir = SiteParameter()
+    ...     def requires(self):
+    ...         return SiteConfig(self.site_dir, required_keys=self.REQUIRED_KEYS)
+    ...     def run(self):
+    ...         config = self.input().data()
+    ...         assert "required_key_1" in config
+    ...         assert "required_key_2" in config
+
+    Arguments
+    ---------
+    site_dir : str
+        Path to site
+    required_keys : List[str] (default = ["download_type", "experiment_name", "filelist"])
+        List of keys that must exist in the config file
+
+    Output
+    ------
+    The keys in `required_keys` defined in `{site_dir}/site_config.yaml`.
+    """
     site_dir = SiteParameter()
     required_keys = luigi.ListParameter(default=["download_type", "experiment_name", "filelist"])
 
+    def config_path(self):
+        return os.path.join(self.site_dir, "site_config.yaml")
+
     def output(self):
-        return YamlTarget(os.path.join(self.site_dir, "site_config.yaml"), *self.required_keys)
+        return YamlTarget(self.config_path(), *self.required_keys)
 
     def run(self):
-        raise Exception("The site_config.yaml file with keys {} must be manually created."
-                " One or more keys are missing".format(self.required_keys))
+        raise Exception("""
+        The keys {} are required but not present in the config file found for {}
+        Config file: {}
+        """.format(self.required_keys, self.site_dir, self.config_path()))
 
 
 class SessionConfig(luigi.Task):
+    """Verify config file exists and specific keys exist
+
+    The configuration is located by finding a site whose config contains
+    the given session as one of its sessions.
+
+    Use as a dependency in requires() to make sure a task can only be run
+    if the given configuration keys are defined
+
+    Example Usage
+    -------------
+    >>> class ExampleTask(luigi.Task):
+    ...     REQUIRED_KEYS = ["required_key_1", "required_key_2"]
+    ...     session_dir = SessionParameter()
+    ...     def requires(self):
+    ...         return SessionConfig(self.session_dir, required_keys=self.REQUIRED_KEYS)
+    ...     def run(self):
+    ...         session_config = self.input().data()
+    ...         assert "required_key_1" in session_config
+    ...         assert "required_key_2" in session_config
+
+    Arguments
+    ---------
+    session_dir : str
+        Path to session
+    required_keys : List[str] (default = ["download_type", "experiment_name", "filelist"])
+        List of keys that must exist in the config file
+
+    Output
+    ------
+    The keys in `required_keys` defined in `{site_dir}/site_config.yaml`, where site_dir is
+    a site whose site_config.yaml contains `session_dir` in its `sessions` list.
+    """
     session_dir = SessionParameter()
     required_keys = luigi.ListParameter(default=["download_type", "experiment_name", "filelist", "sessions"])
 
-    def output(self):
+    def config_path(self):
         site_dirs, _ = get_session_sites(self.session_dir)
         if not len(site_dirs):
             raise Exception("No valid site with a config file found for session {}".format(self.session_dir))
-        return YamlTarget(os.path.join(site_dirs[0], "site_config.yaml"), *self.required_keys)
+        return os.path.join(site_dirs[0], "site_config.yaml")
+
+    def output(self):
+        return YamlTarget(self.config_path(), *self.required_keys)
 
     def run(self):
-        raise Exception("The site_config.yaml file with keys {} must be manually created."
-                " One or more keys are missing".format(self.required_keys))
+        raise Exception("""
+        The keys {} are required but not present in the config file found for {}
+        Config file: {}
+        """.format(self.required_keys, self.session_dir, self.config_path()))
 
 
 class SignalsConfig(luigi.Task):
+    """Verify config file exists with electrode layout configured properly
+
+    Use as a dependency in requires() to make sure a task can only be run
+    if the config variables already exist
+
+    Example Usage
+    -------------
+    >>> class ExampleTask(luigi.Task):
+    ...     site_dir = SiteParameter()
+    ...     def requires(self):
+    ...         return SignalsConfig(self.site_dir)
+    ...     def run(self):
+    ...         site_config = self.input().data()
+    ...         assert "nix2wav" in site_config
+    ...         assert "filtering" in site_config
+    ...         assert "playback_mic_channels" in site_config
+
+    Arguments
+    ---------
+    site_dir : str
+        Path to site
+
+    Output
+    ------
+    "nix2wav", "filtering", and "playback_mic_channels" must exist in the config file.
+    """
     site_dir = SiteParameter()
 
     def output(self):
@@ -80,10 +176,18 @@ class SignalsConfig(luigi.Task):
 
 
 class DefineSessions(luigi.Task):
-    """Determine how rhd and csv files should be combined into sessions
+    """Converts a list of RHD and CSV files into a list of session dicts
 
     Uses timestamps of RHD filenames and timestamps within pyoperant CSV
     files to figure out which CSVs go with which RHDs
+
+    Example
+    -------
+    luigi --module file_setup DefineSessions --site-dir SITE_DIR
+
+    Output
+    ------
+    "sessions" key in site_config.yaml, each element is a dict with "id", "sessions", and "playbacks"
     """
     site_dir = SiteParameter()
 
@@ -94,33 +198,45 @@ class DefineSessions(luigi.Task):
         return YamlTarget(os.path.join(self.site_dir, "site_config.yaml"), "sessions")
 
     def run(self):
-        config = self.input().data()
+        site_config = self.input().data()
 
-        if config["download_type"] not in downloaders.keys():
+        if site_config["download_type"] not in downloaders.keys():
             raise ValueError("The 'download_type' in {} must be one of {}".format(
                 self.input().path, ", ".join(downloaders.keys())
             ))
 
         session_dicts = associate_pyoperant_csvs_to_rhds(
-            csv_files=[f for f in config["filelist"] if f.endswith(".csv")],
-            rhd_files=[f for f in config["filelist"] if f.endswith(".rhd")],
-            experiment_name=config["experiment_name"],
-            download_type=config["download_type"],
+            csv_files=[f for f in site_config["filelist"] if f.endswith(".csv")],
+            rhd_files=[f for f in site_config["filelist"] if f.endswith(".rhd")],
+            experiment_name=site_config["experiment_name"],
+            download_type=site_config["download_type"],
         )
-        config["sessions"] = session_dicts
+        site_config["sessions"] = session_dicts
 
-        save_yaml(self.output().path, config)
+        save_yaml(self.output().path, site_config)
 
 
 class DownloadSession(luigi.Task):
     """
-    Download a session and pyoperant data for that session from google drive.
+    Download a session and pyoperant data for that session using a downloader defined in format.download
 
-    Looks in google drive to create a directory
+    Creates a directory under `DATA_DIR/birds/EXPERIMENT_NAME/sessions/SESSION_DIR/raw` and
+    saves the rhd file, any number of pyoperant CSV files, and stimulus folders
 
-    /birds/<BIRDNAME>/sessions/<session_dir>/raw/
+    Example
+    -------
+    ``luigi --module file_setup DownloadSession --session-dir SESSION_DIR``
 
-    and puts in an rhd file and 0+ pyoperant files
+    Arguments
+    ---------
+    session_dir : str
+    force : bool (default False)
+        Force the task to run whether or not the files had been downloaded already
+
+    Output
+    ------
+    Folders: `session_dir/raw/SESSION_NAME.rhd`, `session_dir/raw/*.csv`, and
+    `session_dir/stimuli/*`
     """
 
     session_dir = SessionParameter()
@@ -155,15 +271,15 @@ class DownloadSession(luigi.Task):
     def run(self):
         """Use the yaml file to download RHDs and pyoperant csvs for this session
         """
-        config = self.input().data()
+        session_config = self.input().data()
 
         if not len(self.site_dirs):
             raise Exception("No sites were found with site_config.yaml containing {}".format(self.session_dir))
 
-        downloader = downloaders[config["download_type"]]
+        downloader = downloaders[session_config["download_type"]]
 
         downloader.download_session(
-            config["experiment_name"],
+            session_config["experiment_name"],
             self.session_name,
             save_to=self.session_dir,
             pyoperant_files=self.pyoperants,
@@ -182,9 +298,9 @@ class DownloadSite(luigi.Task):
         return DefineSessions(self.site_dir)
 
     def run(self):
-        config = self.input().data()
+        site_config = self.input().data()
 
-        for session in config["sessions"]:
+        for session in site_config["sessions"]:
             session_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions", session["id"])
             if not os.path.exists(session_dir):
                 os.makedirs(session_dir)
@@ -226,13 +342,13 @@ class Rhd2Nix(luigi.Task):
 
     def run(self):
         rhd_file = self.input()["files"]["rhd"].path
-        config = self.input()["config"].data()
+        session_config = self.input()["config"].data()
 
         # Delete the digital input form the rhd file if from Seewiesen.
         # These are not used for stim id but to sync with bat logger
         # TODO: this is not a great place for this in case we want to keep
         # the digital codes at some point? and seewiesen also doesnt apply to the owncloud data either...
-        if (config["download_type"] == "seewiesen"):
+        if (session_config["download_type"] == "seewiesen"):
             print("Seewiesen Data: digital events in rhd will be deleted")
             storeDIG = False
         else:
@@ -291,9 +407,9 @@ class Nix2Wav(luigi.Task):
     def run(self):
         outputs = self.output()
         nix_file = self.input()["nix"].path
-        config = self.input()["config"].data()
+        session_config = self.input()["config"].data()
 
-        arrays = get_wavfile_data_from_nix(self.input()["nix"].path, config["nix2wav"])
+        arrays = get_wavfile_data_from_nix(self.input()["nix"].path, session_config["nix2wav"])
 
         with soundfile.SoundFile(
                 self.output()["mic.wav"].path,
@@ -305,7 +421,7 @@ class Nix2Wav(luigi.Task):
             print(type(arrays["mic"]["data"]))
             arrays["mic"]["data"] = np.array(arrays["mic"]["data"])
             arrays["mic"]["data"] -= np.median(arrays["mic"]["data"], axis=0)
-            for group_start, group_end in config["filtering"]["mic.wav"]:
+            for group_start, group_end in session_config["filtering"]["mic.wav"]:
                 arrays["mic"]["data"][:, group_start:group_end] /= np.max(np.abs(arrays["mic"]["data"][:, group_start:group_end]))
             f.write(arrays["mic"]["data"])
 
@@ -355,8 +471,8 @@ class Site2Wav(luigi.Task):
         return SiteConfig(site_dir=self.site_dir, required_keys=["nix2wav", "filtering"])
 
     def run(self):
-        config = self.input().data()
-        for session in config["sessions"]:
+        site_config = self.input().data()
+        for session in site_config["sessions"]:
             session_dir = os.path.join(
                 os.path.dirname(os.path.dirname(self.site_dir)), "sessions", session["id"]
             )

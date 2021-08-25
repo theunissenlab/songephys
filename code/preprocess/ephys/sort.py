@@ -64,7 +64,14 @@ def guided_reassignment(X, y=None, force_clusters=None):
     if y is None:
         y = GaussianMixture(n_components=k, max_iter=1000).fit_predict(X)
 
-    projection = LDA(n_components=1).fit(X, y).transform(X)
+    if len(np.unique(y)) <= 1:
+        projection = PCA(n_components=1).fit_transform(X, y)
+    else:
+        try:
+            projection = LDA(n_components=1).fit(X, y).transform(X)
+        except:
+            raise
+
     new_y = isosplit5(projection.T) - 1
 
     if force_clusters is not None and len(np.unique(new_y)) != force_clusters:

@@ -1,5 +1,6 @@
 import numpy as np
 
+from preprocess.ephys.detect import detect_spike_times, get_spike_snippets
 import config
 
 
@@ -17,7 +18,8 @@ def find_correlated_events(signal, event_radius):
         spike_indices = detect_spike_times(
             sig,
             threshold_std=0.75 * config.SPIKE_THRESHOLD_STD,
-            spike_radius=event_radius,
+            samples_pre=event_radius,
+            samples_post=event_radius,
         )
         all_spike_indices = all_spike_indices.union(set(spike_indices))
 
@@ -26,7 +28,9 @@ def find_correlated_events(signal, event_radius):
     snippets = get_spike_snippets(
         signal,
         all_spike_indices,
-        event_radius)
+        samples_pre=event_radius,
+        samples_post=event_radius
+    )
 
     correlation_matrices = []
     for idx, snippet in zip(all_spike_indices, snippets):

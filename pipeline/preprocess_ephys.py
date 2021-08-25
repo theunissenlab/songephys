@@ -42,7 +42,7 @@ class FilterEphys(luigi.Task):
         return luigi.LocalTarget(os.path.join(raw_dir, "ephys_filtered.wav"))
 
     def run(self):
-        config = self.input()["config"].data()
+        session_config = self.input()["config"].data()
         input_file = AudioFile(self.input()["wavs"]["ephys.wav"].path)
         output_file = AudioFile.create(
             self.output().path,
@@ -54,7 +54,7 @@ class FilterEphys(luigi.Task):
                 input_file,
                 output_file,
                 batch_size=65536,
-                channel_groups=[np.arange(a, b) for a, b in config["filtering"]["ephys.wav"]],
+                channel_groups=[np.arange(a, b) for a, b in session_config["filtering"]["ephys.wav"]],
             )
         except:
             output_file.close()
@@ -67,7 +67,10 @@ class DetectSpikesOnElectrode(luigi.Task):
     electrode_idx = luigi.IntParameter()
 
     def requires(self):
-        return FilterEphys(self.session_dir)
+        return {
+            "config": SessionConfig(self.session_dir),
+            "ephys": FilterEphys(self.session_dir)
+        }
 
     def output(self):
         sorting_dir = os.path.join(self.session_dir, "spikes")
@@ -77,12 +80,19 @@ class DetectSpikesOnElectrode(luigi.Task):
         return luigi.LocalTarget(os.path.join(sorting_dir, "spike_waveforms-e{}.pkl".format(self.electrode_idx)))
 
     def run(self):
-        input_file = AudioFile(self.input().path)
+        input_file = AudioFile(self.input()["ephys"].path)
+        session_config = self.input()["config"].data()
 
         if self.electrode_idx >= input_file.channels:
             raise ValueError("Cannot read electrode {} on file {} with {} channels".format(self.electrode_idx, self.input().path, input_file.channels))
 
-        spike_radius = int(config.SPIKE_WIDTH * input_file.sampling_rate)
+        # The code used to read the variable config.SPIKE_WIDTH
+        # We have updated this to (1) have longer and asymmetric spike widths, and
+        # (2) the spike snippet size must be set per site
+        if "spike_sorting.seconds_before_peak" not in session_config:
+            raise ValueError("Config variable spike_sorting.seconds_before_peak must be set")
+        if "spike_sorting.seconds_after_peak" not in session_config:
+            raise ValueError("Config variable spike_sorting.seconds_after_peak must be set")
 
         spikes = extract_spikes(
             input_file,
@@ -90,7 +100,9 @@ class DetectSpikesOnElectrode(luigi.Task):
             # Compute threshold in 5 minute windows
             batch_size=int(input_file.sampling_rate * 60 * 5),
             threshold_std=config.SPIKE_THRESHOLD_STD,
-            spike_radius=spike_radius,
+            t_pre=session_config.get("spike_sorting.seconds_before_peak", 0.0005),
+            t_post=session_config.get("spike_sorting.seconds_after_peak", 0.0015),
+            min_time_between_spikes=config.MIN_SPIKE_THRESHOLD_SPACING
         )
 
         spike_dataset = SpikeDataset(
@@ -125,12 +137,12 @@ class DetectSpikesInSession(luigi.Task):
         if not os.path.exists(config_path):
             return DetectSpikesOnElectrode(self.session_dir, 0).output()
 
-        config = load_yaml(config_path)
-        if "nix2wav" not in config:
+        session_config = load_yaml(config_path)
+        if "nix2wav" not in session_config:
             return DetectSpikesOnElectrode(self.session_dir, 0).output()
 
         channels = 0
-        for k, idx in config["nix2wav"]["ephys.wav"]:
+        for k, idx in session_config["nix2wav"]["ephys.wav"]:
             if isinstance(idx, int):
                 channels += idx
             else:
@@ -177,12 +189,12 @@ class CombineSiteSpikes(luigi.Task):
         )
 
     def run(self):
-        config = self.input().data()
-        session_offsets = [session["t"] for session in config["sessions"]]
+        site_config = self.input().data()
+        session_offsets = [session["t"] for session in site_config["sessions"]]
         sessions_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions")
 
         spike_results = []
-        for session in config["sessions"]:
+        for session in site_config["sessions"]:
             detected = yield DetectSpikesInSession(os.path.join(sessions_dir, session["id"]))
             spike_results.append(list(detected))
 

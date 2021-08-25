@@ -209,7 +209,7 @@ class AudioFile:
         """int: Number of channels in audio file"""
         return self._channels
 
-    def batches(self, step):
+    def batches(self, step: int) -> 'Iterator[int, np.ndarray]':
         """Create a generator that iterates over the data
 
         Yields the starting index of the batch and the data array

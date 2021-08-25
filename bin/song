@@ -103,7 +103,9 @@ def create_site(site_dir):
         "download_type": download_type,
         "experiment_name": experiment_name,
         "filelist": filelist,
-        "playback_mic_channels": None
+        "playback_mic_channels": None,
+        "spike_sorting.seconds_before_peak": 0.0005,
+        "spike_sorting.seconds_after_peak": 0.0015,
     }
 
     click.echo("Next, choose from a preset electrode configuration of ones we've used before.")
@@ -235,10 +237,24 @@ def download_site(site_dir):
     luigi.build([DownloadSite(site_dir=site_dir)], local_scheduler=True)
 
 
+@click.command(help="Run unittests")
+@click.option("-d", "--dir", "_dir", type=str, default="tests/")
+@click.option("-v", "--verbose", type=int, default=1)
+def unittest(_dir, verbose):
+    import unittest
+
+    if os.path.isdir(_dir):
+        testsuite = unittest.TestLoader().discover(_dir)
+    else:
+        testsuite = unittest.TestLoader().loadTestsFromName(_dir)
+    unittest.TextTestRunner(verbosity=verbose).run(testsuite)
+
+
 cli.add_command(info)
 cli.add_command(rhd_header)
 cli.add_command(wav_info)
 cli.add_command(create_site)
+cli.add_command(unittest)
 cli.add_command(download_site)
 
 # cli.add_command(rhd)
