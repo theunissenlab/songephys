@@ -4,7 +4,7 @@ hdbscan>=0.8.22
 h5py>=2.7.0
 ipython>=5.4.1
 jupyter>=1.0.0
-luigi==2.6.2
+luigi>=2.6.2
 matplotlib>=2.2.2
 networkx>=2.1
 nixio==1.3.1

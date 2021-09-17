@@ -107,14 +107,16 @@ class TestSpikeDetect(unittest.TestCase):
         np.testing.assert_array_equal(snippets[2], [1, 3, 1, 0, 0, 0])
         np.testing.assert_array_equal(snippets[3], [0, 0, 0, 0, 0, 0])
 
-    def test_extract_spikes(self):
+    def test_extract_spikes_without_duplicates(self):
+        """Test that duplicate waveforms are *excluded* from results of extract_spikes
+        """
         # Mock the lazy loading signal loader
         # Two batches, 2 channels
         mock_lazy_loader = mock.MagicMock()
         mock_lazy_loader.sampling_rate = 1
 
-        # Channel 0: Spikes at 3, 10, 18, 25
-        # Channel 1: Spikes at 7, 10
+        # Channel 0: Spikes at 3, 10, 18, 25, duplicates at 3, 10, 18, 25
+        # Channel 1: Spikes at 7, 10, with no duplicates
         # Channel 2: No spikes should be detected with threshold = 2std
         # Channel 3: Spike at 5
 
@@ -141,6 +143,74 @@ class TestSpikeDetect(unittest.TestCase):
                 )
             ])
 
+            if i == 0:
+                with self.assertWarns(UserWarning):
+                    result.append(extract_spikes(
+                        mock_lazy_loader,
+                        channel=i,
+                        batch_size=15,
+                        threshold_std=0.5,
+                        t_pre=2,
+                        t_post=3,
+                        min_time_between_spikes=1
+                    ))
+            else:
+                result.append(extract_spikes(
+                    mock_lazy_loader,
+                    channel=i,
+                    batch_size=15,
+                    threshold_std=0.5,
+                    t_pre=2,
+                    t_post=3,
+                    min_time_between_spikes=1
+                ))
+
+        np.testing.assert_array_equal(result[0]["indices"], [])
+        np.testing.assert_array_equal(result[1]["indices"], [7, 10])
+        np.testing.assert_array_equal(result[2]["indices"], [])
+        np.testing.assert_array_equal(result[3]["indices"], [5])
+
+        np.testing.assert_array_equal(result[0]["waveforms"], np.zeros((0, 6)))
+        np.testing.assert_array_equal(result[1]["waveforms"], [[0, 0, 1, 0, 0, 1], [0, 0, 1, 0, 0, 0]])
+        np.testing.assert_array_equal(result[2]["waveforms"], np.zeros((0, 6)))
+        np.testing.assert_array_equal(result[3]["waveforms"], [[0, 0, 2, 0, 0, 0]])
+
+    def test_extract_spikes(self):
+        """Test 'normal' spike extraction without duplicates
+        """
+        # Mock the lazy loading signal loader
+        # Two batches, 2 channels
+        mock_lazy_loader = mock.MagicMock()
+        mock_lazy_loader.sampling_rate = 1
+
+        # Channel 0: Spikes at 3, 10, 18, 25, with no duplicates
+        # Channel 1: Spikes at 7, 10, with no duplicates
+        # Channel 2: No spikes should be detected with threshold = 2std
+        # Channel 3: Spike at 5
+
+        result = []
+        for i in range(4):
+            mock_lazy_loader.batches.return_value = iter([
+                (
+                    0,
+                    np.array([
+                        [0, 0, 0, 1.01, 0, 0, 0, 0, 0, 0, 1.02, 0, 0, 0, 0],
+                        [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0],
+                        [1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1],
+                        [0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    ]).T
+                ),
+                (
+                    15,
+                    np.array([
+                        [0, 0, 0, 1.03, 0, 0, 0, 0, 0, 0, 1.04, 0, 0, 0, 0],
+                        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                        [1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1, -1, 1],
+                        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                    ]).T
+                )
+            ])
+
             result.append(extract_spikes(
                 mock_lazy_loader,
                 channel=i,
@@ -156,7 +226,12 @@ class TestSpikeDetect(unittest.TestCase):
         np.testing.assert_array_equal(result[2]["indices"], [])
         np.testing.assert_array_equal(result[3]["indices"], [5])
 
-        np.testing.assert_array_equal(result[0]["waveforms"], [[0, 0, 1, 0, 0, 0]] * 4)
+        np.testing.assert_array_equal(result[0]["waveforms"], [
+            [0, 0, 1.01, 0, 0, 0],
+            [0, 0, 1.02, 0, 0, 0],
+            [0, 0, 1.03, 0, 0, 0],
+            [0, 0, 1.04, 0, 0, 0],
+        ])
         np.testing.assert_array_equal(result[1]["waveforms"], [[0, 0, 1, 0, 0, 1], [0, 0, 1, 0, 0, 0]])
         np.testing.assert_array_equal(result[2]["waveforms"], np.zeros((0, 6)))
         np.testing.assert_array_equal(result[3]["waveforms"], [[0, 0, 2, 0, 0, 0]])

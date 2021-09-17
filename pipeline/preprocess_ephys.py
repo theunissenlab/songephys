@@ -18,7 +18,7 @@ import suss.io
 from format.io import load_yaml
 from format.wav import AudioFile, MultiWavReader
 from preprocess.ephys.filter import common_average_filter
-from preprocess.ephys.detect import extract_spikes
+from preprocess.ephys.detect import calculate_snippet_dimensions, extract_spikes
 from preprocess.ephys.sort import sort, create_hierarchy
 
 from file_setup import Nix2Wav, SiteConfig, SessionConfig, DefineSessions
@@ -245,7 +245,10 @@ class SortSpikes(luigi.Task):
     # add upgoing /  downgoing parameter?
 
     def requires(self):
-        return CombineSiteSpikes(self.site_dir)
+        return {
+            "spikes": CombineSiteSpikes(self.site_dir),
+            "config": SiteConfig(self.site_dir)
+        }
 
     def output(self):
         sorting_dir = os.path.join(self.site_dir, "sort_results")
@@ -257,8 +260,16 @@ class SortSpikes(luigi.Task):
         )
 
     def run(self):
-        dataset = suss.io.read_pickle(self.input()[self.electrode_idx].path)
-        peaks = dataset.waveforms[:, dataset.waveforms.shape[1] // 2]
+        site_config = self.input()["config"].data()
+        dataset = suss.io.read_pickle(self.input()["spikes"][self.electrode_idx].path)
+
+        _, _, _, _, _, peak_idx = calculate_snippet_dimensions(
+            t_pre=site_config.get("spike_sorting.seconds_before_peak", 0.0005),
+            t_post=site_config.get("spike_sorting.seconds_after_peak", 0.0015),
+            sampling_rate=dataset.sample_rate
+        )
+
+        peaks = dataset.waveforms[:, peak_idx]
         times = dataset.times[peaks < 0]
         waveforms = dataset.waveforms[peaks < 0]
         t, w, l = sort(times, waveforms)

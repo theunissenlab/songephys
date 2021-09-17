@@ -105,8 +105,7 @@ def split_window(wfs, labels, umapped):
 
 
 def cluster_window(wfs, projected):
-    projection = FastICA(n_components=ICA_COMPONENTS, max_iter=1000).fit_transform(wfs)
-    labels = BayesianGaussianMixture(n_components=GMM_COMPONENTS, max_iter=1000).fit_predict(projection)
+    labels = BayesianGaussianMixture(n_components=GMM_COMPONENTS, max_iter=1000).fit_predict(projected)
 
     labels = split_window(wfs, labels, projected)
 

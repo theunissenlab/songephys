@@ -1,4 +1,5 @@
 import sys
+import warnings
 from collections import defaultdict
 
 try:
@@ -44,7 +45,7 @@ def detect_spike_times(signal, threshold_std=3, samples_pre=20, samples_post=20,
 
     for stop_ind in edges:
         spike_ind = np.argmax(np.abs(signal[mask[start_ind]:mask[stop_ind] + 1]))
-        spike_ind = mask[start_ind] + np.int(spike_ind)
+        spike_ind = mask[start_ind] + int(spike_ind)
 
         # Reject peaks that occur too close to the edge of the signal
         if (spike_ind - samples_pre < 0) or (spike_ind + samples_post + 1 > len(signal)):
@@ -56,7 +57,7 @@ def detect_spike_times(signal, threshold_std=3, samples_pre=20, samples_post=20,
             spikes_found.append(spike_ind)
         start_ind = stop_ind + 1
 
-    return np.array(spikes_found).astype(np.int)
+    return np.array(spikes_found).astype(int)
 
 
 def get_spike_snippets(signal, spike_indices, samples_pre: int, samples_post: int):
@@ -85,6 +86,15 @@ def get_spike_snippets(signal, spike_indices, samples_pre: int, samples_post: in
         wfs.append(spike_wf)
 
     return np.array([np.array(wf) for wf in wfs])
+
+
+def get_unique_mask(waveforms):
+    unique_waveforms, counts = np.unique([tuple(x) for x in waveforms], axis=0, return_counts=True)
+
+    repeated_wfs = [tuple(wf) for wf, ct in zip(unique_waveforms, counts) if ct > 1]
+    nonunique_selector = np.array([(tuple(wf) in repeated_wfs) for wf in waveforms]).astype(bool)
+
+    return ~nonunique_selector
 
 
 def extract_spikes(
@@ -130,7 +140,7 @@ def extract_spikes(
     elec_spike_indices = []
     elec_spike_wfs = []
 
-    _, samples_pre, samples_post, _, _, _ = calculate_snippet_dimensions(
+    _, samples_pre, samples_post, _, _, peak_idx = calculate_snippet_dimensions(
             t_pre, t_post, signal_file.sampling_rate)
     min_spacing = int(round(min_time_between_spikes * signal_file.sampling_rate))
 
@@ -149,17 +159,23 @@ def extract_spikes(
             elec_spike_indices.append(indices + batch_idx)
             elec_spike_wfs.append(waveforms)
 
-
     if len(elec_spike_indices):
-        return {
-            "indices": np.concatenate(elec_spike_indices),
-            "waveforms": np.concatenate(elec_spike_wfs)
-        }
+        elec_spike_indices = np.concatenate(elec_spike_indices)
+        elec_spike_wfs = np.concatenate(elec_spike_wfs)
     else:
-        return {
-            "indices": np.zeros((0,)),
-            "waveforms": np.zeros((0, samples_pre + samples_post + 1))
-        }
+        elec_spike_indices = np.zeros((0,))
+        elec_spike_wfs = np.zeros((0, samples_pre + samples_post + 1))
+
+    # Remove duplicate spikes - if duplicated spikes occur, remove them
+    nonduplicate_selector = get_unique_mask(elec_spike_wfs)
+    if np.any(~nonduplicate_selector):
+        warnings.warn("{} identical spike shapes detected in {}".format(int(np.sum(~nonduplicate_selector)), signal_file))
+
+    return {
+        "peak_idx": peak_idx,
+        "indices": elec_spike_indices[nonduplicate_selector],
+        "waveforms": elec_spike_wfs[nonduplicate_selector]
+    }
 
 
 def calculate_snippet_dimensions(t_pre, t_post, sampling_rate):
