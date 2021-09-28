@@ -153,10 +153,9 @@ def _transform_pyoperant_csv(df, stim_loc):
     )
 
     def locate_stimulus_directory(path):
-        filename = os.path.basename(path)
-        dirname = os.path.basename(os.path.dirname(path))
-        # print(os.path.join(stim_loc, "..", dirname, filename))
-        return os.path.join(stim_loc, dirname, filename)
+        # Split the path at the first instance of the stim_loc name
+        relative_path_of_stim = path.split("/{}/".format(os.path.basename(stim_loc)))[1]
+        return os.path.join(stim_loc, relative_path_of_stim)
 
     df["stimulus_name"] = df["stimulus_name"].apply(
         locate_stimulus_directory
