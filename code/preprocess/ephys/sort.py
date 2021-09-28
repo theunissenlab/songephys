@@ -312,6 +312,8 @@ def sort(times, waveforms):
         print('Starting isosplit for leftover label', l)
         # NEED to check for duplicate data here...  now isosplit5 will return -1 when that happens
         sublabels = isosplit5(waveforms[updated_labels == -1][leftover_labels == l].T)
+        # if (len(np.unique(sublabels)) == 1 ):
+        #    print(np.unique(sublabels))
         select = np.where(leftover_labels == l)[0]
         np.put(
             leftover_labels,

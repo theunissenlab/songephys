@@ -64,7 +64,9 @@ def _get_stim_dirs(csv_files, stimuli_directory):
         for stim_dir in possible_stim_dirs:
             if any([(stim_dir in x) for x in stimulus_names]):
                 logger.info("Matched {}".format(stim_dir))
-                stim_dir_used = os.path.join(stimuli_directory, stim_dir)
+                # stim_dir_used = os.path.join(stimuli_directory, stim_dir)
+                # We are just checking it exists the stim_dir is added in locate_stimulus_directory in playback_utils.py
+                stim_dir_used = stimuli_directory
                 break
 
         if stim_dir_used is None:
