@@ -101,6 +101,7 @@ def compute_realigned_trial_times(
         # If the estimate doesnt make sense... just use the estimate based on timestamp
         if estimated_start < 0 or estimated_start > mic_reader.frames / mic_reader.sampling_rate:
             new_start_times.append(estimated_start)
+            shifts.append(0.0)
             continue
 
         # Get the microphone data
@@ -130,14 +131,34 @@ def compute_realigned_trial_times(
                 best_estimate_index = estimated_index
 
         estimate_after_correlation = (estimated_start - window) + best_estimate_index / intan_sr
-        if len(new_start_times) and estimate_after_correlation < new_start_times[-1]:
-            raise Exception("Start time of trial cannot be before the start time of the previous trial")
-            # Instead of raising exception, could just use the average shift of everything else found so far
-            # estimate_after_correlation = estimated_start - window + np.mean(shifts)
 
         new_start_times.append(estimate_after_correlation)
         shifts.append(new_start_times[-1] - estimated_start)
 
+    # If any shifts were greater than 100ms away from the median, they are suspicious and replace them with the median shift
+    shifts = np.array(shifts)
+    median_shift = np.median(shifts)
+    new_start_times = np.array(new_start_times)
+
+    suspisciously_bad_shifts = np.abs(shifts - median_shift) > 0.2
+
+    if np.any(suspisciously_bad_shifts):
+        print("Warning: {} shifts were found that were more than 100ms away from the median shift. Replacing them with median".format(np.sum(suspisciously_bad_shifts)))
+        new_start_times[suspisciously_bad_shifts] = new_start_times[suspisciously_bad_shifts] - shifts[suspisciously_bad_shifts] + median_shift
+
+    diffs = np.diff(new_start_times)
+    if any(diffs < 0.0):
+        bad_trials = np.where(diffs < 0.0)[0]
+        error_strings = []
+        for bad_trial in bad_trials:
+            error_strings.append("Row {} to {}: start times estimated to be {:.5f} and {:.5f}".format(
+                bad_trial,
+                bad_trial + 1,
+                new_start_times[bad_trial],
+                new_start_times[bad_trial + 1]
+            ))
+        raise Exception("Start time of trial cannot be before the start time of the previous trial:\n{}".format("\n".join(error_strings)))
+   
     print("Offsetting playbacks by best correlation\n"
             "On average, shifted by {:.2f}".format(np.mean(shifts)))
 
