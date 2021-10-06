@@ -304,7 +304,16 @@ class DownloadSite(luigi.Task):
             session_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions", session["id"])
             if not os.path.exists(session_dir):
                 os.makedirs(session_dir)
-            yield DownloadSession(session_dir, force=self.force)
+
+            if self.force:
+                try:
+                    DownloadSession(session_dir, force=self.force).run()
+                except Exception as e:
+                    print("Download session {} had an error {}. But going to try to download all because force=True".format(
+                        session_dir,
+                        str(e)))
+            else:
+                yield DownloadSession(session_dir, force=self.force)
 
 
 class Rhd2Nix(luigi.Task):
