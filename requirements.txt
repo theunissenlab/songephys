@@ -43,5 +43,6 @@ click
 
 # Soundsig (Need latest master of soundsig for bug fixes)
 -e git+https://github.com/theunissenlab/soundsig.git@master#egg=soundsig
+-e git+https://github.com/theunissenlab/soundsep2.git@main#egg=soundsep
 
 # --process-dependency-links

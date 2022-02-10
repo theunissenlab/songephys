@@ -666,8 +666,7 @@ def generate_stim_dicts(digital_codes, sample_rate, playbacks_db):
 
         stim_dicts.append({
             "name": "playback_{}".format(stim["emitter"]),
-            "description": "Created by "
-                "segmentation.audio_segment.generate_stim_dicts",
+            "description": "",
             "sound_type": "playback",
             "vocalization_type": stim.get("callid", "UV"),
             "vocalizer": vocalizer_relation,

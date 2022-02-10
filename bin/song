@@ -116,6 +116,7 @@ def create_site(site_dir):
     click.echo("4 : 32 channel, 2 mic")
     click.echo("5 : 2 subj [0-14 ephys][15 mic][16-30 ephys][31 mic], 3 mic, 6 motion")
     click.echo("6 : 1 subj [0-14 ephys][15 mic], 3 mic, 3 motion")
+    click.echo("7 : 32 channel, 3 mic")
 
     valid_elec_configs = list(range(9))
     elec_config = None
@@ -187,6 +188,15 @@ def create_site(site_dir):
         config_data["filtering"] = {
             "ephys.wav": [[0, 15]],
             "mic.wav": [[0, 1], [1, 4]],
+        }
+    elif elec_config == 7:
+        config_data["nix2wav"] = {
+            "ephys.wav": [["Amplifier", [0, 32]]],
+            "mic.wav": [["Board ADC", [0, 3]]],
+        }
+        config_data["filtering"] = {
+            "ephys.wav": [[0, 32]],
+            "mic.wav": [[0, 2], [2, 3]],
         }
 
     click.echo("Which microphone channel(s) would capture playback audio?")

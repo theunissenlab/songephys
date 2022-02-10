@@ -436,52 +436,85 @@ class CreateAutodetectedPeriods(luigi.Task):
         df.to_pickle(self.output().path)
 
 
-class CreateLabelingSaveFile(luigi.Task):
+class CreateSoundsepSaveFile(luigi.Task):
     """Creates a save file (used for soundsep) that populates
-    the live call periods (from FindLiveCalls/MergeLiveCalls) as well as storing
-    the playback periods as a preset source
+    a soundsep project folder.
+
+    Creates a folder for soundsep project, a soundsep config file,
+    and symlinks to each sessions raw mic files
+
+    SESSION_DIR/
+        soundsep_labeling/
+            soundsep.yaml
+            audio/
+                0_SESSION_NAME.mic.wav -> SESSION_DIR/raw/mic.wav
+                ...
+                        
     """
-    site_dir = SiteParameter()
+    session_dir = SessionParameter()
 
     def requires(self):
         return {
-            "live_calls": MergeLiveCalls(self.site_dir),
-            "vocal_periods": MergeVocalPeriods(self.site_dir),
+            "playbacks": PlaybacksCSV(self.session_dir),
+            "wav_files": Nix2Wav(self.session_dir),
         }
 
     def output(self):
-        if not os.path.exists(os.path.join(self.site_dir, "outputs")):
-            os.makedirs(os.path.join(self.site_dir, "outputs"))
+        if not os.path.exists(os.path.join(self.session_dir, "soundsep_labeling")):
+            os.makedirs(os.path.join(self.session_dir, "soundsep_labeling"))
+            os.makedirs(os.path.join(self.session_dir, "soundsep_labeling", "audio"))
+            os.makedirs(os.path.join(self.session_dir, "soundsep_labeling", "_appdata", "save"))
 
-        return luigi.LocalTarget(os.path.join(self.site_dir, "outputs", "save.npy"))
+        return luigi.LocalTarget(os.path.join(self.session_dir, "soundsep_labeling", "soundsep.yaml"))
 
     def run(self):
-        live_calls = np.load(self.input()["live_calls"].path, allow_pickle=True)[()]
-        vocal_periods = np.load(self.input()["vocal_periods"].path, allow_pickle=True)[()]
+        config_file = yield SessionConfig(self.session_dir)
+        session_config = config_file.data()
+        playback_periods = pd.read_csv(self.input()["playbacks"].path)
+        playback_channels = session_config.get("playback_mic_channels", 0)
+        if isinstance(playback_channels, int):
+            playback_channel = playback_channels
+        else:
+            playback_channel = playback_channels[0] if len(playback_channels) else 0
 
-        playback_df = pd.DataFrame([
+        sampling_rate = AudioFile(os.path.join(self.input()["wav_files"]["mic.wav"].path)).sampling_rate
+
+        # Write a default config
+        with open(self.output().path, "w+") as f:
+            f.write("""
+audio_directory: ../raw
+recursive_search: false
+filename_pattern: mic.wav
+block_keys: null
+channel_keys: null
+""")
+
+        soundsep_save_rows = []
+        for i in range(len(playback_periods)):
+            row = playback_periods.iloc[i]
+            soundsep_save_rows.append({
+                "SourceName": "Playback",
+                "SourceChannel": playback_channel,
+                "StartIndex": int(row["start_time"] * sampling_rate),
+                "StopIndex": int((row["start_time"] + row["duration"]) * sampling_rate),
+            })
+
+        pd.DataFrame(soundsep_save_rows).to_csv(os.path.join(
+            self.session_dir,
+            "soundsep_labeling",
+            "_appdata",
+            "save",
+            "segments.csv"))
+
+        source_csv = pd.DataFrame([
             {
-                "t_start": period["start_time"].item(),
-                "t_stop": period["start_time"].item() + period["duration"].item()
-            } for period in vocal_periods["playback"]
-        ])
-
-        playback_source_dict = {
-            "name": "Playbacks",
-            "channel": 0,
-            "hidden": False,
-            "intervals": playback_df,
-            "readonly": True
-        }
-
-        autodetect_table = pd.DataFrame([
-            {
-                "t_start": period["start_time"].item(),
-                "t_stop": period["start_time"].item() + period["duration"].item()
-            } for period in live_calls
-        ])
-
-        np.save(self.output().path, {
-            "sources": [playback_source_dict],
-            "autodetect": autodetect_table
-        })
+                "SourceName": "Playbacks",
+                "SourceChannel": playback_channel,
+                "SourceIndex": 0
+            }
+        ]).to_csv(os.path.join(
+            self.session_dir,
+            "soundsep_labeling",
+            "_appdata",
+            "sources.csv"
+        ))

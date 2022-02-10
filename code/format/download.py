@@ -168,8 +168,6 @@ class BaseDownloader(object):
 
         # Download all the pyoperant csv files with playback trial information
         # Also collect all the stimulus directory names of files used in those pyoperant playbacks
-        csv_string = ""
-        stim_dir_list = []
 
         for pyoperant_file in pyoperant_files:
             if not pyoperant_file.endswith(".csv"):
@@ -184,6 +182,19 @@ class BaseDownloader(object):
 
             self.download_file(csv_file, os.path.join(raw_dir, pyoperant_file))
 
+        if pyoperant_files:
+            self.download_stim_dirs(pyoperant_files, experiment_name, raw_dir, stimuli_dir)
+
+        self.close()
+
+
+    def download_stim_dirs(self, pyoperant_files, experiment_name, raw_dir, stimuli_dir):
+        # Using the stimulus directories concatenated into a string (csv_string) from loading the trial data above
+        # search through all the stim directories available and
+        # NOTE: If we are symlinking, we can actually just symlink the outer stimulus folder... so overwrite this
+        csv_string = ""
+        stim_dir_list = []
+        for pyoperant_file in pyoperant_files:
             with open(os.path.join(raw_dir, pyoperant_file), "r") as csvfile:
                 csvlines = csvfile.readlines()
                 for csvline in csvlines:
@@ -196,8 +207,6 @@ class BaseDownloader(object):
 
             stim_dir_list = list(np.unique(stim_dir_list))
 
-        # Using the stimulus directories concatenated into a string (csv_string) from loading the trial data above
-        # search through all the stim directories available and
         if pyoperant_files:
             stim_foldernames = []
             stimuli_folders = self.list_stimuli_directories(experiment_name)
@@ -212,8 +221,6 @@ class BaseDownloader(object):
             # Check to see of all files were found
             if not set(stim_dir_list).issubset(set(stim_foldernames)) :
                 logger.info("Stim download error: missing stim folders {} in {}".format(stim_dir_list, stim_foldernames))
-
-        self.close()
 
 
 class BaseGdriveDownloader(BaseDownloader):
@@ -303,6 +310,11 @@ class BaseLocalSymlinker(BaseDownloader):
     def connect(self):
         pass
 
+    def download_stim_dirs(self, pyoperant_files, experiment_name, raw_dir, stimuli_dir):
+        # If we are symlinking, we can actually just symlink the outer stimulus folder
+        for item in glob.glob(os.path.join(self.stimuli_drive(experiment_name), "*")):
+            self.download_folder(item, stimuli_dir)
+
     def download_file(self, file_object, download_to):
         logger.info("Symlinking {} to {}".format(file_object, download_to))
         if os.path.exists(download_to):
@@ -374,6 +386,18 @@ class Seewiesen2GdriveDownloader(BaseGdriveDownloader):
         return self.g.find(self.root, "Seewiesen2", experiment_name, "Stimuli")
 
 
+class PepeCanaryDownloader(BaseGdriveDownloader):
+
+    def rhd_drive(self, experiment_name):
+        return self.g.find(self.root, "PepeCanary", experiment_name)
+
+    def pyoperant_drive(self, experiment_name):
+        return self.g.find(self.root, "PepeCanary", experiment_name, "pyoperant")
+
+    def stimuli_drive(self, experiment_name):
+        return self.g.find(self.root, "PepeCanary", experiment_name, "Stimuli")
+
+
 class SeewiesenOwncloudDownloader(BaseOwncloudDownloader):
 
     def rhd_drive(self, experiment_name):
@@ -421,5 +445,6 @@ downloaders = {
     "seewiesen2": Seewiesen2GdriveDownloader(),
     "seewiesenCloud" : SeewiesenOwncloudDownloader(),
     "theunissen": TheunissenGdriveDownloader(),
+    "pepe": PepeCanaryDownloader(),
     "local": LocalSymlinker(),
 }

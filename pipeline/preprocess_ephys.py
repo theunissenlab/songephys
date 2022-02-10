@@ -325,9 +325,16 @@ class PreprocessSite(luigi.Task):
     """
 
     site_dir = SiteParameter()
+    no_sort = luigi.BoolParameter()
 
     def requires(self):
         from preprocess_sound import MergePlaybacksCSV
+        if self.no_sort:
+            return [
+                DefineSessions(self.site_dir),
+                MergePlaybacksCSV(self.site_dir),
+                CombineSiteSpikes(self.site_dir)
+            ]
         return [
             DefineSessions(self.site_dir),
             MergePlaybacksCSV(self.site_dir),
@@ -336,3 +343,4 @@ class PreprocessSite(luigi.Task):
 
     def run(self):
         pass
+
