@@ -58,6 +58,151 @@ def rhd2nix(filename):
     click.echo(pprint.pformat(header, indent=4))
 
 
+class SiteConfigOption:
+    def __init__(self, instructions, settings=None):
+        self.instructions = instructions
+        self.settings = settings
+
+    def apply_to_config_dict(self, config):
+        if self.settings is not None:
+            config.update(self.settings)
+
+
+_configs = (
+    SiteConfigOption(
+        instructions="None of the below",
+    ),
+
+    SiteConfigOption(
+        instructions="16 channel, 1 mic",
+        settings={
+            "nix2wav": {
+                "ephys.wav": [["Amplifier", [0, 16]]],
+                "mic.wav": [["Board ADC", 0]]
+            },
+            "filtering": {
+                "ephys.wav": [[0, 16]],
+                "mic.wav": [[0, 1]]
+            }
+        }
+    ),
+
+    SiteConfigOption(
+        instructions="16 channel, 2 mic",
+        settings={
+            "nix2wav": {
+                "ephys.wav": [["Amplifier", [0, 16]]],
+                "mic.wav": [["Board ADC", [0, 2]]]
+            },
+            "filtering": {
+                "ephys.wav": [[0, 16]],
+                "mic.wav": [[0, 2]]
+            }
+        }
+    ),
+
+    SiteConfigOption(
+        instructions="32 channel, 1 mic",
+        settings={
+            "nix2wav": {
+                "ephys.wav": [["Amplifier", [0, 32]]],
+                "mic.wav": [["Board ADC", 0]]
+            },
+            "filtering": {
+                "ephys.wav": [[0, 32]],
+                "mic.wav": [[0, 1]]
+            }
+        }
+    ),
+
+    SiteConfigOption(
+        instructions="32 channel, 2 mic",
+        settings={
+            "nix2wav": {
+                "ephys.wav": [["Amplifier", [0, 32]]],
+                "mic.wav": [["Board ADC", [0, 2]]]
+            },
+            "filtering": {
+                "ephys.wav": [[0, 32]],
+                "mic.wav": [[0, 1]]
+            }
+        }
+    ),
+
+    SiteConfigOption(
+        instructions="32 channel, 3 mic (2+1)",
+        settings={
+            "nix2wav": {
+                "ephys.wav": [["Amplifier", [0, 32]]],
+                "mic.wav": [["Board ADC", [0, 3]]]
+            },
+            "filtering": {
+                "ephys.wav": [[0, 32]],
+                "mic.wav": [[0, 2], [2, 3]]
+            }
+        }
+    ),
+
+    SiteConfigOption(
+        instructions="2 subj [0-14 ephys][15 mic][16-30 ephys][31 mic], 3 mic",
+        settings={
+            "nix2wav": {
+                "ephys.wav": [["Amplifier", [0, 15]], ["Amplifier", [16, 31]]],
+                "mic.wav": [["Amplifier", 15], ["Amplifier", 31], ["Board ADC", [0, 3]]],
+            },
+            "filtering": {
+                "ephys.wav": [[0, 15], [15, 30]],
+                "mic.wav": [[0, 2], [2, 5]],
+            }
+        }
+    ),
+
+    SiteConfigOption(
+        instructions="2 subj [0-14 ephys][15 mic][16-30 ephys][31 mic], 3 mic, 6 motion",
+        settings={
+            "nix2wav": {
+                "ephys.wav": [["Amplifier", [0, 15]], ["Amplifier", [16, 31]]],
+                "mic.wav": [["Amplifier", 15], ["Amplifier", 31], ["Board ADC", [0, 3]]],
+                "motion.wav": [["AUX Input", [0, 6]]],
+            },
+            "filtering": {
+                "ephys.wav": [[0, 15], [15, 30]],
+                "mic.wav": [[0, 2], [2, 5]],
+            }
+        }
+    ),
+
+    SiteConfigOption(
+        instructions="1 subj [0-14 ephys][15 mic], 3 mic",
+        settings={
+            "nix2wav": {
+                "ephys.wav": [["Amplifier", [0, 15]]],
+                "mic.wav": [["Amplifier", 15], ["Board ADC", [0, 3]]],
+            },
+            "filtering": {
+                "ephys.wav": [[0, 15]],
+                "mic.wav": [[0, 1], [1, 4]],
+            }
+        }
+    ),
+
+    SiteConfigOption(
+        instructions="1 subj [0-14 ephys][15 mic], 3 mic, 3 motion",
+        settings={
+            "nix2wav": {
+                "ephys.wav": [["Amplifier", [0, 15]]],
+                "mic.wav": [["Amplifier", 15], ["Board ADC", [0, 3]]],
+                "motion.wav": [["AUX Input", [0, 3]]],
+            },
+            "filtering": {
+                "ephys.wav": [[0, 15]],
+                "mic.wav": [[0, 1], [1, 4]],
+            }
+        }
+    ),
+)
+
+
 @click.command("create-site")
 @click.argument("site_dir", type=click.Path())
 def create_site(site_dir):
@@ -108,20 +253,16 @@ def create_site(site_dir):
         "spike_sorting.seconds_after_peak": 0.0015,
     }
 
-    click.echo("Next, choose from a preset electrode configuration of ones we've used before.")
-    click.echo("0 : None of the below")
-    click.echo("1 : 16 channel, 1 mic")
-    click.echo("2 : 16 channel, 2 mic")
-    click.echo("3 : 32 channel, 1 mic")
-    click.echo("4 : 32 channel, 2 mic")
-    click.echo("5 : 2 subj [0-14 ephys][15 mic][16-30 ephys][31 mic], 3 mic, 6 motion")
-    click.echo("6 : 1 subj [0-14 ephys][15 mic], 3 mic, 3 motion")
-    click.echo("7 : 32 channel, 3 mic")
+    options = list(enumerate(_configs))
 
-    valid_elec_configs = list(range(9))
+    click.echo("Next, choose from a preset electrode configuration of ones we've used before.")
+    for idx, option in options:
+        click.echo("{}: {}".format(idx, option.instructions))
+
+    valid_elec_configs = list(range(len(options)))
     elec_config = None
     while elec_config is None:
-        elec_config = input("Preset electrode config [0-6]:")
+        elec_config = input("Preset electrode config [0-{}]:".format(len(options)))
         try:
             elec_config = int(elec_config)
         except:
@@ -131,73 +272,8 @@ def create_site(site_dir):
             click.echo("Electrode condig {} invalid. Choose from {}".format(elec_config, valid_elec_configs))
             elec_config = None
 
-    if elec_config == 0:
-        pass
-    elif elec_config == 1:
-        config_data["nix2wav"] = {
-            "ephys.wav": [["Amplifier", [0, 16]]],
-            "mic.wav": [["Board ADC", 0]]
-        }
-        config_data["filtering"] = {
-            "ephys.wav": [[0, 16]],
-            "mic.wav": [[0, 1]]
-        }
-    elif elec_config == 2:
-        config_data["nix2wav"] = {
-            "ephys.wav": [["Amplifier", [0, 16]]],
-            "mic.wav": [["Board ADC", [0, 2]]]
-        }
-        config_data["filtering"] = {
-            "ephys.wav": [[0, 16]],
-            "mic.wav": [[0, 2]]
-        }
-    elif elec_config == 3:
-        config_data["nix2wav"] = {
-            "ephys.wav": [["Amplifier", [0, 32]]],
-            "mic.wav": [["Board ADC", 0]]
-        }
-        config_data["filtering"] = {
-            "ephys.wav": [[0, 32]],
-            "mic.wav": [[0, 1]]
-        }
-    elif elec_config == 4:
-        config_data["nix2wav"] = {
-            "ephys.wav": [["Amplifier", [0, 32]]],
-            "mic.wav": [["Board ADC", [0, 2]]]
-        }
-        config_data["filtering"] = {
-            "ephys.wav": [[0, 32]],
-            "mic.wav": [[0, 2]]
-        }
-    elif elec_config == 5:
-        config_data["nix2wav"] = {
-            "ephys.wav": [["Amplifier", [0, 15]], ["Amplifier", [16, 31]]],
-            "mic.wav": [["Amplifier", 15], ["Amplifier", 31], ["Board ADC", [0, 3]]],
-            "motion.wav": [["AUX Input", [0, 6]]],
-        }
-        config_data["filtering"] = {
-            "ephys.wav": [[0, 15], [15, 30]],
-            "mic.wav": [[0, 2], [2, 5]],
-        }
-    elif elec_config == 6:
-        config_data["nix2wav"] = {
-            "ephys.wav": [["Amplifier", [0, 15]]],
-            "mic.wav": [["Amplifier", 15], ["Board ADC", [0, 3]]],
-            "motion.wav": [["AUX Input", [0, 3]]],
-        }
-        config_data["filtering"] = {
-            "ephys.wav": [[0, 15]],
-            "mic.wav": [[0, 1], [1, 4]],
-        }
-    elif elec_config == 7:
-        config_data["nix2wav"] = {
-            "ephys.wav": [["Amplifier", [0, 32]]],
-            "mic.wav": [["Board ADC", [0, 3]]],
-        }
-        config_data["filtering"] = {
-            "ephys.wav": [[0, 32]],
-            "mic.wav": [[0, 2], [2, 3]],
-        }
+    chosen_config_option = _configs[elec_config]
+    chosen_config_option.apply_to_config_dict(config_data)
 
     click.echo("Which microphone channel(s) would capture playback audio?")
     click.echo("Separate each with a comma or leave blank to use all.")
