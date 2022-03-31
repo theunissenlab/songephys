@@ -436,7 +436,7 @@ class CreateAutodetectedPeriods(luigi.Task):
         df.to_pickle(self.output().path)
 
 
-class CreateSoundsepSaveFile(luigi.Task):
+class CreateSoundsepFiles(luigi.Task):
     """Creates a save file (used for soundsep) that populates
     a soundsep project folder.
 
@@ -446,10 +446,6 @@ class CreateSoundsepSaveFile(luigi.Task):
     SESSION_DIR/
         soundsep_labeling/
             soundsep.yaml
-            audio/
-                0_SESSION_NAME.mic.wav -> SESSION_DIR/raw/mic.wav
-                ...
-                        
     """
     session_dir = SessionParameter()
 
@@ -481,8 +477,7 @@ class CreateSoundsepSaveFile(luigi.Task):
 
         # Write a default config
         with open(self.output().path, "w+") as f:
-            f.write("""
-audio_directory: ../raw
+            f.write("""audio_directory: ../raw
 recursive_search: false
 filename_pattern: mic.wav
 block_keys: null
