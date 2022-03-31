@@ -23,14 +23,12 @@ from preprocess.sound.playback_alignment import (
     create_replacement_codes
 )
 from preprocess.sound.detect import (
-    detect_call_and_syllable_dicts_from_lazy,
+    detect_call_and_syllable_dicts,
     generate_stim_dicts,
     playback_columns,
     autodetected_columns,
-    # generate_vocal_periods_dicts_from_lazy,
 )
 from preprocess.sound.stimuli import merge_segments
-# from preprocess_ephys import MergeLazySignals
 
 from file_setup import Nix2Wav, Rhd2Nix, SiteConfig, SessionConfig
 from pipeline_utils import SiteParameter, SessionParameter
@@ -319,9 +317,7 @@ class FindLiveCalls(luigi.Task):
 
         # This function tries to find the smallest pieces of vocalizations, e.g. syllables
         # Should modify this function if you want to group them up as songs
-        seg_dicts = detect_call_and_syllable_dicts_from_lazy(
-            mic, exclude_intervals, split_into_smallest_chunks=True, window=5
-        )
+        seg_dicts = detect_call_and_syllable_dicts(mic)
 
         df = pd.DataFrame(seg_dicts, columns=autodetected_columns)
         df.to_csv(self.output().path, index=False)

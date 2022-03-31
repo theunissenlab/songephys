@@ -107,46 +107,6 @@ def compute_smart_threshold(amp_env, sampling_rate=30000.0, multiple=3):
     return thresh
 
 
-def get_default_threshold(mic, window=5):
-    """Gets a threshold over all windows to use as a default
-
-    Uses compute_smart_threshold in every time window for an
-    entire microphone signal. Uses the median threshold as the
-    default threshold, and computes the std as a helper value to
-    reject thresholds that seem far off from what they should be.
-
-    Parameters
-    ==========
-    mic : instance of format.lazy.LazySignal
-        Lazy mic signal
-    window : float
-        Temporal (in seconds) width of each window to compute threshold in
-    """
-
-    all_thresholds_list = []
-    for t in np.arange(0, mic.N / mic.sampling_rate, window):
-        end_time = min(t + window, mic.N / mic.sampling_rate)
-
-        sliced = mic.time_slice(t, end_time)
-        t_arr = sliced.t
-        sig = sliced.data
-        sig = sig - np.mean(sig, axis=0)
-        sig = bandpass_filter(sig.T, mic.sampling_rate, 1000, 8000).T
-        amp_env = get_amplitude_envelope(sig, mic.sampling_rate, highpass=2000, lowpass=8000)
-        amp_env = np.mean(amp_env, axis=1)
-        threshold = compute_smart_threshold(amp_env, sampling_rate=mic.sampling_rate)
-        all_thresholds_list.append(threshold)
-        
-    all_thresholds_list = np.array(all_thresholds_list)
-    
-    # Remove outlier thresholds
-    clf = LocalOutlierFactor(n_neighbors=5, contamination=0.1, algorithm="kd_tree")
-    y_pred = clf.fit_predict(all_thresholds_list[:, None])
-    
-    # Return median (non-outlier) threshold and std
-    return np.median(all_thresholds_list[y_pred == 1]), np.std(all_thresholds_list[y_pred == 1])
-
-
 def check_if_any_interval_overlaps(test_interval, check_intervals):
     """Checks if test_interval (t1, t2) overlaps any interval in check_intervals
 
@@ -422,43 +382,10 @@ def cluster_syllables(lazy_mic, syllable_intervals, exclude_intervals=None, pad=
     return final_syllable_intervals, centered_specs, labels
 
 
-def detect_call_and_syllable_dicts_from_lazy(lazy_mic, exclude_intervals=None, split_into_smallest_chunks=False, window=5):
+def detect_call_and_syllable_dicts(mic):
+    """Automatically detect live calls from audio signal
     """
-    """
-    default_threshold, default_std = get_default_threshold(lazy_mic, window=window)
-
-    intervals = find_live_periods(lazy_mic, default_threshold, default_std, window=window)
-
-    if split_into_smallest_chunks:
-        syllable_intervals = split_live_syllables(
-                lazy_mic,
-                intervals,
-                default_threshold,
-                default_std)
-    else:
-        syllable_intervals = intervals
-
-    final_syllable_intervals, specs, labels = cluster_syllables(
-            lazy_mic,
-            syllable_intervals,
-            exclude_intervals=exclude_intervals,
-            pad=0.1)
-
-    seg_dicts = []
-    for (t1, t2), label in zip(final_syllable_intervals, labels):
-        seg_dicts.append({
-            "description": "autodetected call by threshold",
-            "name": "live_unknown",
-            "playback_file": None,
-            "sound_type": "live",
-            "vocalization_type": "unknown",
-            "vocalizer": "unknown",
-            "start_time": t1,
-            "duration": (t2 - t1),
-            "label": label
-        })
-
-    return seg_dicts 
+    raise NotImplementedError
 
 
 def threshold_events(
@@ -510,107 +437,6 @@ def threshold_events(
             current_interval_start = None
 
     return np.array([(i, j) for i, j in fused_intervals if ((j - i) / sampling_rate) >= min_size])
-
-#
-# def _fill_in_missing_digital_codes(mic, playbacks_db):
-
-
-'''
-def find_vocal_periods_from_lazy(mic, window_duration, threshold_mult):
-    """Finds periods where amplitude envelope is crossed using lazy signal
-
-    Args
-    ----
-    mic: format.lazy.LazySignal
-        Instance of LazySignal from which to load microphone data
-    window_duration: float
-        Window width (seconds) in which to compute amplitude thresholds
-    threshold_mult: float
-        Threshold value (in multiples of the median) to compute the threshold
-
-    Returns list of intervals (start_time, stop_time) which represent intervals
-    during which a theshold was crossed.
-    """
-    last_interval_to_check = None  # Marker in case the vocal period goes over end of window
-    all_intervals = []
-
-    THRESHOLD_WINDOW = window_duration  # window over which to compute amplitude thresholds (seconds)
-
-    for t in np.arange(0, mic.N / mic.sampling_rate, THRESHOLD_WINDOW):
-        end_time = min(t + THRESHOLD_WINDOW, mic.N / mic.sampling_rate)
-        sig = mic.time_slice(t, end_time).data
-        sig = sig - np.mean(sig, axis=0)
-        sig = bandpass_filter(sig.T, mic.sampling_rate, 1000, 8000).T
-        amp_env = get_amplitude_envelope(sig, mic.sampling_rate, highpass=2000, lowpass=8000)
-        amp_env = np.mean(amp_env, axis=1)
-        threshold = np.median(amp_env) * threshold_mult # config.VOCALIZATION_AMPLITUDE_THRESHOLD
-
-        intervals = threshold_events(
-            amp_env,
-            threshold,
-            polarity=1,
-            sampling_rate=mic.sampling_rate,
-            ignore_width=config.AUTODETECT_IGNORE_DURATION,
-            min_size=0.1,
-            fuse_duration=config.AUTODETECT_FUSE_DURATION
-        )
-
-        if last_interval_to_check is not None:
-            if not len(intervals):
-                all_intervals.append(last_interval_to_check)
-            elif intervals[0][0] < (config.AUTODETECT_FUSE_DURATION * mic.sampling_rate):
-                all_intervals.append((
-                    last_interval_to_check[0],
-                    intervals[0][1] / mic.sampling_rate + t
-                ))
-                intervals = intervals[1:]
-            else:
-                all_intervals.append(last_interval_to_check)
-                all_intervals.append((
-                    intervals[0][0] / mic.sampling_rate + t,
-                    intervals[0][1] / mic.sampling_rate + t
-                ))
-                intervals = intervals[1:]
-            last_interval_to_check = None
-
-        for i0, i1 in intervals:
-            if i1 == len(sig):
-                last_interval_to_check = (i0 / mic.sampling_rate + t, i1 / mic.sampling_rate + t)
-                break
-            all_intervals.append((i0 / mic.sampling_rate + t, i1 / mic.sampling_rate + t))
-
-    return all_intervals
-
-
-def generate_vocal_periods_dicts_from_lazy(lazy_mic):
-    vocal_intervals = find_vocal_periods_from_lazy(
-        lazy_mic,
-        60,  # 60 second windows
-        config.VOCALIZATION_AMPLITUDE_THRESHOLD
-    )
-
-    total_duration = lazy_mic.N / lazy_mic.sampling_rate
-
-    seg_dicts = []
-    for start_time, stop_time in vocal_intervals:
-        if stop_time > total_duration:
-            print("Warning: segment from {} to {} extends beyond {}".format(
-                start_time, stop_time, total_duration))
-            continue
-
-        seg_dicts.append({
-            "name": "live_unknown",
-            "description": "",
-            "sound_type": "live",
-            "vocalization_type": "unknown",
-            "vocalizer": "unknown",
-            "playback_file": None,
-            "start_time": start_time,
-            "duration": stop_time - start_time,
-        })
-
-    return seg_dicts
-'''
 
 
 def generate_stim_dicts(digital_codes, sample_rate, playbacks_db):

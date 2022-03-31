@@ -16,7 +16,6 @@ statsmodels>=0.11.1
 # soundsig>=1.5
 umap-learn>=0.3.10
 tqdm>=4.26.0
-theano>=1.0.5
 wavio>=0.0.4
 pyocclient>=0.6
 quantities>=0.12.4

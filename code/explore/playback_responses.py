@@ -11,7 +11,7 @@ from IPython.display import clear_output
 from sklearn.neighbors import KernelDensity
 
 from preprocess.sound.playback_utils import _parse_julie_filename_metadata
-from util import border, get_square_dims
+from plot_utils import border, get_square_dims
 
 from .adaptive_kde import ssvkernel
 

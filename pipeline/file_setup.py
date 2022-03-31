@@ -7,7 +7,6 @@ from neo.io import RHDIO, NixIO
 
 from format.download import downloaders
 from format.io import load_yaml, save_yaml
-from format.lazy import create_lazy_signals_from_nix
 from format.wav import get_wavfile_data_from_nix
 from targets import YamlTarget
 from pipeline_utils import (

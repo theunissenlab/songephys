@@ -21,7 +21,7 @@ from sklearn.neighbors import KernelDensity
 from IPython.display import display
 
 from preprocess.sound.playback_utils import _parse_julie_filename_metadata, _parse_ladder_filename_data
-from util import border, get_square_dims
+from plot_utils import border, get_square_dims
 
 import suss.io
 

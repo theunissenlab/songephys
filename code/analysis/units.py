@@ -11,7 +11,7 @@ import suss.io
 
 import matplotlib.pyplot as plt
 
-from util import border
+from utils import border
 
 
 def _compute_overlap(neighbors, labels, A, B):

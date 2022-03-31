@@ -3,7 +3,6 @@ import time
 from functools import wraps
 
 import numpy as np
-import theano
 
 
 logger = logging.getLogger(__name__)
@@ -27,10 +26,6 @@ def deprecated(msg, force=True):
         _raiser.__name__ = func.__name__
         return _raiser
     return _wrapper
-
-
-def float_x(x):
-    return np.asarray(x, dtype=theano.config.floatX)
 
 
 def intervals_overlap(interval1, interval2):
