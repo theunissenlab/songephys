@@ -68,6 +68,9 @@ def _get_stim_dirs(csv_files, stimuli_directory):
                 break
 
         if stim_dir_used is None:
+            print('Looking for stimulus names', stimulus_names)
+            print('Not found in', stimuli_directory)
+            print('Which has the following files', possible_stim_dirs)
             raise Exception(
                 "Couldn't find the stim dir for {}".format(csv_file))
 

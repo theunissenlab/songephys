@@ -64,7 +64,7 @@ MIN_SPIKE_THRESHOLD_SPACING = 0.0003
 # - for our 16 channel recordings this is range(8, 24)
 # - for our 32 channel recordings this is range(0, 32)
 ELECTRODES = range(0, 32)
-N_ELECTRODES = 30
+N_ELECTRODES = 32
 
 #################
 ### web views ###
