@@ -18,9 +18,9 @@ import suss.io
 import numpy as np
 import pandas as pd
 
-from postprocess.trials import package_unit_lightweight, package_stims_and_renditions, from_unit_id
-from preprocess.ephys.detect import recut_waveforms
-from postprocess.memory_test import lookup_reward
+from songephys.postprocess.trials import package_unit_lightweight, package_stims_and_renditions, from_unit_id
+from songephys.preprocess.ephys.detect import recut_waveforms
+from songephys.postprocess.memory_test import lookup_reward
 from preprocess_ephys import ManualSorting, MergeLazySignals
 
 

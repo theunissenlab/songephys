@@ -5,7 +5,7 @@ import luigi
 import numpy as np
 
 from preprocess_ephys import ManualSorting
-from analysis.units import generate_plots
+from songephys.analysis.units import generate_plots
 
 import config
 

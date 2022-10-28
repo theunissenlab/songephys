@@ -7,10 +7,10 @@ import tempfile
 import pandas as pd
 from luigi import Parameter
 
-from format.download import downloaders
-from format.intan_utils import timestamp_from_intan_filename
-from format.io import load_yaml
-from utils import intervals_overlap
+from songephys.format.download import downloaders
+from songephys.format.intan_utils import timestamp_from_intan_filename
+from songephys.format.io import load_yaml
+from songephys.utils import intervals_overlap
 
 import config
 

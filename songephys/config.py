@@ -5,11 +5,11 @@ import os
 ### Paths ###
 #############
 
+
 PROJECT_ROOT = os.environ.get("PROJECT_ROOT")
 if not PROJECT_ROOT:
     raise Exception("PROJECT_ROOT env variable not set")
-DATADIR = os.path.join(PROJECT_ROOT, "data")
-TMPDIR = os.path.join(PROJECT_ROOT, "data", "tmp")
+DATADIR = os.path.join(PROJECT_ROOT, "Data")
 
 
 ########################
@@ -24,9 +24,9 @@ OWNCLOUD_CREDENTIALS_FILE = os.path.join(PROJECT_ROOT, "owncloud.yaml")
 # songephys.code.format.download.LocalSymlinker
 # Fill in with paths to local locations of files, with {bird} as a wildcard for the subject folder name
 LOCAL_RAW_FILES = {
-    "rhd_drive": os.path.join(DATADIR, "local_raw_storage", "{experiment_name}"),
-    "pyoperant_drive": os.path.join(DATADIR, "local_raw_storage", "{experiment_name}"),
-    "stimuli_drive": os.path.join(DATADIR, "local_raw_storage", "{experiment_name}", "Stimuli"),
+    "rhd_drive": os.path.join(DATADIR, "{experiment_name}"),
+    "pyoperant_drive": os.path.join(DATADIR, "{experiment_name}"),
+    "stimuli_drive": os.path.join(DATADIR, "{experiment_name}", "Stimuli"),
 }
 
 #################

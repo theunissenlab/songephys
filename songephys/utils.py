@@ -79,3 +79,8 @@ def estimate_time_remaining(started_at, fraction_complete):
     else:
         est_total_time = np.inf
     return time_elapsed, est_total_time - time_elapsed
+
+
+
+def get_rhd_files_per_pyoperant():
+    from songephys import config

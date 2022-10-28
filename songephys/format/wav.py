@@ -5,7 +5,7 @@ import numpy as np
 import soundfile
 from neo.io import NixIO
 
-from format.io import load_yaml
+from songephys.format.io import load_yaml
 
 
 def time_to_index(t, sampling_rate):

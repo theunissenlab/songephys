@@ -10,25 +10,25 @@ import quantities as pq
 import soundfile as sf
 from neo.io import NixIO
 
-from format.io import load_yaml
-from format.intan_utils import timestamp_from_intan_filename
-from format.wav import AudioFile
-from preprocess.sound.playback_utils import (
+from songephys.format.io import load_yaml
+from songephys.format.intan_utils import timestamp_from_intan_filename
+from songephys.format.wav import AudioFile
+from songephys.preprocess.sound.playback_utils import (
     convert_digital_to_metadata,
     convert_pyoperant_csvs,
     read_pyoperant_csv
 )
-from preprocess.sound.playback_alignment import (
+from songephys.preprocess.sound.playback_alignment import (
     compute_realigned_trial_times,
     create_replacement_codes
 )
-from preprocess.sound.detect import (
+from songephys.preprocess.sound.detect import (
     detect_call_and_syllable_dicts,
     generate_stim_dicts,
     playback_columns,
     autodetected_columns,
 )
-from preprocess.sound.stimuli import merge_segments
+from songephys.preprocess.sound.stimuli import merge_segments
 
 from file_setup import Nix2Wav, Rhd2Nix, SiteConfig, SessionConfig
 from pipeline_utils import SiteParameter, SessionParameter

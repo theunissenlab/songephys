@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import suss.io
 
-from analysis.playbacks.categories import generate_category_comparisons
+from songephys.analysis.playbacks.categories import generate_category_comparisons
 
 from preprocess_ephys import ManualSorting
 from preprocess_sound import MergeVocalPeriods

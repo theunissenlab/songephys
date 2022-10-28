@@ -24,18 +24,22 @@ import glob
 import os
 
 # For gdrive downloads
-from gdrive_access import GDriveCommands
-from gdrive_access.errors import CredentialsNotFound
+try:
+    from gdrive_access import GDriveCommands
+    from gdrive_access.errors import CredentialsNotFound
+except:
+    GdriveCommands = None
+    CredentialsNotFound = None
 
 # For owncloud downloads
-from format.io import load_yaml
+from songephys.format.io import load_yaml
 try:
     import owncloud
 except:
     owncloud = None
 
 # The config file is in code and has a bnuch of globa variables - mostly for spike sorting
-import config
+import songephys.config as config
 import zipfile
 
 import numpy as np

@@ -1,5 +1,5 @@
 import yaml
-from format.io import load_yaml
+from songephys.format.io import load_yaml
 
 from luigi.target import Target
 

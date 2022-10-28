@@ -15,11 +15,11 @@ from soundsig.signal import bandpass_filter
 from suss.core import SpikeDataset
 import suss.io
 
-from format.io import load_yaml
-from format.wav import AudioFile, MultiWavReader
-from preprocess.ephys.filter import common_average_filter
-from preprocess.ephys.detect import calculate_snippet_dimensions, extract_spikes
-from preprocess.ephys.sort import sort, create_hierarchy
+from songephys.format.io import load_yaml
+from songephys.format.wav import AudioFile, MultiWavReader
+from songephys.preprocess.ephys.filter import common_average_filter
+from songephys.preprocess.ephys.detect import calculate_snippet_dimensions, extract_spikes
+from songephys.preprocess.ephys.sort import sort, create_hierarchy
 
 from file_setup import Nix2Wav, SiteConfig, SessionConfig, DefineSessions
 from pipeline_utils import SiteParameter, SessionParameter, get_session_sites
