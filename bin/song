@@ -208,6 +208,8 @@ _configs = (
 def create_site(site_dir):
     from format.download import downloaders
     from format.io import load_yaml, save_yaml
+    import numpy as np
+
     if not os.path.exists(site_dir):
         os.makedirs(site_dir)
 
@@ -225,19 +227,25 @@ def create_site(site_dir):
             click.echo("Download type {} invalid. Choose from {}".format(download_type, valid_downloaders))
             download_type = None
 
-    click.echo("Type or paste all .rhd and .csv files for the site separated by line breaks\n"
-	  "To end recording Press Ctrl+d on Linux/Mac on Crtl+z on Windows")
+    filelistpath = os.path.join(site_dir,'filelist.txt')
+    click.echo(filelistpath)
+    if not os.path.exists(filelistpath):
+        click.echo("Type or paste all .rhd and .csv files for the site separated by line breaks\n"
+        "To end recording Press Ctrl+d on Linux/Mac on Crtl+z on Windows")
 
-    filelist = []
-    try:
-        while True:
-            filelist.append(input())
-    except EOFError:
-        pass
+        filelist = []
+        try:
+            while True:
+                filelist.append(input())
+        except EOFError:
+            pass
 
-    filelist = [line.strip() for line in filelist]
-    filelist = [line for line in filelist if line.endswith("csv") or line.endswith("rhd")]
-
+        filelist = [line.strip() for line in filelist]
+        filelist = [line for line in filelist if line.endswith("csv") or line.endswith("rhd")]
+    else:
+        print("Reading filelist from %s"%filelistpath)
+        f = open(filelistpath,'r')
+        filelist = [line.strip() for line in f.readlines()]
     click.echo("Have filelist {}".format(filelist))
 
     default_experiment_name = os.path.basename(site_dir).split("_")[0]
@@ -252,27 +260,47 @@ def create_site(site_dir):
         "spike_sorting.seconds_before_peak": 0.0005,
         "spike_sorting.seconds_after_peak": 0.0015,
     }
+    # read the settings file if its present
+    xml_check = [fn.endswith('settings.xml') for fn in filelist]
+    if any(xml_check):
+        xml_file = filelist[np.where(xml_check)[0][0]]
+        print("Loading electrode config from %s" % xml_file)
+        electrode_config = parse_settings_file(xml_file)
+        chosen_config_option = SiteConfigOption(
+                instructions="loaded from %s"%xml_file,
+                settings={
+                    "nix2wav": {
+                        "ephys.wav": [["Amplifier", [0, len(electrode_config['Amplifier'])]]],
+                        "mic.wav": [["Board ADC", [0, len(electrode_config['Analog'])]]],
+                        "digital.wav": [["Digital Input", [0, len(electrode_config['Digital'])]]],
+                    },
+                    "filtering": {
+                        "ephys.wav": [[0, len(electrode_config['Amplifier'])]],
+                        "mic.wav": [[0, len(electrode_config['Analog'])]],
+                    }
+                }
+            )
+    else:
+        options = list(enumerate(_configs))
 
-    options = list(enumerate(_configs))
+        click.echo("Next, choose from a preset electrode configuration of ones we've used before.")
+        for idx, option in options:
+            click.echo("{}: {}".format(idx, option.instructions))
 
-    click.echo("Next, choose from a preset electrode configuration of ones we've used before.")
-    for idx, option in options:
-        click.echo("{}: {}".format(idx, option.instructions))
+        valid_elec_configs = list(range(len(options)))
+        elec_config = None
+        while elec_config is None:
+            elec_config = input("Preset electrode config [0-{}]:".format(len(options)))
+            try:
+                elec_config = int(elec_config)
+            except:
+                elec_config = None
 
-    valid_elec_configs = list(range(len(options)))
-    elec_config = None
-    while elec_config is None:
-        elec_config = input("Preset electrode config [0-{}]:".format(len(options)))
-        try:
-            elec_config = int(elec_config)
-        except:
-            elec_config = None
+            if elec_config not in valid_elec_configs:
+                click.echo("Electrode condig {} invalid. Choose from {}".format(elec_config, valid_elec_configs))
+                elec_config = None
 
-        if elec_config not in valid_elec_configs:
-            click.echo("Electrode condig {} invalid. Choose from {}".format(elec_config, valid_elec_configs))
-            elec_config = None
-
-    chosen_config_option = _configs[elec_config]
+        chosen_config_option = _configs[elec_config]
     chosen_config_option.apply_to_config_dict(config_data)
 
     click.echo("Which microphone channel(s) would capture playback audio?")
@@ -335,6 +363,92 @@ def unittest(_dir, verbose):
         testsuite = unittest.TestLoader().loadTestsFromName(_dir)
     unittest.TextTestRunner(verbosity=verbose).run(testsuite)
 
+@click.command("gen-filelists")
+@click.argument("experiment_name")
+def gen_filelists(experiment_name):
+    from format.download import downloaders
+    import glob, os
+    import datetime, pandas
+    import numpy as np
+    pyop_dir = downloaders['local'].pyoperant_drive(experiment_name)
+    rhd_dir = downloaders['local'].rhd_drive(experiment_name)
+    all_pyop_files = glob.glob(os.path.join(pyop_dir,'*_trialdata.csv'))
+    all_rhd_files = glob.glob(os.path.join(rhd_dir,"*/*.rhd"))
+    file_lists = dict()
+    for pyop_file in all_pyop_files:
+        exp_name = pyop_file.split('_trialdata')[0]
+        file_lists[exp_name] = []
+        df = pandas.read_csv(pyop_file)
+        if(len(df) == 0):
+            print("-------------------------")
+            print("%s is EMPTY"%exp_name)
+            print("------------------------")
+            continue
+        start_date = datetime.datetime.strptime(exp_name.split('_')[-1],'%Y%m%d%H%M%S')
+        end_date = datetime.datetime.fromisoformat(df['time'].iloc[-1]) + datetime.timedelta(0,15)
+        print("---------------------------------------")
+        print(exp_name)
+        print("Files:")
+        print(exp_name+"_events.log")
+        print(exp_name+"_trialdata.csv")
+        # get individual rhd recordings
+        experiments = np.unique([os.path.dirname(x) for x in all_rhd_files])
+        for f in all_rhd_files:
+            experiment = os.path.dirname(f)
+            exp_start = datetime.datetime.strptime(experiment.split('__')[-1],'%y%m%d_%H%M%S')
+            rhd_name = os.path.basename(f).split('.rhd')[0]
+            rhd_start = datetime.datetime.strptime(rhd_name.split('__')[-1],'%y%m%d_%H%M%S')
+            rhd_end = rhd_start + datetime.timedelta(0,0,0,0,30)
+            if (exp_start < start_date) and (rhd_start < end_date) and (rhd_end > start_date):
+                file_lists[exp_name].append(f)
+                print(f)
+    
+
+def parse_settings_file(settings_path):
+    import xml.etree.ElementTree as ET
+    tree = ET.parse(settings_path)
+    enabled_channels = dict({
+        "Amplifier":[],
+        "Analog": [],
+        "Digital": [],
+        "AUX": []
+    })
+    for child in tree.getroot():
+        if child.tag == "SignalGroup":
+            if child.attrib['Prefix'] == 'A':
+                # This is the ephys signals from port A
+                for chan in child:
+                    if chan.attrib['Enabled'] == 'True':
+                        name = chan.attrib['NativeChannelName']
+                        if 'AUX' in name:
+                            enabled_channels['AUX'].append(name)
+                        else:
+                            enabled_channels['Amplifier'].append(name)
+                continue
+            elif child.attrib['Prefix'] == 'ANALOG-IN':
+                # This is the Analog input signals from intan
+                for chan in child:
+                    if chan.attrib['Enabled'] == 'True':
+                        enabled_channels['Analog'].append(chan.attrib['NativeChannelName'])
+                continue
+            elif child.attrib['Prefix'] == 'DIGITAL-IN':
+                # This is the Digital input signals from intan
+                for chan in child:
+                    if chan.attrib['Enabled'] == 'True':
+                        enabled_channels['Digital'].append(chan.attrib['NativeChannelName'])
+                continue
+            elif child.attrib['Prefix'] == 'DIGITAL-OUT':
+                # This is the Digital output signals from intan
+                continue
+    for chan_type in enabled_channels.keys():
+        print("Number of %s channels:\t %d"%(chan_type,len(enabled_channels[chan_type])))
+    print(enabled_channels)
+    return enabled_channels
+
+@click.command("read-rhd-settings")
+@click.argument("settings_path")
+def read_rhd_settings(settings_path):
+    parse_settings_file(settings_path)
 
 cli.add_command(info)
 cli.add_command(rhd_header)
@@ -342,6 +456,8 @@ cli.add_command(wav_info)
 cli.add_command(create_site)
 cli.add_command(unittest)
 cli.add_command(download_site)
+cli.add_command(gen_filelists)
+cli.add_command(read_rhd_settings)
 
 # cli.add_command(rhd)
 

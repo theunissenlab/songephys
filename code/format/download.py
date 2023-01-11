@@ -24,8 +24,11 @@ import glob
 import os
 
 # For gdrive downloads
-from gdrive_access import GDriveCommands
-from gdrive_access.errors import CredentialsNotFound
+try:
+    from gdrive_access import GDriveCommands
+    from gdrive_access.errors import CredentialsNotFound
+except:
+    gdrive_access = None
 
 # For owncloud downloads
 from format.io import load_yaml

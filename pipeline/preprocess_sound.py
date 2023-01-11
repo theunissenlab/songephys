@@ -208,7 +208,7 @@ class CombinePlaybackMetadata(luigi.Task):
 
         # determine how many playback sets there were and how many
         nix = NixIO(self.input()["nix_file"].path)
-        block = nix.read_block(lazy=True)
+        block = nix.read_block()
 
         if not len(block.segments[0].events):
             # If we messed up the digital codes...
@@ -261,7 +261,7 @@ class PlaybacksCSV(luigi.Task):
             playback_dicts = []
         else:
             nix = NixIO(self.input()["nix_file"].path)
-            block = nix.read_block(lazy=True)
+            block = nix.read_block()
 
             if not len(block.segments[0].events):
                 stimulus_codes = np.load(self.input()["aligned_codes"].path, allow_pickle=True)[()]

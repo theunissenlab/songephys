@@ -1,10 +1,10 @@
 import os
+import datetime
 
 import numpy as np
 import luigi
 import soundfile
-from neo.io import RHDIO, NixIO
-
+from neo.io import NixIO, IntanIO, NWBIO
 from format.download import downloaders
 from format.io import load_yaml, save_yaml
 from format.wav import get_wavfile_data_from_nix
@@ -362,8 +362,10 @@ class Rhd2Nix(luigi.Task):
         else:
             storeDIG = True
 
-        rhd = RHDIO(rhd_file)
-        blk = rhd.read_block(storeDIG=storeDIG)
+        rhd = IntanIO(rhd_file)
+        blk = rhd.read_block()
+        blk.segments[0].annotations['signal_channels'] = [x[0] for x in rhd.header['signal_channels']]
+        blk.segments[0].annotations['event_channels'] = [x[0] for x in rhd.header['event_channels']]
         nix = NixIO(self.output().path)
         nix.write_block(blk)
         nix.close()
@@ -469,6 +471,162 @@ class Nix2Wav(luigi.Task):
         }
         save_yaml(self.output()["config_original_channels"].path, config_out)
 
+class Rhd2Nwb(luigi.Task):
+    """Converts an RHD file to a NWB file, and clean up the RHD file
+
+    Inputs
+    ------
+    session_dir : str
+        Path to session
+
+    Outputs a nix file as raw/{session_name}.nix
+    """
+
+    session_dir = SessionParameter()
+
+    def requires(self):
+        return {
+            "files": DownloadSession(self.session_dir),
+            "config": SessionConfig(self.session_dir),
+        }
+
+    def output(self):
+        raw_dir = os.path.join(self.session_dir, "raw")
+        if not os.path.exists(raw_dir):
+            os.makedirs(raw_dir)
+
+        nwb_filename = "{}.nwb".format(session_basename(self.session_dir))
+
+        # Temporarily move nwb file from segmentation dir to raw dir
+        if os.path.exists(os.path.join(self.session_dir, "segmentation", nwb_filename)):
+            import shutil
+            shutil.move(os.path.join(self.session_dir, "segmentation", nwb_filename), os.path.join(raw_dir, nwb_filename))
+
+        return luigi.LocalTarget(os.path.join(raw_dir, nwb_filename))
+
+    def run(self):
+        rhd_file = self.input()["files"]["rhd"].path
+        session_config = self.input()["config"].data()
+
+        # Delete the digital input form the rhd file if from Seewiesen.
+        # These are not used for stim id but to sync with bat logger
+        # TODO: this is not a great place for this in case we want to keep
+        # the digital codes at some point? and seewiesen also doesnt apply to the owncloud data either...
+        if (session_config["download_type"] == "seewiesen"):
+            print("Seewiesen Data: digital events in rhd will be deleted")
+            storeDIG = False
+        else:
+            storeDIG = True
+
+        rhd = IntanIO(rhd_file)
+        blk = rhd.read_block()
+        # the end of rhd files is the timestamp
+        rhd_split = os.path.basename(rhd_file).split('.')[0].split('_')
+        t_start = datetime.datetime.strptime("%s%s"%(rhd_split[-2],rhd_split[-1]),'%y%m%d%H%M%S' )
+
+        nwb = NWBIO(self.output().path,mode='w')
+        nwb.write_block(blk)
+        nwb.close()
+
+        # Remove the RHD file now that we have a NIX file
+        # os.remove(inputs["rhd"].path)
+
+class Nwb2Wav(luigi.Task):
+    """Write analogsignals to disk as wav files (RF64 format)
+
+    Outputs files for the microphone and electrode data arrays,
+    and also writes the mapping between the channels in these files
+    to their original channels into the configuration file.
+
+    The microphone data is also normalized and zero-centered according
+    to the filter groups defined in the config "filtering" key
+
+    Inputs
+    ------
+    session_dir : str
+        Path to session
+    """
+
+    session_dir = SessionParameter()
+
+    def requires(self):
+        return {
+            "nix": Rhd2Nix(self.session_dir),
+            "config": SessionConfig(self.session_dir, ["nix2wav", "filtering"])
+        }
+
+    def output(self):
+        raw_dir = os.path.join(self.session_dir, "raw")
+        mic_path = os.path.join(raw_dir, "mic.wav")
+        elec_path = os.path.join(raw_dir, "ephys.wav")
+        motion_path = os.path.join(raw_dir, "motion.wav")
+
+        site_dirs, _ = get_session_sites(self.session_dir)
+        config_path = os.path.join(site_dirs[0], "site_config.yaml")
+
+        return {
+            "mic.wav": luigi.LocalTarget(mic_path),
+            "ephys.wav": luigi.LocalTarget(elec_path),
+            "motion.wav": luigi.LocalTarget(motion_path),
+            "config_original_channels": YamlTarget(config_path, "wav_to_original_channels")
+        }
+
+    def run(self):
+        outputs = self.output()
+        nix_file = self.input()["nix"].path
+        session_config = self.input()["config"].data()
+
+        arrays = get_wavfile_data_from_nix(self.input()["nix"].path, session_config["nix2wav"])
+
+        with soundfile.SoundFile(
+                self.output()["mic.wav"].path,
+                "w+",
+                samplerate=arrays["mic"]["sampling_rate"],
+                format="RF64",
+                subtype="FLOAT",
+                channels=arrays["mic"]["data"].shape[1]) as f:
+            print(type(arrays["mic"]["data"]))
+            arrays["mic"]["data"] = np.array(arrays["mic"]["data"])
+            arrays["mic"]["data"] -= np.median(arrays["mic"]["data"], axis=0)
+            for group_start, group_end in session_config["filtering"]["mic.wav"]:
+                arrays["mic"]["data"][:, group_start:group_end] /= np.max(np.abs(arrays["mic"]["data"][:, group_start:group_end]))
+            f.write(arrays["mic"]["data"])
+
+        if not os.path.exists(self.output()["ephys.wav"].path):
+            with soundfile.SoundFile(
+                    self.output()["ephys.wav"].path,
+                    "w+",
+                    samplerate=arrays["ephys"]["sampling_rate"],
+                    format="RF64",
+                    subtype="FLOAT",
+                    channels=arrays["ephys"]["data"].shape[1]) as f:
+                f.write(arrays["ephys"]["data"])
+
+        if "motion" in arrays and arrays["motion"]["data"] is not None:
+            with soundfile.SoundFile(
+                    self.output()["motion.wav"].path,
+                    "w+",
+                    samplerate=arrays["motion"]["sampling_rate"],
+                    format="RF64",
+                    subtype="FLOAT",
+                    channels=arrays["motion"]["data"].shape[1]) as f:
+                f.write(arrays["motion"]["data"])
+        else:
+            open(self.output()["motion.wav"].path, 'a').close()
+
+        # Finally, write the channel name mappings to the configuration file
+        # This is kind of an extra thing; not sure if I should put it in the
+        # task outputs / set it as a new task, or what?
+
+        # FIXME: The NixIO seems to change the order of the signals...
+        # The order in the .rhd file is fine, why is it when saved to/loaded from nix
+        # the order gets messed up? This can mess up any tasks that rely
+        # on plain integer indexing (like filtering) so need to investigate this
+        config_out = self.output()["config_original_channels"].data()
+        config_out["wav_to_original_channels"] = {
+            "{}.wav".format(k): v["channel_names"] for k, v in arrays.items()
+        }
+        save_yaml(self.output()["config_original_channels"].path, config_out)
 
 class Site2Wav(luigi.Task):
     """Save all of site's raw data into wav files
