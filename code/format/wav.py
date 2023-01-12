@@ -39,6 +39,7 @@ def get_wavfile_data_from_nix(nix_file, mapping):
 
     nix_signals = {}
     nix_names = {}
+    i = 0
     for sig in segment.analogsignals:
         if not sig.name:
             logging.warning(
@@ -46,9 +47,10 @@ def get_wavfile_data_from_nix(nix_file, mapping):
                 "Using sig.annotations.nix_name instead: "
                 "{nix_name}".format(**sig.annotations))
             sig.name = sig.annotations["nix_name"]
-        sig.channel_index.index = np.arange(sig.shape[1])
+        #sig.channel_index.index = np.arange(sig.shape[1])
         nix_signals[sig.name] = sig
-        nix_names[sig.name] = list([str(x) for x in sig.channel_index.channel_names])
+        nix_names[sig.name] = segment.annotations['signal_channels'][i:i+sig.shape[1]] #list([str(x) for x in sig.channel_index.channel_names])
+        i+= sig.shape[1]
 
     def gather(config_key, default_sig_name):
         """Return a tuple of original chnanel names, data array, sampling rate"""
@@ -63,18 +65,23 @@ def get_wavfile_data_from_nix(nix_file, mapping):
                 for channel in channels:
                     data.append(nix_signals[sig_name][:, channel])
                     channel_names.append([sig_name, nix_names[sig_name][channel]])
+                sampling_rate = int(round(nix_signals[sig_name].sampling_rate.item()))
             data = np.hstack(data)
         else:
+            sampling_rate = None
             data = nix_signals.get(default_sig_name, None)
             channel_names = [[default_sig_name, name] for name in nix_names.get(default_sig_name, [])]
 
         if data is None:
-            return {"channel_names": [], "data": None, "sampling_rate": None}
+            return {"data": None, "sampling_rate": None, "channel_names": None }
+        
+        if sampling_rate is None:
+            sampling_rate = int(round(nix_signals[default_sig_name].sampling_rate.item()))
 
         return {
             "channel_names": channel_names,
             "data": data,
-            "sampling_rate": int(round(nix_signals[default_sig_name].sampling_rate.item()))
+            "sampling_rate": sampling_rate
         }
 
     ephys = gather("ephys.wav", "Amplifier")
