@@ -34,10 +34,10 @@ from suss.io import read_pickle, save_pickle
 import mne
 from mne.decoding import ReceptiveField, TimeDelayingRidge
 
-from sort import xcorr, isi_frac
+from songephys.preprocess.ephys.sort import xcorr, isi_frac
 from isosplit5 import isosplit5
 
-from strf import fit_strf
+from songephys.analysis.strf import fit_strf
 
 
 

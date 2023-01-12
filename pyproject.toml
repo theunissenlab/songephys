@@ -1,0 +1,31 @@
+[build-system]
+requires = [
+  "setuptools>=61.0",
+]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "songephys"
+version = "0.0.1"
+authors = [
+  { name="Logan Thomas", email="Lathomas42@gmail.com" },
+]
+description = "preprocessing of data from our electrophysiological experiemnts"
+readme = "README.md"
+requires-python = ">=3.7"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dynamic = ["dependencies"]
+
+[project.urls]
+"Homepage" = "https://github.com/theunissenlab/songephys"
+"Bug Tracker" = "https://github.com/theunissenlab/songephys/issues"
+
+[tool.setuptools]
+py-modules = ["songephys"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}

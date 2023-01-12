@@ -202,12 +202,17 @@ _configs = (
     ),
 )
 
+@click.command("create-config")
+@click.argument("experiment_name", type=click.Path())
+def create_config(experiment_name):
+    from songephys.config import generate_config_file
+    generate_config_file(experiment_name)
 
 @click.command("create-site")
 @click.argument("site_dir", type=click.Path())
 def create_site(site_dir):
-    from format.download import downloaders
-    from format.io import load_yaml, save_yaml
+    from songephys.format.download import downloaders
+    from songephys.format.io import load_yaml, save_yaml
     import numpy as np
 
     if not os.path.exists(site_dir):
@@ -347,7 +352,7 @@ def create_site(site_dir):
 @click.argument("site_dir", type=click.Path(exists=True))
 def download_site(site_dir):
     import luigi
-    from file_setup import DownloadSite
+    from songephys.pipeline.file_setup import DownloadSite
     luigi.build([DownloadSite(site_dir=site_dir)], local_scheduler=True)
 
 
@@ -366,7 +371,7 @@ def unittest(_dir, verbose):
 @click.command("gen-filelists")
 @click.argument("experiment_name")
 def gen_filelists(experiment_name):
-    from format.download import downloaders
+    from songephys.format.download import downloaders
     import glob, os
     import datetime, pandas
     import numpy as np
@@ -454,6 +459,7 @@ cli.add_command(info)
 cli.add_command(rhd_header)
 cli.add_command(wav_info)
 cli.add_command(create_site)
+cli.add_command(create_config)
 cli.add_command(unittest)
 cli.add_command(download_site)
 cli.add_command(gen_filelists)
