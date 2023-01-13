@@ -11,15 +11,18 @@ from .preprocess_ephys import ManualSorting
 from .preprocess_sound import MergeVocalPeriods
 
 from .. import config
-
+try:
+    cfg = global_cfg
+except:
+    cfg = config.get_config()
 
 class GenerateCategoryPSTHs(luigi.Task):
 
     site_dir = luigi.Parameter()
     electrode = luigi.parameter.NumericalParameter(
         var_type=int,
-        min_value=config.ELECTRODES[0],
-        max_value=config.ELECTRODES[-1] + 1
+        min_value=cfg['EPHYS'].get('ELECTRODE_START',0),
+        max_value=cfg['EPHYS'].get('ELECTRODE_START',0) + cfg['EPHYS'].get('ELECTRODE_N',32)
     )
 
     def requires(self):
@@ -70,7 +73,7 @@ class RunSiteCategories(luigi.Task):
     def requires(self):
         return [
             GenerateCategoryPSTHs(self.site_dir, elec_idx)
-            for elec_idx in config.ELECTRODES
+            for elec_idx in range(cfg['EPHYS'].get('ELECTRODE_START',0),cfg['EPHYS'].get('ELECTRODE_START',0)+cfg['EPHYS'].get('ELECTRODE_N',32))
         ]
         
     def output(self):

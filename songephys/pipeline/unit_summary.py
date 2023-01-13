@@ -8,7 +8,10 @@ from .preprocess_ephys import ManualSorting
 from ..analysis.units import generate_plots
 
 from .. import config
-
+try:
+    cfg = global_cfg
+except:
+    cfg = config.get_config()
 
 class UnitSummaries(luigi.Task):
     site_dir = luigi.Parameter()
@@ -16,7 +19,8 @@ class UnitSummaries(luigi.Task):
     def requires(self):
         return dict(
             (elec, ManualSorting(self.site_dir, elec))
-            for elec in config.ELECTRODES
+            for elec in range(cfg['EPHYS'].get('ELECTRODE_START',0),
+                              cfg['EPHYS'].get('ELECTRODE_START',0)+cfg['EPHYS'].get('ELECTRODE_N',32))
         )
 
     def output(self):

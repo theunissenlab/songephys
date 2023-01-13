@@ -23,8 +23,7 @@ def generate_config_file(experiment_name, out_path=None, data_dir = os.environ.g
         if not songephys_dir:
             raise Exception("SONGEPHYS_DIR env variable not set")
         out_path = os.path.join(os.environ.get("SONGEPHYS_DIR"), experiment_name)
-    project_cfg["EXPERIMENT"] = dict()
-    expeiriment_cfg = project_cfg["EXPERIMENT"]
+    expeiriment_cfg = dict()
     expeiriment_cfg["EXPERIMENT_NAME"] = experiment_name
     expeiriment_cfg["DATADIR"] = data_dir
 
@@ -32,8 +31,8 @@ def generate_config_file(experiment_name, out_path=None, data_dir = os.environ.g
     ########################
     ### File downloading ###
     ########################
-    project_cfg["DOWNLOADS"] = dict()
-    download_cfg = project_cfg["DOWNLOADS"] 
+    expeiriment_cfg["DOWNLOADS"] = dict()
+    download_cfg = expeiriment_cfg["DOWNLOADS"] 
     download_cfg["GDRIVE_CREDENTIALS_DIR"] = os.path.join(expeiriment_cfg["DATADIR"], "tlab_gdrive_credentials")
     download_cfg["OWNCLOUD_URL"] = "https://owncloud.gwdg.de"
     download_cfg["OWNCLOUD_CREDENTIALS_FILE"] = os.path.join(expeiriment_cfg["DATADIR"], "owncloud.yaml")
@@ -41,7 +40,7 @@ def generate_config_file(experiment_name, out_path=None, data_dir = os.environ.g
     # Raw file locations (can be used instead of downloading the files) used in
     # songephys.code.format.download.LocalSymlinker
     # Fill in with paths to local locations of files, with {bird} as a wildcard for the subject folder name
-    project_cfg["LOCAL_RAW_FILES"] = {
+    expeiriment_cfg["LOCAL_RAW_FILES"] = {
         "rhd_drive": os.path.join(expeiriment_cfg["DATADIR"], f"{experiment_name}"),
         "pyoperant_drive": os.path.join(expeiriment_cfg["DATADIR"], f"{experiment_name}"),
         "stimuli_drive": os.path.join(expeiriment_cfg["DATADIR"], f"{experiment_name}", "Stimuli"),
@@ -96,7 +95,7 @@ def generate_config_file(experiment_name, out_path=None, data_dir = os.environ.g
     expeiriment_cfg["DEBUG"] = False
     cfg_path = os.path.join(out_path,"songephys_config.yaml")
     print(f"Saving Config to {cfg_path}")
-    save_yaml(cfg_path, project_cfg)
+    save_yaml(cfg_path, expeiriment_cfg)
 
 def get_config(experiment_name=None):
     if experiment_name is None:

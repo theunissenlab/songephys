@@ -2,6 +2,10 @@ import numpy as np
 
 from .detect import detect_spike_times, get_spike_snippets
 from ... import config
+try:
+    cfg = global_cfg
+except:
+    cfg = config.get_config()
 
 
 def find_correlated_events(signal, event_radius):
@@ -17,7 +21,7 @@ def find_correlated_events(signal, event_radius):
     for elec_idx, sig in enumerate(signal.swapaxes(0, 1)):
         spike_indices = detect_spike_times(
             sig,
-            threshold_std=0.75 * config.SPIKE_THRESHOLD_STD,
+            threshold_std=0.75 * cfg.get('SPIKE_THRESHOLD_STD',4),
             samples_pre=event_radius,
             samples_post=event_radius,
         )

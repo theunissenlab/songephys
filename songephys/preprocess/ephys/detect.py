@@ -10,7 +10,10 @@ except ImportError:
 import numpy as np
 
 from ... import config
-
+try:
+    cfg = global_cfg
+except:
+    cfg = config.get_config()
 
 def detect_spike_times(signal, threshold_std=3, samples_pre=20, samples_post=20, min_spacing=1):
     """Get indices of peaks in signal crossing threshold
@@ -51,7 +54,7 @@ def detect_spike_times(signal, threshold_std=3, samples_pre=20, samples_post=20,
         if (spike_ind - samples_pre < 0) or (spike_ind + samples_post + 1 > len(signal)):
             pass
         # Reject peaks that are larger than config.Z_SPIKE_LIMIT times the threshold
-        elif np.abs(signal[spike_ind]) > (config.Z_SPIKE_LIMIT * threshold):
+        elif np.abs(signal[spike_ind]) > (cfg.get("SPIKE_SORTING",{}).get('Z_SPIKE_LIMIT',30.0) * threshold):
             pass
         else:
             spikes_found.append(spike_ind)

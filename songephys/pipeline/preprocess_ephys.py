@@ -23,7 +23,12 @@ from ..preprocess.ephys.sort import sort, create_hierarchy
 
 from .file_setup import Nix2Wav, SiteConfig, SessionConfig, DefineSessions
 from .pipeline_utils import SiteParameter, SessionParameter, get_session_sites
+
 from .. import config
+try:
+    cfg = global_cfg
+except:
+    cfg = config.get_config()
 
 
 class FilterEphys(luigi.Task):
@@ -94,15 +99,16 @@ class DetectSpikesOnElectrode(luigi.Task):
         if "spike_sorting.seconds_after_peak" not in session_config:
             raise ValueError("Config variable spike_sorting.seconds_after_peak must be set")
 
+        spike_cfg = cfg.get("SPIKE_SORTING",{})
         spikes = extract_spikes(
             input_file,
             channel=self.electrode_idx,
             # Compute threshold in 5 minute windows
             batch_size=int(input_file.sampling_rate * 60 * 5),
-            threshold_std=config.SPIKE_THRESHOLD_STD,
+            threshold_std=spike_cfg.get('SPIKE_THRESHOLD_STD',4),
             t_pre=session_config.get("spike_sorting.seconds_before_peak", 0.0005),
             t_post=session_config.get("spike_sorting.seconds_after_peak", 0.0015),
-            min_time_between_spikes=config.MIN_SPIKE_THRESHOLD_SPACING
+            min_time_between_spikes=spike_cfg.get('MIN_SPIKE_THRESHOLD_SPACING',.0003)
         )
 
         spike_dataset = SpikeDataset(
@@ -177,7 +183,7 @@ class CombineSiteSpikes(luigi.Task):
         if not os.path.exists(sorting_dir):
             os.makedirs(sorting_dir)
 
-        # TODO: relying on a preset config.N_ELECTRODES is flimsy, but this method
+        # TODO: relying on a preset N_ELECTRODES is flimsy, but this method
         # can be run before any data is actually downloaded or configured yet.
         # Maybe it would be better to stuff this as a key in the site_config.yaml
         # file instead.
@@ -185,7 +191,7 @@ class CombineSiteSpikes(luigi.Task):
             (e, luigi.LocalTarget(os.path.join(
                 sorting_dir,
                 "spike_waveforms-e{}.pkl".format(e))))
-            for e in range(config.N_ELECTRODES)
+            for e in range(cfg.get("EPHYS",{}).get("N_ELECTRODES",32))
         )
 
     def run(self):
@@ -288,7 +294,7 @@ class PrepareSorting(luigi.Task):
         # can be run before any data is actually downloaded or configured yet.
         # Maybe it would be better to stuff this as a key in the site_config.yaml
         # file instead.
-        for elec in range(config.N_ELECTRODES):
+        for elec in range(cfg.get("EPHYS",{}).get("N_ELECTRODES",32)):
             yield ManualSorting(site_dir=self.site_dir, electrode_idx=elec)
 
     def run(self):

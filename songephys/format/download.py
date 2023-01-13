@@ -42,6 +42,10 @@ except:
 
 # The config file is in code and has a bnuch of globa variables - mostly for spike sorting
 from .. import config
+try:
+    cfg = global_cfg
+except:
+    cfg = config.get_config()
 
 import numpy as np
 
@@ -148,7 +152,7 @@ class BaseDownloader(object):
             session_id = os.path.splitext(session_id)[0]
 
         if save_to is None:
-            bird_dir = os.path.join(config.DATADIR, "birds", experiment_name)
+            bird_dir = os.path.join(cfg['EXPERIMENT']['DATADIR'], "birds", experiment_name)
             session_dir = os.path.join(bird_dir, session_id)
         else:
             session_dir = save_to
@@ -232,10 +236,10 @@ class BaseGdriveDownloader(BaseDownloader):
 
     def connect(self):
         try:
-            self.g = GDriveCommands(os.path.join(config.GDRIVE_CREDENTIALS_DIR, "settings.yaml"))
+            self.g = GDriveCommands(os.path.join(cfg["DOWNLOADS"]["GDRIVE_CREDENTIALS_DIR"], "settings.yaml"))
         except CredentialsNotFound:
             logger.warning("Google Drive authentication failed. Need to set up gdrive authentication:\n"
-                       "python -m gdrive_access.setup_credentials --dir {}".format(config.GDRIVE_CREDENTIALS_DIR))
+                       "python -m gdrive_access.setup_credentials --dir {}".format(cfg["DOWNLOADS"]["GDRIVE_CREDENTIALS_DIR"]))
             raise
         else:
             self.root = self.g.get_root("Intan Ephys Data")
@@ -264,8 +268,8 @@ class BaseGdriveDownloader(BaseDownloader):
 class BaseOwncloudDownloader(BaseDownloader):
 
     def connect(self):
-        self.g = owncloud.Client(config.OWNCLOUD_URL)
-        loginData = load_yaml(config.OWNCLOUD_CREDENTIALS_FILE)
+        self.g = owncloud.Client(cfg['DOWNLOADS']['OWNCLOUD_URL'])
+        loginData = load_yaml(cfg['DOWNLOADS']['OWNCLOUD_CREDENTIALS_FILE'])
 
         try:
             self.g.login(loginData['user'], loginData['key'])
@@ -419,30 +423,30 @@ class LocalSymlinker(BaseLocalSymlinker):
 
     def __init__(self, *args, **kwargs):
         if not all([
-                config.LOCAL_RAW_FILES["rhd_drive"],
-                config.LOCAL_RAW_FILES["pyoperant_drive"],
-                config.LOCAL_RAW_FILES["stimuli_drive"]
+                cfg['LOCAL_RAW_FILES']["rhd_drive"],
+                cfg['LOCAL_RAW_FILES']["pyoperant_drive"],
+                cfg['LOCAL_RAW_FILES']["stimuli_drive"]
                 ]):
             raise ValueError("LOCAL_RAW_FILES in songephys/code/config.py must have keys set: rhd_drive, pyoperant_drive, and stimuli_drive")
         super().__init__(*args, **kwargs)
 
     def rhd_drive(self, experiment_name):
-        if "{experiment_name}" in config.LOCAL_RAW_FILES["rhd_drive"]:
-            return config.LOCAL_RAW_FILES["rhd_drive"].format(experiment_name=experiment_name)
+        if "{experiment_name}" in cfg['LOCAL_RAW_FILES']["rhd_drive"]:
+            return cfg['LOCAL_RAW_FILES']["rhd_drive"].format(experiment_name=experiment_name)
         else:
-            return config.LOCAL_RAW_FILES["rhd_drive"]
+            return cfg['LOCAL_RAW_FILES']["rhd_drive"]
 
     def pyoperant_drive(self, experiment_name):
-        if "{experiment_name}" in config.LOCAL_RAW_FILES["pyoperant_drive"]:
-            return config.LOCAL_RAW_FILES["pyoperant_drive"].format(experiment_name=experiment_name)
+        if "{experiment_name}" in cfg['LOCAL_RAW_FILES']["pyoperant_drive"]:
+            return cfg['LOCAL_RAW_FILES']["pyoperant_drive"].format(experiment_name=experiment_name)
         else:
-            return config.LOCAL_RAW_FILES["pyoperant_drive"]
+            return cfg['LOCAL_RAW_FILES']["pyoperant_drive"]
 
     def stimuli_drive(self, experiment_name):
-        if "{experiment_name}" in config.LOCAL_RAW_FILES["stimuli_drive"]:
-            return config.LOCAL_RAW_FILES["stimuli_drive"].format(experiment_name=experiment_name)
+        if "{experiment_name}" in cfg['LOCAL_RAW_FILES']["stimuli_drive"]:
+            return cfg['LOCAL_RAW_FILES']["stimuli_drive"].format(experiment_name=experiment_name)
         else:
-            return config.LOCAL_RAW_FILES["stimuli_drive"]
+            return cfg['LOCAL_RAW_FILES']["stimuli_drive"]
 
 
 downloaders = {

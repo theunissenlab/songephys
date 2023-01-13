@@ -15,7 +15,10 @@ from ...preprocess.ephys.detect import (
 from ...utils import convert_seconds_to_minutes, estimate_time_remaining
 
 from ... import config
-
+try:
+    cfg = global_cfg
+except:
+    cfg = config.get_config()
 
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.StreamHandler())
@@ -75,7 +78,7 @@ def common_average_filter(
             chunk = highpass_filter(
                 chunk.T,
                 input_audiofile.sampling_rate,
-                config.HIGHPASS_CUTOFF
+                cfg.get('HIGHPASS_CUTOFF',300.0)
             ).T
             chunk = common_average_reference(chunk)
             block[:, channel_indices] = chunk
@@ -106,7 +109,7 @@ def find_correlated_events(signal, event_radius):
     for elec_idx, sig in enumerate(signal.swapaxes(0, 1)):
         spike_indices = detect_spike_times(
             sig,
-            threshold_std=0.75 * config.SPIKE_THRESHOLD_STD,
+            threshold_std=0.75 * cfg['SPIKE_SORTING'].get('SPIKE_THRESHOLD_STD',4),
             spike_radius=event_radius,
         )
         all_spike_indices = all_spike_indices.union(set(spike_indices))
@@ -194,11 +197,16 @@ def filter_snippets(noise_snippets, filter_fn):
         noise_snippets,
         noise_snippets[:cut_size]
     ])
+    # if we want to use these then we have to add them to config
+    ephys_cfg = cfg.get("EPHYS",{})
+    if "FILTER_BLOCK" not in ephys_cfg or \
+        "N_LAGS" not in ephys_cfg:
+        raise IOError("Make sure EPHYS.FILTER_BLOCK and EPHYS.N_LAGS are present in the config file")
 
-    if len(noise_snippets) < config.FILTER_BLOCK + config.N_LAGS:
+    if len(noise_snippets) < ephys_cfg.get("FILTER_BLOCK") + ephys_cfg.get("N_LAGS"):
         return
 
-    if noise_snippets.shape[0] % config.FILTER_BLOCK == config.N_LAGS:
+    if noise_snippets.shape[0] % ephys_cfg.get("FILTER_BLOCK") == ephys_cfg.get("N_LAGS"):
         noise_snippets = np.vstack([noise_snippets, noise_snippets[:1]])
 
     # FILTER HERE
