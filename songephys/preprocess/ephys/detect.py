@@ -9,13 +9,7 @@ except ImportError:
 
 import numpy as np
 
-from ... import config
-try:
-    cfg = global_cfg
-except:
-    cfg = config.get_config()
-
-def detect_spike_times(signal, threshold_std=3, samples_pre=20, samples_post=20, min_spacing=1):
+def detect_spike_times(signal, threshold_std=3, samples_pre=20, samples_post=20, min_spacing=1, z_spike_limit=30):
     """Get indices of peaks in signal crossing threshold
 
     Parameters
@@ -54,7 +48,7 @@ def detect_spike_times(signal, threshold_std=3, samples_pre=20, samples_post=20,
         if (spike_ind - samples_pre < 0) or (spike_ind + samples_post + 1 > len(signal)):
             pass
         # Reject peaks that are larger than config.Z_SPIKE_LIMIT times the threshold
-        elif np.abs(signal[spike_ind]) > (cfg.get("SPIKE_SORTING",{}).get('Z_SPIKE_LIMIT',30.0) * threshold):
+        elif np.abs(signal[spike_ind]) > (z_spike_limit * threshold):
             pass
         else:
             spikes_found.append(spike_ind)
@@ -107,7 +101,8 @@ def extract_spikes(
         threshold_std: float,
         t_pre: float,
         t_post: float,
-        min_time_between_spikes: float
+        min_time_between_spikes: float,
+        z_spike_limit: float
     ):
     """Get spike times and spike waveforms from a signal
 
@@ -128,6 +123,10 @@ def extract_spikes(
         Size of spike snippet before peak in seconds
     t_post : float
         Size of spike snippet after peak in seconds
+    min_time_between_spikes : float
+        Minimum time between detected spikes
+    z_spike_limit: float
+        Rejects peaks larger than z_spike_limit * threshold_std
 
     Returns
     -------
@@ -155,6 +154,7 @@ def extract_spikes(
             samples_pre=samples_pre,
             samples_post=samples_post,
             min_spacing=min_spacing,
+            z_spike_limit=z_spike_limit
         )
         waveforms = get_spike_snippets(sig, indices, samples_pre, samples_post)
 

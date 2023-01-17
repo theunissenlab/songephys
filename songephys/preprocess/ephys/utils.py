@@ -1,14 +1,9 @@
 import numpy as np
 
 from .detect import detect_spike_times, get_spike_snippets
-from ... import config
-try:
-    cfg = global_cfg
-except:
-    cfg = config.get_config()
 
 
-def find_correlated_events(signal, event_radius):
+def find_correlated_events(signal, event_radius, spike_threshold_std, z_spike_limit):
     """Detect threshold crossings that are correlated across channels
 
     Note: Not in use as of commit 4d2da7d53753279cc2b33fd494f2b5615b8c7cdc
@@ -21,9 +16,10 @@ def find_correlated_events(signal, event_radius):
     for elec_idx, sig in enumerate(signal.swapaxes(0, 1)):
         spike_indices = detect_spike_times(
             sig,
-            threshold_std=0.75 * cfg.get('SPIKE_THRESHOLD_STD',4),
+            threshold_std=0.75 * spike_threshold_std,
             samples_pre=event_radius,
             samples_post=event_radius,
+            z_spike_limit=z_spike_limit
         )
         all_spike_indices = all_spike_indices.union(set(spike_indices))
 

@@ -34,18 +34,13 @@ except:
     gdrive_access = None
 
 # For owncloud downloads
-from format.io import load_yaml
+from .io import load_yaml
 try:
     import owncloud
 except:
     owncloud = None
 
 # The config file is in code and has a bnuch of globa variables - mostly for spike sorting
-from .. import config
-try:
-    cfg = global_cfg
-except:
-    cfg = config.get_config()
 
 import numpy as np
 
@@ -72,7 +67,10 @@ class BaseDownloader(object):
     pydrive2.GoogleDriveFile objects, and for owncloud/local downloading these
     would just be strings.
     """
-
+    def __init__(self,cfg):
+        print("BASE")
+        self.cfg = cfg
+    
     def connect(self):
         raise NotImplementedError
 
@@ -152,7 +150,7 @@ class BaseDownloader(object):
             session_id = os.path.splitext(session_id)[0]
 
         if save_to is None:
-            bird_dir = os.path.join(cfg['EXPERIMENT']['DATADIR'], "birds", experiment_name)
+            bird_dir = os.path.join(self.cfg['EXPERIMENT']['DATADIR'], "birds", experiment_name)
             session_dir = os.path.join(bird_dir, session_id)
         else:
             session_dir = save_to
@@ -236,10 +234,10 @@ class BaseGdriveDownloader(BaseDownloader):
 
     def connect(self):
         try:
-            self.g = GDriveCommands(os.path.join(cfg["DOWNLOADS"]["GDRIVE_CREDENTIALS_DIR"], "settings.yaml"))
+            self.g = GDriveCommands(os.path.join(self.cfg["DOWNLOADS"]["GDRIVE_CREDENTIALS_DIR"], "settings.yaml"))
         except CredentialsNotFound:
             logger.warning("Google Drive authentication failed. Need to set up gdrive authentication:\n"
-                       "python -m gdrive_access.setup_credentials --dir {}".format(cfg["DOWNLOADS"]["GDRIVE_CREDENTIALS_DIR"]))
+                       "python -m gdrive_access.setup_credentials --dir {}".format(self.cfg["DOWNLOADS"]["GDRIVE_CREDENTIALS_DIR"]))
             raise
         else:
             self.root = self.g.get_root("Intan Ephys Data")
@@ -268,8 +266,8 @@ class BaseGdriveDownloader(BaseDownloader):
 class BaseOwncloudDownloader(BaseDownloader):
 
     def connect(self):
-        self.g = owncloud.Client(cfg['DOWNLOADS']['OWNCLOUD_URL'])
-        loginData = load_yaml(cfg['DOWNLOADS']['OWNCLOUD_CREDENTIALS_FILE'])
+        self.g = owncloud.Client(self.cfg['DOWNLOADS']['OWNCLOUD_URL'])
+        loginData = load_yaml(self.cfg['DOWNLOADS']['OWNCLOUD_CREDENTIALS_FILE'])
 
         try:
             self.g.login(loginData['user'], loginData['key'])
@@ -422,38 +420,38 @@ class SeewiesenOwncloudDownloader(BaseOwncloudDownloader):
 class LocalSymlinker(BaseLocalSymlinker):
 
     def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         if not all([
-                cfg['LOCAL_RAW_FILES']["rhd_drive"],
-                cfg['LOCAL_RAW_FILES']["pyoperant_drive"],
-                cfg['LOCAL_RAW_FILES']["stimuli_drive"]
+                self.cfg['LOCAL_RAW_FILES']["rhd_drive"],
+                self.cfg['LOCAL_RAW_FILES']["pyoperant_drive"],
+                self.cfg['LOCAL_RAW_FILES']["stimuli_drive"]
                 ]):
             raise ValueError("LOCAL_RAW_FILES in songephys/code/config.py must have keys set: rhd_drive, pyoperant_drive, and stimuli_drive")
-        super().__init__(*args, **kwargs)
 
     def rhd_drive(self, experiment_name):
-        if "{experiment_name}" in cfg['LOCAL_RAW_FILES']["rhd_drive"]:
-            return cfg['LOCAL_RAW_FILES']["rhd_drive"].format(experiment_name=experiment_name)
+        if "{experiment_name}" in self.cfg['LOCAL_RAW_FILES']["rhd_drive"]:
+            return self.cfg['LOCAL_RAW_FILES']["rhd_drive"].format(experiment_name=experiment_name)
         else:
-            return cfg['LOCAL_RAW_FILES']["rhd_drive"]
+            return self.cfg['LOCAL_RAW_FILES']["rhd_drive"]
 
     def pyoperant_drive(self, experiment_name):
-        if "{experiment_name}" in cfg['LOCAL_RAW_FILES']["pyoperant_drive"]:
-            return cfg['LOCAL_RAW_FILES']["pyoperant_drive"].format(experiment_name=experiment_name)
+        if "{experiment_name}" in self.cfg['LOCAL_RAW_FILES']["pyoperant_drive"]:
+            return self.cfg['LOCAL_RAW_FILES']["pyoperant_drive"].format(experiment_name=experiment_name)
         else:
-            return cfg['LOCAL_RAW_FILES']["pyoperant_drive"]
+            return self.cfg['LOCAL_RAW_FILES']["pyoperant_drive"]
 
     def stimuli_drive(self, experiment_name):
-        if "{experiment_name}" in cfg['LOCAL_RAW_FILES']["stimuli_drive"]:
-            return cfg['LOCAL_RAW_FILES']["stimuli_drive"].format(experiment_name=experiment_name)
+        if "{experiment_name}" in self.cfg['LOCAL_RAW_FILES']["stimuli_drive"]:
+            return self.cfg['LOCAL_RAW_FILES']["stimuli_drive"].format(experiment_name=experiment_name)
         else:
-            return cfg['LOCAL_RAW_FILES']["stimuli_drive"]
+            return self.cfg['LOCAL_RAW_FILES']["stimuli_drive"]
 
 
 downloaders = {
-    "seewiesen": SeewiesenGdriveDownloader(),
-    "seewiesen2": Seewiesen2GdriveDownloader(),
-    "seewiesenCloud" : SeewiesenOwncloudDownloader(),
-    "theunissen": TheunissenGdriveDownloader(),
-    "pepe": PepeCanaryDownloader(),
-    "local": LocalSymlinker(),
+    "seewiesen": SeewiesenGdriveDownloader,
+    "seewiesen2": Seewiesen2GdriveDownloader,
+    "seewiesenCloud" : SeewiesenOwncloudDownloader,
+    "theunissen": TheunissenGdriveDownloader,
+    "pepe": PepeCanaryDownloader,
+    "local": LocalSymlinker,
 }

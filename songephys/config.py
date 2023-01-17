@@ -93,18 +93,21 @@ def generate_config_file(experiment_name, out_path=None, data_dir = os.environ.g
     #################
 
     expeiriment_cfg["DEBUG"] = False
-    cfg_path = os.path.join(out_path,"songephys_config.yaml")
+    cfg_path = os.path.join(out_path,"project_config.yaml")
     print(f"Saving Config to {cfg_path}")
     save_yaml(cfg_path, expeiriment_cfg)
 
 def get_config(experiment_name=None):
     if experiment_name is None:
         # loads config from current directory
-        return load_yaml("songephys_config.yaml")
+        return load_yaml("project_config.yaml")
     else:
         # loads config from the experiment path
         songephys_dir = os.environ.get("SONGEPHYS_DIR")
         if not songephys_dir:
             raise Exception("SONGEPHYS_DIR env variable not set")
-        cfg_path = os.path.join(os.environ.get("SONGEPHYS_DIR"), experiment_name,"songephys_config.yaml")
+        cfg_path = os.path.join(os.environ.get("SONGEPHYS_DIR"), experiment_name,"project_config.yaml")
+
+        if not os.path.exists(cfg_path):
+            raise  Exception("Project config does not exist for %s\n Please run `song create-config %s"%(experiment_name,experiment_name))
         return load_yaml(cfg_path)

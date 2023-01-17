@@ -6,12 +6,9 @@ import tempfile
 import pandas as pd
 from luigi import Parameter
 
-from ..format.download import downloaders
 from ..format.intan_utils import timestamp_from_intan_filename
 from ..format.io import load_yaml
 from ..utils import intervals_overlap
-
-from .. import config
 
 
 class SiteParameter(Parameter):
@@ -132,7 +129,7 @@ def parse_filelist(filelist_path):
     return {"rhds": rhds, "csvs": csvs, "lab": name}
 
 
-def associate_pyoperant_csvs_to_rhds(csv_files, rhd_files, experiment_name, download_type):
+def associate_pyoperant_csvs_to_rhds(csv_files, rhd_files, experiment_name, downloader):
     """Determine relative times of sessions from rhd_files and which csvs go with them
 
     Arguments
@@ -147,10 +144,9 @@ def associate_pyoperant_csvs_to_rhds(csv_files, rhd_files, experiment_name, down
         Name of experiment, used for organising data. This used to be the name of the subject
         until we started doing multi-subject recordings. Is used by the downloader to discover
         where data files are.
-    download_type : str
-        A key for a predefined procedures for locating and downloading our data files. The
-        downloader should know where to find data based on the given ``experiment_name``,
-        and valid downloader names can be found in songephys/code/format/download.py
+    downloader : BaseDownloader instance
+        An initialized Downloader class. The downloader should know where to find data based 
+        on the given ``experiment_name``
 
     Returns
     -------
@@ -190,7 +186,7 @@ def associate_pyoperant_csvs_to_rhds(csv_files, rhd_files, experiment_name, down
     csv_start_stop = []
 
     with tempfile.TemporaryDirectory() as csv_temp_dir:
-        downloaders[download_type].download_csvs(experiment_name, csv_files, csv_temp_dir)
+        downloader.download_csvs(experiment_name, csv_files, csv_temp_dir)
 
         # Get the first and last trial time for each csv file
         for csv in csv_files:

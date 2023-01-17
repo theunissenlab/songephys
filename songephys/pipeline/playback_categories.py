@@ -9,27 +9,20 @@ import suss.io
 from ..analysis.playbacks.categories import generate_category_comparisons
 from .preprocess_ephys import ManualSorting
 from .preprocess_sound import MergeVocalPeriods
-
-from .. import config
-try:
-    cfg = global_cfg
-except:
-    cfg = config.get_config()
-
+from .file_setup import SiteProjectConfig
 class GenerateCategoryPSTHs(luigi.Task):
 
     site_dir = luigi.Parameter()
     electrode = luigi.parameter.NumericalParameter(
-        var_type=int,
-        min_value=cfg['EPHYS'].get('ELECTRODE_START',0),
-        max_value=cfg['EPHYS'].get('ELECTRODE_START',0) + cfg['EPHYS'].get('ELECTRODE_N',32)
+        var_type=int
     )
 
     def requires(self):
-        # requires spike sorting tobe done and 
+        # requires spike sorting to be done and 
         return {
             "vocal_periods": MergeVocalPeriods(self.site_dir),
-            "spikes": ManualSorting(self.site_dir, self.electrode)
+            "spikes": ManualSorting(self.site_dir, self.electrode),
+            "project_config": SiteProjectConfig(self.site_dir)
             # and sorted spikes
         }
         
@@ -43,6 +36,12 @@ class GenerateCategoryPSTHs(luigi.Task):
     def run(self):
         events = np.load(self.input()["vocal_periods"].path, allow_pickle=True)[()]["playback"]
         spikes = suss.io.read_pickle(self.input()["spikes"].path)
+
+        # get project config to make sure electrode lies in our given range
+        project_cfg = self.input()['project_config'].data()
+        if self.electrode > project_cfg['EPHYS']['ELECTRODE_START']+project_cfg['EPHYS']['ELECTRODE_N'] or \
+            self.electrode < project_cfg['EPHYS']['ELECTRODE_START']:
+            raise ValueError("Electrode %d falls outside of the range specified in project config")
 
         for unit, node in spikes.labeled_nodes:
             output_path = os.path.join(
@@ -71,9 +70,12 @@ class RunSiteCategories(luigi.Task):
     site_dir = luigi.Parameter()
 
     def requires(self):
+        # get project config
+        # TODO this is  a bit janky, however we need the config to get the electrode ranges
+        project_cfg = SiteProjectConfig(self.site_dir).output().data()
         return [
             GenerateCategoryPSTHs(self.site_dir, elec_idx)
-            for elec_idx in range(cfg['EPHYS'].get('ELECTRODE_START',0),cfg['EPHYS'].get('ELECTRODE_START',0)+cfg['EPHYS'].get('ELECTRODE_N',32))
+            for elec_idx in range(project_cfg['EPHYS']['ELECTRODE_START'],project_cfg['EPHYS']['ELECTRODE_START']+project_cfg['EPHYS']['ELECTRODE_N'])
         ]
         
     def output(self):

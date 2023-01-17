@@ -8,18 +8,6 @@ import numpy as np
 import tqdm
 from soundsig.signal import highpass_filter, lowpass_filter
 
-from ...preprocess.ephys.detect import (
-    detect_spike_times,
-    get_spike_snippets
-)
-from ...utils import convert_seconds_to_minutes, estimate_time_remaining
-
-from ... import config
-try:
-    cfg = global_cfg
-except:
-    cfg = config.get_config()
-
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.StreamHandler())
 logger.setLevel(logging.DEBUG)
@@ -29,6 +17,7 @@ def common_average_filter(
         input_audiofile,
         output_audiofile,
         batch_size,
+        highpass_cutoff,
         channel_groups=None,
     ):
     """Filter ephys signals (in batches)
@@ -49,6 +38,8 @@ def common_average_filter(
         Output signal to write filtered data to
     batch_size : int
         Size of windows to filter in samples
+    highpass_cutoff: float
+        Cutoff Frequency for highpass filter
     channel_groups : Optional[List[ArrayLike]]
         A list of array-like indexes by which the input data should be grouped
         for filtering. The ArrayLike objects should be arrays of integers used to
@@ -78,7 +69,7 @@ def common_average_filter(
             chunk = highpass_filter(
                 chunk.T,
                 input_audiofile.sampling_rate,
-                cfg.get('HIGHPASS_CUTOFF',300.0)
+                highpass_cutoff
             ).T
             chunk = common_average_reference(chunk)
             block[:, channel_indices] = chunk
@@ -93,41 +84,6 @@ def common_average_filter(
 def common_average_reference(signal):
     """Subtract the common mean across channels"""
     return signal - np.mean(signal, axis=1)[:, None]
-
-
-
-def find_correlated_events(signal, event_radius):
-    """Detect threshold crossings that are correlated across channels
-
-    Note: Not in use as of commit 4d2da7d53753279cc2b33fd494f2b5615b8c7cdc
-
-    Return the indices of the events, the snippets of the signal during
-    those events, and the correlation matrix across electrodes during
-    those events.
-    """
-    all_spike_indices = set()
-    for elec_idx, sig in enumerate(signal.swapaxes(0, 1)):
-        spike_indices = detect_spike_times(
-            sig,
-            threshold_std=0.75 * cfg['SPIKE_SORTING'].get('SPIKE_THRESHOLD_STD',4),
-            spike_radius=event_radius,
-        )
-        all_spike_indices = all_spike_indices.union(set(spike_indices))
-
-    all_spike_indices = np.array(sorted(list(all_spike_indices)))
-
-    snippets = get_spike_snippets(
-        signal,
-        all_spike_indices,
-        event_radius)
-
-    correlation_matrices = []
-    for idx, snippet in zip(all_spike_indices, snippets):
-        corr = np.corrcoef(snippet.T)
-        np.fill_diagonal(corr, 0)
-        correlation_matrices.append(corr)
-
-    return all_spike_indices, snippets, np.array(correlation_matrices)
 
 
 def _consolidate_intervals(intervals):
@@ -182,7 +138,7 @@ def create_noise_intervals(event_indices, event_radius):
     return np.array(noise_intervals).astype(np.int)
 
 
-def filter_snippets(noise_snippets, filter_fn):
+def filter_snippets(noise_snippets, filter_fn, filter_block, n_lags):
     """Filter in specified intervals
     """
     interval_sizes = np.array([snippet.shape[0] for snippet in noise_snippets])
@@ -197,16 +153,11 @@ def filter_snippets(noise_snippets, filter_fn):
         noise_snippets,
         noise_snippets[:cut_size]
     ])
-    # if we want to use these then we have to add them to config
-    ephys_cfg = cfg.get("EPHYS",{})
-    if "FILTER_BLOCK" not in ephys_cfg or \
-        "N_LAGS" not in ephys_cfg:
-        raise IOError("Make sure EPHYS.FILTER_BLOCK and EPHYS.N_LAGS are present in the config file")
 
-    if len(noise_snippets) < ephys_cfg.get("FILTER_BLOCK") + ephys_cfg.get("N_LAGS"):
+    if len(noise_snippets) < filter_block + n_lags:
         return
 
-    if noise_snippets.shape[0] % ephys_cfg.get("FILTER_BLOCK") == ephys_cfg.get("N_LAGS"):
+    if noise_snippets.shape[0] % filter_block == n_lags:
         noise_snippets = np.vstack([noise_snippets, noise_snippets[:1]])
 
     # FILTER HERE

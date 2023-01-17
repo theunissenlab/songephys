@@ -8,7 +8,7 @@ from neo.io import NixIO, IntanIO, NWBIO
 
 from ..format.download import downloaders
 from ..format.io import load_yaml, save_yaml
-from ..format.wav import get_wavfile_data_from_nix
+from ..format.wav import get_wavfile_data_from_neo
 from .targets import YamlTarget
 from .pipeline_utils import (
     SessionParameter,
@@ -50,7 +50,8 @@ class SiteConfig(luigi.Task):
     The keys in `required_keys` defined in `{site_dir}/site_config.yaml`.
     """
     site_dir = SiteParameter()
-    required_keys = luigi.ListParameter(default=["download_type", "experiment_name", "filelist"])
+    required_keys = luigi.ListParameter(
+        default=["download_type", "experiment_name", "filelist"])
 
     def config_path(self):
         return os.path.join(self.site_dir, "site_config.yaml")
@@ -99,12 +100,14 @@ class SessionConfig(luigi.Task):
     a site whose site_config.yaml contains `session_dir` in its `sessions` list.
     """
     session_dir = SessionParameter()
-    required_keys = luigi.ListParameter(default=["download_type", "experiment_name", "filelist", "sessions"])
+    required_keys = luigi.ListParameter(
+        default=["download_type", "experiment_name", "filelist", "sessions"])
 
     def config_path(self):
         site_dirs, _ = get_session_sites(self.session_dir)
         if not len(site_dirs):
-            raise Exception("No valid site with a config file found for session {}".format(self.session_dir))
+            raise Exception(
+                "No valid site with a config file found for session {}".format(self.session_dir))
         return os.path.join(site_dirs[0], "site_config.yaml")
 
     def output(self):
@@ -131,7 +134,7 @@ class SignalsConfig(luigi.Task):
     ...         return SignalsConfig(self.site_dir)
     ...     def run(self):
     ...         site_config = self.input().data()
-    ...         assert "nix2wav" in site_config
+    ...         assert "wavmap" in site_config
     ...         assert "filtering" in site_config
     ...         assert "playback_mic_channels" in site_config
 
@@ -142,14 +145,14 @@ class SignalsConfig(luigi.Task):
 
     Output
     ------
-    "nix2wav", "filtering", and "playback_mic_channels" must exist in the config file.
+    "wavmap", "filtering", and "playback_mic_channels" must exist in the config file.
     """
     site_dir = SiteParameter()
 
     def output(self):
         return YamlTarget(
             os.path.join(self.site_dir, "site_config.yaml"),
-            "nix2wav",
+            "wavmap",
             "filtering",
         )
 
@@ -158,7 +161,7 @@ class SignalsConfig(luigi.Task):
 
         Example:
 
-        nix2wav:
+        wavmap:
             ephys.wav:
                 - ["Amplifier", [0, 15]]
                 - ["Amplifier", [16, 31]]
@@ -173,6 +176,102 @@ class SignalsConfig(luigi.Task):
                 - [0, 15]
                 - [15, 30]
         """)
+
+
+class SiteProjectConfig(luigi.Task):
+    """Verify config file exists and specific keys exist
+
+    Use as a dependency in requires() to make sure a task can only be run
+    if the given configuration keys are defined
+
+    Example Usage
+    -------------
+    >>> class ExampleTask(luigi.Task):
+    ...     REQUIRED_KEYS = ["required_key_1", "required_key_2"]
+    ...     site_dir = SiteParameter()
+    ...     def requires(self):
+    ...         return ProjectConfig(self.site_dir, required_keys=self.REQUIRED_KEYS)
+    ...     def run(self):
+    ...         config = self.input().data()
+    ...         assert "required_key_1" in config
+    ...         assert "required_key_2" in config
+
+    Arguments
+    ---------
+    site_dir : str
+        Path to site
+    required_keys : List[str] (default = ["EXPERIMENT_NAME", "DATADIR", "EPHYS"])
+        List of keys that must exist in the config file
+
+    Output
+    ------
+    The keys in `required_keys` defined in `{site_dir}/site_config.yaml`.
+    """
+    site_dir = SiteParameter()
+    required_keys = luigi.ListParameter(
+        default=["EXPERIMENT_NAME", "DATADIR", "EPHYS"])
+
+    def config_path(self):
+        # get project_dir from site_dir
+        project_dir = self.site_dir.split("sites")[0]
+        return os.path.join(project_dir, "project_config.yaml")
+
+    def output(self):
+        return YamlTarget(self.config_path(), *self.required_keys)
+
+    def run(self):
+        raise Exception("""
+        The keys {} are required but not present in the config file found for {}
+        Config file: {}
+        """.format(self.required_keys, self.site_dir, self.config_path()))
+
+
+class SessionProjectConfig(luigi.Task):
+    """Verify config file exists and specific keys exist
+
+    Use as a dependency in requires() to make sure a task can only be run
+    if the given configuration keys are defined
+
+    Example Usage
+    -------------
+    >>> class ExampleTask(luigi.Task):
+    ...     REQUIRED_KEYS = ["required_key_1", "required_key_2"]
+    ...     session_dir = SessionParameter()
+    ...     def requires(self):
+    ...         return SessionProjectConfig(self.session_dir, required_keys=self.REQUIRED_KEYS)
+    ...     def run(self):
+    ...         config = self.input().data()
+    ...         assert "required_key_1" in config
+    ...         assert "required_key_2" in config
+
+    Arguments
+    ---------
+    site_dir : str
+        Path to site
+    required_keys : List[str] (default = ["EXPERIMENT_NAME", "DATADIR", "EPHYS"])
+        List of keys that must exist in the config file
+
+    Output
+    ------
+    The keys in `required_keys` defined in `{site_dir}/site_config.yaml`.
+    """
+    session_dir = SessionParameter()
+    required_keys = luigi.ListParameter(
+        default=["EXPERIMENT_NAME", "DATADIR", "EPHYS"])
+
+    def config_path(self):
+        # get project_dir from session_dir
+        project_dir = self.session_dir.split("sessions")[0]
+        return os.path.join(project_dir, "project_config.yaml")
+
+    def output(self):
+        return YamlTarget(self.config_path(), *self.required_keys)
+
+    def run(self):
+        raise Exception("""
+        The keys {} are required but not present in the config file found for {}
+        Config file: {}
+        """.format(self.required_keys, self.session_dir, self.config_path()))
 
 
 class DefineSessions(luigi.Task):
@@ -192,24 +291,32 @@ class DefineSessions(luigi.Task):
     site_dir = SiteParameter()
 
     def requires(self):
-        return SiteConfig(self.site_dir)
+        return { 
+            "site_config": SiteConfig(self.site_dir), 
+            "project_config": SiteProjectConfig(self.site_dir)
+            }
 
     def output(self):
         return YamlTarget(os.path.join(self.site_dir, "site_config.yaml"), "sessions")
 
     def run(self):
-        site_config = self.input().data()
+        site_config = self.input()['site_config'].data()
+        project_config = self.input()['project_config'].data()
 
         if site_config["download_type"] not in downloaders.keys():
             raise ValueError("The 'download_type' in {} must be one of {}".format(
                 self.input().path, ", ".join(downloaders.keys())
             ))
+        # instantiate the downloader
+        downloader = downloaders[site_config['download_type']](cfg = project_config)
 
         session_dicts = associate_pyoperant_csvs_to_rhds(
-            csv_files=[f for f in site_config["filelist"] if f.endswith(".csv")],
-            rhd_files=[f for f in site_config["filelist"] if f.endswith(".rhd")],
+            csv_files=[f for f in site_config["filelist"]
+                       if f.endswith(".csv")],
+            rhd_files=[f for f in site_config["filelist"]
+                       if f.endswith(".rhd")],
             experiment_name=site_config["experiment_name"],
-            download_type=site_config["download_type"],
+            downloader=downloader,
         )
         site_config["sessions"] = session_dicts
 
@@ -247,12 +354,15 @@ class DownloadSession(luigi.Task):
         output_directory = os.path.join(self.session_dir, "raw")
         self.site_dirs, self.pyoperants = get_session_sites(self.session_dir)
 
-        return DefineSessions(self.site_dirs[0])
+        return {
+            "define_sessions": DefineSessions(self.site_dirs[0]),
+            "project_config": SessionProjectConfig(self.session_dir)
+        }
 
     def output(self):
         if self.force:
             return luigi.LocalTarget("dummy")
-            
+
         self.session_name = session_basename(self.session_dir)
         output_directory = os.path.join(self.session_dir, "raw")
         self.site_dirs, self.pyoperants = get_session_sites(self.session_dir)
@@ -271,12 +381,15 @@ class DownloadSession(luigi.Task):
     def run(self):
         """Use the yaml file to download RHDs and pyoperant csvs for this session
         """
-        session_config = self.input().data()
+        session_config = self.input()['define_sessions'].data()
+        project_cfg = self.input()['project_config'].data()
 
         if not len(self.site_dirs):
-            raise Exception("No sites were found with site_config.yaml containing {}".format(self.session_dir))
+            raise Exception(
+                "No sites were found with site_config.yaml containing {}".format(self.session_dir))
 
-        downloader = downloaders[session_config["download_type"]]
+        # instantiate the downloader with the project_config
+        downloader = downloaders[session_config["download_type"]](cfg = project_cfg)
 
         downloader.download_session(
             session_config["experiment_name"],
@@ -301,7 +414,8 @@ class DownloadSite(luigi.Task):
         site_config = self.input().data()
 
         for session in site_config["sessions"]:
-            session_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions", session["id"])
+            session_dir = os.path.join(os.path.dirname(
+                os.path.dirname(self.site_dir)), "sessions", session["id"])
             if not os.path.exists(session_dir):
                 os.makedirs(session_dir)
 
@@ -345,7 +459,8 @@ class Rhd2Nix(luigi.Task):
         # Temporarily move nix file from segmentation dir to raw dir
         if os.path.exists(os.path.join(self.session_dir, "segmentation", nix_filename)):
             import shutil
-            shutil.move(os.path.join(self.session_dir, "segmentation", nix_filename), os.path.join(raw_dir, nix_filename))
+            shutil.move(os.path.join(self.session_dir, "segmentation",
+                        nix_filename), os.path.join(raw_dir, nix_filename))
 
         return luigi.LocalTarget(os.path.join(raw_dir, nix_filename))
 
@@ -365,8 +480,10 @@ class Rhd2Nix(luigi.Task):
 
         rhd = IntanIO(rhd_file)
         blk = rhd.read_block()
-        blk.segments[0].annotations['signal_channels'] = [x[0] for x in rhd.header['signal_channels']]
-        blk.segments[0].annotations['event_channels'] = [x[0] for x in rhd.header['event_channels']]
+        blk.segments[0].annotations['signal_channels'] = [x[0]
+                                                          for x in rhd.header['signal_channels']]
+        blk.segments[0].annotations['event_channels'] = [x[0]
+                                                         for x in rhd.header['event_channels']]
         nix = NixIO(self.output().path)
         nix.write_block(blk)
         nix.close()
@@ -396,7 +513,7 @@ class Nix2Wav(luigi.Task):
     def requires(self):
         return {
             "nix": Rhd2Nix(self.session_dir),
-            "config": SessionConfig(self.session_dir, ["nix2wav", "filtering"])
+            "config": SessionConfig(self.session_dir, ["wavmap", "filtering"])
         }
 
     def output(self):
@@ -420,7 +537,8 @@ class Nix2Wav(luigi.Task):
         nix_file = self.input()["nix"].path
         session_config = self.input()["config"].data()
 
-        arrays = get_wavfile_data_from_nix(self.input()["nix"].path, session_config["nix2wav"])
+        arrays = get_wavfile_data_from_neo(
+            self.input()["nix"].path, session_config["wavmap"])
 
         with soundfile.SoundFile(
                 self.output()["mic.wav"].path,
@@ -433,7 +551,8 @@ class Nix2Wav(luigi.Task):
             arrays["mic"]["data"] = np.array(arrays["mic"]["data"])
             arrays["mic"]["data"] -= np.median(arrays["mic"]["data"], axis=0)
             for group_start, group_end in session_config["filtering"]["mic.wav"]:
-                arrays["mic"]["data"][:, group_start:group_end] /= np.max(np.abs(arrays["mic"]["data"][:, group_start:group_end]))
+                arrays["mic"]["data"][:, group_start:group_end] /= np.max(
+                    np.abs(arrays["mic"]["data"][:, group_start:group_end]))
             f.write(arrays["mic"]["data"])
 
         if not os.path.exists(self.output()["ephys.wav"].path):
@@ -471,6 +590,105 @@ class Nix2Wav(luigi.Task):
             "{}.wav".format(k): v["channel_names"] for k, v in arrays.items()
         }
         save_yaml(self.output()["config_original_channels"].path, config_out)
+
+
+class Rhd2Wav(luigi.Task):
+    """Write analogsignals to disk as wav files (RF64 format)
+
+    Outputs files for the microphone and electrode data arrays,
+    and also writes the mapping between the channels in these files
+    to their original channels into the configuration file.
+
+    The microphone data is also normalized and zero-centered according
+    to the filter groups defined in the config "filtering" key
+
+    Inputs
+    ------
+    session_dir : str
+        Path to session
+    """
+
+    session_dir = SessionParameter()
+
+    def requires(self):
+        return {
+            "files": DownloadSession(self.session_dir),
+            "config": SessionConfig(self.session_dir),
+        }
+
+    def output(self):
+        raw_dir = os.path.join(self.session_dir, "raw")
+        mic_path = os.path.join(raw_dir, "mic.wav")
+        elec_path = os.path.join(raw_dir, "ephys.wav")
+        motion_path = os.path.join(raw_dir, "motion.wav")
+
+        site_dirs, _ = get_session_sites(self.session_dir)
+        config_path = os.path.join(site_dirs[0], "site_config.yaml")
+
+        return {
+            "mic.wav": luigi.LocalTarget(mic_path),
+            "ephys.wav": luigi.LocalTarget(elec_path),
+            "motion.wav": luigi.LocalTarget(motion_path),
+            "config_original_channels": YamlTarget(config_path, "wav_to_original_channels")
+        }
+
+    def run(self):
+
+        rhd_file = self.input()["files"]["rhd"].path
+        session_config = self.input()["config"].data()
+
+        arrays = get_wavfile_data_from_neo(rhd_file, session_config["wavmap"])
+
+        with soundfile.SoundFile(
+                self.output()["mic.wav"].path,
+                "w+",
+                samplerate=arrays["mic"]["sampling_rate"],
+                format="RF64",
+                subtype="FLOAT",
+                channels=arrays["mic"]["data"].shape[1]) as f:
+            arrays["mic"]["data"] = np.array(arrays["mic"]["data"])
+            arrays["mic"]["data"] -= np.median(arrays["mic"]["data"], axis=0)
+            for group_start, group_end in session_config["filtering"]["mic.wav"]:
+                arrays["mic"]["data"][:, group_start:group_end] /= np.max(
+                    np.abs(arrays["mic"]["data"][:, group_start:group_end]))
+            f.write(arrays["mic"]["data"])
+
+        if not os.path.exists(self.output()["ephys.wav"].path):
+            with soundfile.SoundFile(
+                    self.output()["ephys.wav"].path,
+                    "w+",
+                    samplerate=arrays["ephys"]["sampling_rate"],
+                    format="RF64",
+                    subtype="FLOAT",
+                    channels=arrays["ephys"]["data"].shape[1]) as f:
+                f.write(arrays["ephys"]["data"])
+
+        if "motion" in arrays and arrays["motion"]["data"] is not None:
+            with soundfile.SoundFile(
+                    self.output()["motion.wav"].path,
+                    "w+",
+                    samplerate=arrays["motion"]["sampling_rate"],
+                    format="RF64",
+                    subtype="FLOAT",
+                    channels=arrays["motion"]["data"].shape[1]) as f:
+                f.write(arrays["motion"]["data"])
+        else:
+            open(self.output()["motion.wav"].path, 'a').close()
+
+        # Finally, write the channel name mappings to the configuration file
+        # This is kind of an extra thing; not sure if I should put it in the
+        # task outputs / set it as a new task, or what?
+
+        # FIXME: The NixIO seems to change the order of the signals...
+        # The order in the .rhd file is fine, why is it when saved to/loaded from nix
+        # the order gets messed up? This can mess up any tasks that rely
+        # on plain integer indexing (like filtering) so need to investigate this
+        config_out = self.output()["config_original_channels"].data()
+        config_out["wav_to_original_channels"] = {
+            "{}.wav".format(k): v["channel_names"] for k, v in arrays.items()
+        }
+        save_yaml(self.output()["config_original_channels"].path, config_out)
+
 
 class Rhd2Nwb(luigi.Task):
     """Converts an RHD file to a NWB file, and clean up the RHD file
@@ -501,7 +719,8 @@ class Rhd2Nwb(luigi.Task):
         # Temporarily move nwb file from segmentation dir to raw dir
         if os.path.exists(os.path.join(self.session_dir, "segmentation", nwb_filename)):
             import shutil
-            shutil.move(os.path.join(self.session_dir, "segmentation", nwb_filename), os.path.join(raw_dir, nwb_filename))
+            shutil.move(os.path.join(self.session_dir, "segmentation",
+                        nwb_filename), os.path.join(raw_dir, nwb_filename))
 
         return luigi.LocalTarget(os.path.join(raw_dir, nwb_filename))
 
@@ -523,14 +742,16 @@ class Rhd2Nwb(luigi.Task):
         blk = rhd.read_block()
         # the end of rhd files is the timestamp
         rhd_split = os.path.basename(rhd_file).split('.')[0].split('_')
-        t_start = datetime.datetime.strptime("%s%s"%(rhd_split[-2],rhd_split[-1]),'%y%m%d%H%M%S' )
+        t_start = datetime.datetime.strptime(
+            "%s%s" % (rhd_split[-2], rhd_split[-1]), '%y%m%d%H%M%S')
 
-        nwb = NWBIO(self.output().path,mode='w')
+        nwb = NWBIO(self.output().path, mode='w')
         nwb.write_block(blk)
         nwb.close()
 
         # Remove the RHD file now that we have a NIX file
         # os.remove(inputs["rhd"].path)
+
 
 class Nwb2Wav(luigi.Task):
     """Write analogsignals to disk as wav files (RF64 format)
@@ -552,8 +773,8 @@ class Nwb2Wav(luigi.Task):
 
     def requires(self):
         return {
-            "nix": Rhd2Nix(self.session_dir),
-            "config": SessionConfig(self.session_dir, ["nix2wav", "filtering"])
+            "nix": Rhd2Nix(self.session_dir),  # TODO NWB
+            "config": SessionConfig(self.session_dir, ["wavmap", "filtering"])
         }
 
     def output(self):
@@ -577,7 +798,8 @@ class Nwb2Wav(luigi.Task):
         nix_file = self.input()["nix"].path
         session_config = self.input()["config"].data()
 
-        arrays = get_wavfile_data_from_nix(self.input()["nix"].path, session_config["nix2wav"])
+        arrays = get_wavfile_data_from_nix(
+            self.input()["nix"].path, session_config["wavmap"])
 
         with soundfile.SoundFile(
                 self.output()["mic.wav"].path,
@@ -590,7 +812,8 @@ class Nwb2Wav(luigi.Task):
             arrays["mic"]["data"] = np.array(arrays["mic"]["data"])
             arrays["mic"]["data"] -= np.median(arrays["mic"]["data"], axis=0)
             for group_start, group_end in session_config["filtering"]["mic.wav"]:
-                arrays["mic"]["data"][:, group_start:group_end] /= np.max(np.abs(arrays["mic"]["data"][:, group_start:group_end]))
+                arrays["mic"]["data"][:, group_start:group_end] /= np.max(
+                    np.abs(arrays["mic"]["data"][:, group_start:group_end]))
             f.write(arrays["mic"]["data"])
 
         if not os.path.exists(self.output()["ephys.wav"].path):
@@ -629,18 +852,20 @@ class Nwb2Wav(luigi.Task):
         }
         save_yaml(self.output()["config_original_channels"].path, config_out)
 
+
 class Site2Wav(luigi.Task):
     """Save all of site's raw data into wav files
     """
     site_dir = SiteParameter()
 
     def requires(self):
-        return SiteConfig(site_dir=self.site_dir, required_keys=["nix2wav", "filtering"])
+        return SiteConfig(site_dir=self.site_dir, required_keys=["wavmap", "filtering"])
 
     def run(self):
         site_config = self.input().data()
         for session in site_config["sessions"]:
             session_dir = os.path.join(
-                os.path.dirname(os.path.dirname(self.site_dir)), "sessions", session["id"]
+                os.path.dirname(os.path.dirname(self.site_dir)
+                                ), "sessions", session["id"]
             )
             yield Nix2Wav(session_dir=session_dir)

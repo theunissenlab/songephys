@@ -3,7 +3,7 @@ import os
 
 import numpy as np
 import soundfile
-from neo.io import NixIO
+from neo.io import NixIO, IntanIO, NWBIO
 
 from .io import load_yaml
 
@@ -14,7 +14,7 @@ def time_to_index(t, sampling_rate):
 
 
 
-def get_wavfile_data_from_nix(nix_file, mapping):
+def get_wavfile_data_from_neo(neo_file, mapping):
     """Generate lazy-loadable signals from mic and elec data in a NIX file
 
     Identifies the mic signal by finding a signal named "Board ADC",
@@ -31,14 +31,21 @@ def get_wavfile_data_from_nix(nix_file, mapping):
     batch_size : int
         Size of chunks to write to disk at a time
     """
-    nix = NixIO(nix_file)
-    block = nix.read_block()
+    if neo_file.endswith(".nix"):
+        neo = NixIO(neo_file)
+    elif neo_file.endswith(".rhd"):
+        neo = IntanIO(neo_file)
+    elif neo_file.endswith(".nwb"):
+        neo = NWBIO(neo_file)
+    else:
+        raise IOError("Requires nwb, rhd or nix file")
+    block = neo.read_block()
     segment = block.segments[0]
 
     signals_created = {}
 
-    nix_signals = {}
-    nix_names = {}
+    neo_signals = {}
+    neo_names = {}
     i = 0
     for sig in segment.analogsignals:
         if not sig.name:
@@ -48,8 +55,15 @@ def get_wavfile_data_from_nix(nix_file, mapping):
                 "{nix_name}".format(**sig.annotations))
             sig.name = sig.annotations["nix_name"]
         #sig.channel_index.index = np.arange(sig.shape[1])
-        nix_signals[sig.name] = sig
-        nix_names[sig.name] = segment.annotations['signal_channels'][i:i+sig.shape[1]] #list([str(x) for x in sig.channel_index.channel_names])
+        neo_signals[sig.name] = sig
+        if 'signal_channels' in segment.annotations:
+            # for nix, this information gets put into the segment annotations
+            neo_names[sig.name] = segment.annotations['signal_channels'][i:i+sig.shape[1]] #list([str(x) for x in sig.channel_index.channel_names])
+        elif 'signal_channels' in neo.header:
+            # for intan, thie information is within the header
+            neo_names[sig.name] = [s[0] for s in neo.header['signal_channels'] if s[-1] == sig.annotations['stream_id']]
+        else:
+            raise IOError("Signal_channels information not found in header or annotations of %s"%neo_file)
         i+= sig.shape[1]
 
     def gather(config_key, default_sig_name):
@@ -63,20 +77,22 @@ def get_wavfile_data_from_nix(nix_file, mapping):
                 else:
                     channels = list(range(*channels))
                 for channel in channels:
-                    data.append(nix_signals[sig_name][:, channel])
-                    channel_names.append([sig_name, nix_names[sig_name][channel]])
-                sampling_rate = int(round(nix_signals[sig_name].sampling_rate.item()))
+                    data.append(neo_signals[sig_name][:, channel])
+                    channel_names.append([str(sig_name), str(neo_names[sig_name][channel])])
+                sampling_rate = neo_signals[sig_name].sampling_rate
             data = np.hstack(data)
+            data.sampling_rate = sampling_rate
+            sampling_rate = int(round(sampling_rate.item()))
         else:
             sampling_rate = None
-            data = nix_signals.get(default_sig_name, None)
-            channel_names = [[default_sig_name, name] for name in nix_names.get(default_sig_name, [])]
+            data = neo_signals.get(default_sig_name, None)
+            channel_names = [[str(default_sig_name), str(name)] for name in neo_names.get(default_sig_name, [])]
 
         if data is None:
             return {"data": None, "sampling_rate": None, "channel_names": None }
         
         if sampling_rate is None:
-            sampling_rate = int(round(nix_signals[default_sig_name].sampling_rate.item()))
+            sampling_rate = int(round(neo_signals[default_sig_name].sampling_rate.item()))
 
         return {
             "channel_names": channel_names,

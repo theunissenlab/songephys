@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import quantities as pq
 import soundfile as sf
-from neo.io import NixIO
+from neo.io import IntanIO
 
 from ..format.io import load_yaml
 from ..format.intan_utils import timestamp_from_intan_filename
@@ -25,14 +25,14 @@ from ..preprocess.sound.playback_alignment import (
 from ..preprocess.sound.detect import (
     detect_call_and_syllable_dicts,
     generate_stim_dicts,
+    generate_event_dicts_operant,
     playback_columns,
     autodetected_columns,
 )
 from ..preprocess.sound.stimuli import merge_segments
 
-from .file_setup import Nix2Wav, Rhd2Nix, SiteConfig, SessionConfig
+from .file_setup import Rhd2Wav, SiteConfig, SessionConfig, DownloadSession
 from .pipeline_utils import SiteParameter, SessionParameter
-from .. import config
 
 
 logger = logging.getLogger(__name__)
@@ -99,7 +99,7 @@ class CreateMicrophoneAlignedCodes(luigi.Task):
     session_dir = SessionParameter()
 
     def requires(self):
-        return Nix2Wav(self.session_dir)
+        return Rhd2Wav(self.session_dir)
 
     def output(self):
         raw_dir = os.path.join(self.session_dir, "raw")
@@ -176,7 +176,7 @@ class CombinePlaybackMetadata(luigi.Task):
 
     def requires(self):
         return {
-            "nix_file": Rhd2Nix(self.session_dir),
+            "files": DownloadSession(self.session_dir),
             "aligned_codes": CreateMicrophoneAlignedCodes(self.session_dir)
         }
 
@@ -207,15 +207,20 @@ class CombinePlaybackMetadata(luigi.Task):
         stim_dirs = _get_stim_dirs(csv_files, stimuli_directory)
 
         # determine how many playback sets there were and how many
-        nix = NixIO(self.input()["nix_file"].path)
-        block = nix.read_block()
+        rhd_file = self.input()["files"]["rhd"].path
+        rhd = IntanIO(rhd_file)
+        # if this is a rhd we can check the samplerate of one of the signal channels
+        # TODO maybe vet which channel we are checking. this is usually one of the 
+        #   ephys channels
+        sampling_rate = rhd.header['signal_channels'][0][2]
+        block = rhd.read_block(lazy=True)
 
         if not len(block.segments[0].events):
             # If we messed up the digital codes...
             stimulus_codes = np.load(self.input()["aligned_codes"].path, allow_pickle=True)[()]
         else:
-            events = nix.load_lazy_object(block.segments[0].events[0])
-            stimulus_codes = convert_digital_to_metadata(events)
+            events = block.segments[0].events[0].load()
+            stimulus_codes = convert_digital_to_metadata(events,sample_rate=sampling_rate)
 
         # Combine the data from the csvs into a single pickled dataframe
         logger.info("Saving stim database {}".format(self.output().path))
@@ -224,6 +229,7 @@ class CombinePlaybackMetadata(luigi.Task):
                 csv_files,
                 stim_dirs,
                 self.output().path)
+        rhd.close()
 
 
 class PlaybacksCSV(luigi.Task):
@@ -237,10 +243,9 @@ class PlaybacksCSV(luigi.Task):
 
     def requires(self):
         return {
-            "wav_files": Nix2Wav(self.session_dir),
+            "wav_files": Rhd2Wav(self.session_dir),
             "aligned_codes": CreateMicrophoneAlignedCodes(self.session_dir),
-            "playback_metadata": CombinePlaybackMetadata(self.session_dir),
-            "nix_file": Rhd2Nix(self.session_dir)
+            "playback_metadata": CombinePlaybackMetadata(self.session_dir)
         }
 
     def output(self):
@@ -251,8 +256,7 @@ class PlaybacksCSV(luigi.Task):
         )
 
     def run(self):
-        # Live vocalization detection is now delegated to the FindLiveCalls task
-        mic = AudioFile(self.input()["wav_files"]["mic.wav"].path)
+        
 
         try:
             playbacks_db = pd.read_pickle(self.input()["playback_metadata"].path)
@@ -260,16 +264,22 @@ class PlaybacksCSV(luigi.Task):
             logger.warning("No pyoperant file found (no playbacks)")
             playback_dicts = []
         else:
-            nix = NixIO(self.input()["nix_file"].path)
-            block = nix.read_block()
+            rhd_file = self.input()["files"]["rhd"].path
+            rhd = IntanIO(rhd_file)
+            # if this is a rhd we can check the samplerate of one of the signal channels
+            # TODO maybe vet which channel we are checking. this is usually one of the 
+            #   ephys channels
+            sampling_rate = rhd.header['signal_channels'][0][2]
+            block = rhd.read_block(lazy = True)
 
             if not len(block.segments[0].events):
+                # Live vocalization detection is now delegated to the FindLiveCalls task
+                mic = AudioFile(self.input()["wav_files"]["mic.wav"].path)
                 stimulus_codes = np.load(self.input()["aligned_codes"].path, allow_pickle=True)[()]
-                sampling_rate = mic.sampling_rate
             else:
-                digital_signals = nix.load_lazy_object(block.segments[0].events[0])
-                stimulus_codes = convert_digital_to_metadata(digital_signals)
-                sampling_rate = digital_signals.annotations["sampling_rate"].item()
+                # load the digital signals (lazy loaded)
+                digital_signals = block.segments[0].events[0].load()
+                stimulus_codes = convert_digital_to_metadata(digital_signals,sample_rate=sampling_rate)
 
             playback_dicts = generate_stim_dicts(
                     stimulus_codes,
@@ -279,7 +289,70 @@ class PlaybacksCSV(luigi.Task):
             logger.info("Identified {} playback periods".format(
                 len(playback_dicts))
             )
-            nix.close()
+            rhd.close()
+
+        df = pd.DataFrame(playback_dicts, columns=playback_columns)
+        df.to_csv(self.output().path, index=False)
+
+class OperantCSV(luigi.Task):
+    """Locate time periods containing playback sounds and time periods of events
+
+    Represents each time period by a dictionary with a start and stop
+    time. Saves a list of playback periods.
+    """
+
+    session_dir = SessionParameter()
+
+    def requires(self):
+        return {
+            "wav_files": Rhd2Wav(self.session_dir),
+            "aligned_codes": CreateMicrophoneAlignedCodes(self.session_dir),
+            "playback_metadata": CombinePlaybackMetadata(self.session_dir)
+        }
+
+    def output(self):
+        segmentation_dir = os.path.join(self.session_dir, "segmentation")
+        segment_data_file = "playback_segments.csv"
+        return luigi.LocalTarget(
+            os.path.join(segmentation_dir, segment_data_file)
+        )
+
+    def run(self):
+        
+
+        try:
+            playbacks_db = pd.read_pickle(self.input()["playback_metadata"].path)
+        except:
+            logger.warning("No pyoperant file found (no playbacks)")
+            playback_dicts = []
+        else:
+            rhd_file = self.input()["files"]["rhd"].path
+            rhd = IntanIO(rhd_file)
+            block = rhd.read_block(lazy = True)
+            # if this is a rhd we can check the samplerate of one of the signal channels
+            # TODO maybe vet which channel we are checking. this is usually one of the 
+            #   ephys channels
+            sampling_rate = rhd.header['signal_channels'][0][2]
+
+            if not len(block.segments[0].events):
+                # Live vocalization detection is now delegated to the FindLiveCalls task
+                mic = AudioFile(self.input()["wav_files"]["mic.wav"].path)
+                stimulus_codes = np.load(self.input()["aligned_codes"].path, allow_pickle=True)[()]
+                #sampling_rate = mic.sampling_rate
+            else:
+                # load the digital signals (lazy loaded)
+                digital_signals = block.segments[0].events[0].load()
+                stimulus_codes = convert_digital_to_metadata(digital_signals)
+
+            playback_dicts = generate_event_dicts_operant(
+                    stimulus_codes,
+                    sampling_rate,
+                    playbacks_db
+            )
+            logger.info("Identified {} playback periods".format(
+                len(playback_dicts))
+            )
+            rhd.close()
 
         df = pd.DataFrame(playback_dicts, columns=playback_columns)
         df.to_csv(self.output().path, index=False)
@@ -291,7 +364,7 @@ class FindLiveCalls(luigi.Task):
 
     def requires(self):
         return {
-            "wav_files": Nix2Wav(self.session_dir),
+            "wav_files": RhD2Wav(self.session_dir),
             "vocal_periods": FindVocalPeriods(self.session_dir),
         }
 
@@ -347,6 +420,45 @@ class MergePlaybacksCSV(luigi.Task):
         for session in site_config["sessions"]:
             session_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions", session["id"])
             yield PlaybacksCSV(session_dir=session_dir)
+
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir, "playback_segments.csv"))
+
+    def run(self):
+        site_config = self.input()[0].data()
+        playback_csvs = self.input()[1:]
+        session_offsets = [session["t"] for session in site_config["sessions"]]
+
+        # vocal_period_data = [np.load(s.path, allow_pickle=True)[()] for s in self.input()]
+        vocal_period_data = [pd.read_csv(s.path) for s in playback_csvs]
+
+        for vocal_periods, offset in zip(vocal_period_data, session_offsets):
+            vocal_periods["start_time"] += offset
+
+        df = pd.concat(vocal_period_data, axis=0)
+        df.to_csv(self.output().path, index=False)
+
+class MergeOperantCSV(luigi.Task):
+    """Merge together vocal period dicts from all sessions in a site
+
+    The sessions and relative offsets must be defined in a
+    sessions.yaml file in the site directory. This function
+    takes the playback periods for each
+    session and just adds the specified offset to each one.
+    """
+
+    site_dir = SiteParameter()
+
+    def requires(self):
+        config_task = SiteConfig(self.site_dir, required_keys=["sessions"])
+
+        yield config_task
+
+        site_config = config_task.output().data()
+
+        for session in site_config["sessions"]:
+            session_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions", session["id"])
+            yield OperantCSV(session_dir=session_dir)
 
     def output(self):
         return luigi.LocalTarget(os.path.join(self.site_dir, "playback_segments.csv"))

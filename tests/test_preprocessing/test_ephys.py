@@ -3,16 +3,16 @@ from unittest import mock
 
 import numpy as np
 
-from preprocess.ephys.detect import (
+from songephys.preprocess.ephys.detect import (
     detect_spike_times,
     extract_spikes,
     get_spike_snippets
 )
-from preprocess.ephys.utils import (
+from songephys.preprocess.ephys.utils import (
     consolidate_intervals,
     find_correlated_events,
 )
-from preprocess.ephys.filter import common_average_reference
+from songephys.preprocess.ephys.filter import common_average_reference
 
 
 class TestFilter(unittest.TestCase):

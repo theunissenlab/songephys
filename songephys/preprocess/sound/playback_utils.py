@@ -153,9 +153,18 @@ def _transform_pyoperant_csv(df, stim_loc):
     )
 
     def locate_stimulus_directory(path):
-        # Split the path at the first instance of the stim_loc name
-        relative_path_of_stim = path.split("/{}/".format("Stimuli"))[1] #os.path.basename(stim_loc).lower()
-        return os.path.join(stim_loc, relative_path_of_stim)
+        # Starts with the basename of the path, and goes up until it finds a file
+        # that exists in stim_dir
+        # TODO make sure this works on other projects
+        path, relative_path_of_stim = os.path.split(path)
+        path_of_stim = os.path.join(stim_loc,relative_path_of_stim)
+        while not os.path.exists(path_of_stim) and path != '':
+            path, basename = os.path.split(path)
+            relative_path_of_stim = os.path.join(basename, relative_path_of_stim)
+            path_of_stim = os.path.join(stim_loc,relative_path_of_stim)
+        if path == '':
+            raise IOError("Got to end of path without finding the file in stim_dir")
+        return path_of_stim
 
     df["stimulus_name"] = df["stimulus_name"].apply(
         locate_stimulus_directory
@@ -254,13 +263,13 @@ def binary_converter(code, bits_per_char):
     return "".join(map(chr, vals.astype(np.uint8)))
 
 
-def convert_digital_to_metadata(digital_signal, code_length=384, bits_per_char=8):
+def convert_digital_to_metadata(digital_signal, sample_rate, code_length=384, bits_per_char=8):
     """Detect periods of digital codes and decode stimulus metadata
 
     Copied from zeebeez because of a problem sometimes where the digital code starts
     with "on" state instead of "off" state
     """
-    sample_rate = digital_signal.annotations["sampling_rate"]
+    #sample_rate = digital_signal.annotations["sampling_rate"]
     on_times = np.array(np.round(digital_signal.times * sample_rate)).astype("int")
     # There is a certain bug where the pulses start in the on state
     # and the first pulse is missed.
@@ -285,7 +294,7 @@ def convert_digital_to_metadata(digital_signal, code_length=384, bits_per_char=8
             metadata["repetition"] = int(code[8:12])
         except ValueError:
             print("Repetition is not an integer! Setting to 0.")
-            raise Exception
+            #raise Exception
             metadata["repetition"] = 0
         try:
             metadata["trial"] = int(code[12:16])
@@ -328,7 +337,3 @@ __all__ = [
     "convert_digital_to_metadata",
     "get_vocalizer_relation"
 ]
-
-
-if __name__ == "__main__":
-    read_pyoperant_csv()

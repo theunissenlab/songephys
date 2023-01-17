@@ -21,14 +21,9 @@ from ..preprocess.ephys.filter import common_average_filter
 from ..preprocess.ephys.detect import calculate_snippet_dimensions, extract_spikes
 from ..preprocess.ephys.sort import sort, create_hierarchy
 
-from .file_setup import Nix2Wav, SiteConfig, SessionConfig, DefineSessions
+from .file_setup import Rhd2Wav, SiteConfig, SessionConfig, SessionProjectConfig, SiteProjectConfig, DefineSessions
 from .pipeline_utils import SiteParameter, SessionParameter, get_session_sites
 
-from .. import config
-try:
-    cfg = global_cfg
-except:
-    cfg = config.get_config()
 
 
 class FilterEphys(luigi.Task):
@@ -39,7 +34,8 @@ class FilterEphys(luigi.Task):
     def requires(self):
         return {
             "config": SessionConfig(self.session_dir),
-            "wavs": Nix2Wav(self.session_dir)
+            "project_config": SessionProjectConfig(self.session_dir),
+            "wavs": Rhd2Wav(self.session_dir)
         }
 
     def output(self):
@@ -48,6 +44,7 @@ class FilterEphys(luigi.Task):
 
     def run(self):
         session_config = self.input()["config"].data()
+        project_config = self.input()["project_config"].data()
         input_file = AudioFile(self.input()["wavs"]["ephys.wav"].path)
         output_file = AudioFile.create(
             self.output().path,
@@ -59,6 +56,7 @@ class FilterEphys(luigi.Task):
                 input_file,
                 output_file,
                 batch_size=65536,
+                highpass_cutoff=project_config.get("HIGHPASS_CUTOFF",300.0),
                 channel_groups=[np.arange(a, b) for a, b in session_config["filtering"]["ephys.wav"]],
             )
         except:
@@ -74,6 +72,7 @@ class DetectSpikesOnElectrode(luigi.Task):
     def requires(self):
         return {
             "config": SessionConfig(self.session_dir),
+            "project_config": SessionProjectConfig(self.session_dir),
             "ephys": FilterEphys(self.session_dir)
         }
 
@@ -87,6 +86,7 @@ class DetectSpikesOnElectrode(luigi.Task):
     def run(self):
         input_file = AudioFile(self.input()["ephys"].path)
         session_config = self.input()["config"].data()
+        project_config = self.input()["project_config"].data()
 
         if self.electrode_idx >= input_file.channels:
             raise ValueError("Cannot read electrode {} on file {} with {} channels".format(self.electrode_idx, self.input().path, input_file.channels))
@@ -99,7 +99,7 @@ class DetectSpikesOnElectrode(luigi.Task):
         if "spike_sorting.seconds_after_peak" not in session_config:
             raise ValueError("Config variable spike_sorting.seconds_after_peak must be set")
 
-        spike_cfg = cfg.get("SPIKE_SORTING",{})
+        spike_cfg = project_config.get("SPIKE_SORTING",{})
         spikes = extract_spikes(
             input_file,
             channel=self.electrode_idx,
@@ -108,7 +108,8 @@ class DetectSpikesOnElectrode(luigi.Task):
             threshold_std=spike_cfg.get('SPIKE_THRESHOLD_STD',4),
             t_pre=session_config.get("spike_sorting.seconds_before_peak", 0.0005),
             t_post=session_config.get("spike_sorting.seconds_after_peak", 0.0015),
-            min_time_between_spikes=spike_cfg.get('MIN_SPIKE_THRESHOLD_SPACING',.0003)
+            min_time_between_spikes=spike_cfg.get('MIN_SPIKE_THRESHOLD_SPACING',.0003),
+            z_spike_limit=spike_cfg.get("Z_SPIKE_LIMIT")
         )
 
         spike_dataset = SpikeDataset(
@@ -135,6 +136,7 @@ class DetectSpikesInSession(luigi.Task):
         # needs to know about how many ephys channels there are. However, this
         # method might be evaluated before the first file has even been downloaded
         # or the configuration file is even first set up!
+        # TODO figure out a better fix here
         site_dirs, _ = get_session_sites(self.session_dir)
         if not len(site_dirs):
             return DetectSpikesOnElectrode(self.session_dir, 0).output()
@@ -144,11 +146,11 @@ class DetectSpikesInSession(luigi.Task):
             return DetectSpikesOnElectrode(self.session_dir, 0).output()
 
         session_config = load_yaml(config_path)
-        if "nix2wav" not in session_config:
+        if "wavmap" not in session_config:
             return DetectSpikesOnElectrode(self.session_dir, 0).output()
 
         channels = 0
-        for k, idx in session_config["nix2wav"]["ephys.wav"]:
+        for k, idx in session_config["wavmap"]["ephys.wav"]:
             if isinstance(idx, int):
                 channels += idx
             else:
@@ -176,26 +178,28 @@ class CombineSiteSpikes(luigi.Task):
     site_dir = SiteParameter()
 
     def requires(self):
-        return DefineSessions(self.site_dir)
+        return {
+            "site_config": DefineSessions(self.site_dir),
+            "project_config": SiteProjectConfig(self.site_dir)
+        }
 
     def output(self):
         sorting_dir = os.path.join(self.site_dir, "spikes")
         if not os.path.exists(sorting_dir):
             os.makedirs(sorting_dir)
 
-        # TODO: relying on a preset N_ELECTRODES is flimsy, but this method
-        # can be run before any data is actually downloaded or configured yet.
-        # Maybe it would be better to stuff this as a key in the site_config.yaml
-        # file instead.
+        # TODO: this relies on the project config already being created.
+        project_cfg = SiteProjectConfig(self.site_dir).output().data()
+
         return dict(
             (e, luigi.LocalTarget(os.path.join(
                 sorting_dir,
                 "spike_waveforms-e{}.pkl".format(e))))
-            for e in range(cfg.get("EPHYS",{}).get("N_ELECTRODES",32))
+            for e in range(project_cfg["EPHYS"]["ELECTRODE_N"])
         )
 
     def run(self):
-        site_config = self.input().data()
+        site_config = self.input()["site_config"].data()
         session_offsets = [session["t"] for session in site_config["sessions"]]
         sessions_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions")
 
@@ -290,11 +294,10 @@ class PrepareSorting(luigi.Task):
     site_dir = SiteParameter()
 
     def requires(self):
-        # TODO: relying on a preset config.N_ELECTRODES is flimsy, but this method
-        # can be run before any data is actually downloaded or configured yet.
-        # Maybe it would be better to stuff this as a key in the site_config.yaml
-        # file instead.
-        for elec in range(cfg.get("EPHYS",{}).get("N_ELECTRODES",32)):
+        # TODO: this relies on the project config already being created.
+        project_cfg = SiteProjectConfig(self.site_dir).output().data()        
+
+        for elec in range(project_cfg["EPHYS"]["ELECTRODE_N"]):
             yield ManualSorting(site_dir=self.site_dir, electrode_idx=elec)
 
     def run(self):
@@ -334,7 +337,7 @@ class PreprocessSite(luigi.Task):
     no_sort = luigi.BoolParameter()
 
     def requires(self):
-        from preprocess_sound import MergePlaybacksCSV
+        from .preprocess_sound import MergePlaybacksCSV
         if self.no_sort:
             return [
                 DefineSessions(self.site_dir),
@@ -349,4 +352,16 @@ class PreprocessSite(luigi.Task):
 
     def run(self):
         pass
+
+class PreprocessOperantSite( luigi.Task ):
+    """Preprocess ephys data for entire site
+    This will run additional tasks <TODO INSERT TASK NAMES>
+    """
+
+    site_dir = SiteParameter()
+    no_sort = luigi.BoolParameter()
+
+    def requires(self):
+        from .preprocess_sound import MergePlaybacksCSV
+        from .preprocess_events import CombineEventMetadata
 

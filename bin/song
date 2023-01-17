@@ -76,7 +76,7 @@ _configs = (
     SiteConfigOption(
         instructions="16 channel, 1 mic",
         settings={
-            "nix2wav": {
+            "wavmap": {
                 "ephys.wav": [["Amplifier", [0, 16]]],
                 "mic.wav": [["Board ADC", 0]]
             },
@@ -90,7 +90,7 @@ _configs = (
     SiteConfigOption(
         instructions="16 channel, 2 mic",
         settings={
-            "nix2wav": {
+            "wavmap": {
                 "ephys.wav": [["Amplifier", [0, 16]]],
                 "mic.wav": [["Board ADC", [0, 2]]]
             },
@@ -104,7 +104,7 @@ _configs = (
     SiteConfigOption(
         instructions="32 channel, 1 mic",
         settings={
-            "nix2wav": {
+            "wavmap": {
                 "ephys.wav": [["Amplifier", [0, 32]]],
                 "mic.wav": [["Board ADC", 0]]
             },
@@ -118,7 +118,7 @@ _configs = (
     SiteConfigOption(
         instructions="32 channel, 2 mic",
         settings={
-            "nix2wav": {
+            "wavmap": {
                 "ephys.wav": [["Amplifier", [0, 32]]],
                 "mic.wav": [["Board ADC", [0, 2]]]
             },
@@ -132,7 +132,7 @@ _configs = (
     SiteConfigOption(
         instructions="32 channel, 3 mic (2+1)",
         settings={
-            "nix2wav": {
+            "wavmap": {
                 "ephys.wav": [["Amplifier", [0, 32]]],
                 "mic.wav": [["Board ADC", [0, 3]]]
             },
@@ -146,7 +146,7 @@ _configs = (
     SiteConfigOption(
         instructions="2 subj [0-14 ephys][15 mic][16-30 ephys][31 mic], 3 mic",
         settings={
-            "nix2wav": {
+            "wavmap": {
                 "ephys.wav": [["Amplifier", [0, 15]], ["Amplifier", [16, 31]]],
                 "mic.wav": [["Amplifier", 15], ["Amplifier", 31], ["Board ADC", [0, 3]]],
             },
@@ -160,7 +160,7 @@ _configs = (
     SiteConfigOption(
         instructions="2 subj [0-14 ephys][15 mic][16-30 ephys][31 mic], 3 mic, 6 motion",
         settings={
-            "nix2wav": {
+            "wavmap": {
                 "ephys.wav": [["Amplifier", [0, 15]], ["Amplifier", [16, 31]]],
                 "mic.wav": [["Amplifier", 15], ["Amplifier", 31], ["Board ADC", [0, 3]]],
                 "motion.wav": [["AUX Input", [0, 6]]],
@@ -175,7 +175,7 @@ _configs = (
     SiteConfigOption(
         instructions="1 subj [0-14 ephys][15 mic], 3 mic",
         settings={
-            "nix2wav": {
+            "wavmap": {
                 "ephys.wav": [["Amplifier", [0, 15]]],
                 "mic.wav": [["Amplifier", 15], ["Board ADC", [0, 3]]],
             },
@@ -189,7 +189,7 @@ _configs = (
     SiteConfigOption(
         instructions="1 subj [0-14 ephys][15 mic], 3 mic, 3 motion",
         settings={
-            "nix2wav": {
+            "wavmap": {
                 "ephys.wav": [["Amplifier", [0, 15]]],
                 "mic.wav": [["Amplifier", 15], ["Board ADC", [0, 3]]],
                 "motion.wav": [["AUX Input", [0, 3]]],
@@ -217,6 +217,13 @@ def create_site(site_dir):
 
     if not os.path.exists(site_dir):
         os.makedirs(site_dir)
+
+    project_config_path = os.path.join(site_dir.split("sites")[0], "project_config.yaml")
+    if not os.path.exists(project_config_path):
+        print("Project config not found at %s"%project_config_path)
+        print("Please run `song create-config EXPERIMENT_NAME` for this Experiment")
+        return
+
 
     config_path = os.path.join(site_dir, "site_config.yaml")
 
@@ -274,7 +281,7 @@ def create_site(site_dir):
         chosen_config_option = SiteConfigOption(
                 instructions="loaded from %s"%xml_file,
                 settings={
-                    "nix2wav": {
+                    "wavmap": {
                         "ephys.wav": [["Amplifier", [0, len(electrode_config['Amplifier'])]]],
                         "mic.wav": [["Board ADC", [0, len(electrode_config['Analog'])]]],
                         "digital.wav": [["Digital Input", [0, len(electrode_config['Digital'])]]],
@@ -313,8 +320,8 @@ def create_site(site_dir):
     click.echo("(this is only important if there are no digital codes for synchronizing playbacks to intan)")
 
     ch = 0
-    if "nix2wav" in config_data:
-        for k, v in config_data["nix2wav"]["mic.wav"]:
+    if "wavmap" in config_data:
+        for k, v in config_data["wavmap"]["mic.wav"]:
             if isinstance(v, list):
                 for i in range(*v):
                     click.echo("{}: {} {}".format(ch, k, i))
@@ -370,13 +377,16 @@ def unittest(_dir, verbose):
 
 @click.command("gen-filelists")
 @click.argument("experiment_name")
-def gen_filelists(experiment_name):
-    from songephys.format.download import downloaders
+def gen_filelists(experiment_name, pyoperant_days=[]):
     import glob, os
     import datetime, pandas
     import numpy as np
-    pyop_dir = downloaders['local'].pyoperant_drive(experiment_name)
-    rhd_dir = downloaders['local'].rhd_drive(experiment_name)
+    from songephys.config import get_config
+
+    project_cfg = get_config(experiment_name)
+
+    pyop_dir = project_cfg['LOCAL_RAW_FILES']['pyoperant_drive']
+    rhd_dir = project_cfg['LOCAL_RAW_FILES']['rhd_drive']
     all_pyop_files = glob.glob(os.path.join(pyop_dir,'*_trialdata.csv'))
     all_rhd_files = glob.glob(os.path.join(rhd_dir,"*/*.rhd"))
     file_lists = dict()
@@ -397,6 +407,8 @@ def gen_filelists(experiment_name):
         print(exp_name+"_events.log")
         print(exp_name+"_trialdata.csv")
         # get individual rhd recordings
+        # TODO Make this code work, to do this, we need to know how long each pyoperant file is
+        #       This should be possible by loading the csv and getting the datetime for the final entry.
         experiments = np.unique([os.path.dirname(x) for x in all_rhd_files])
         for f in all_rhd_files:
             experiment = os.path.dirname(f)
