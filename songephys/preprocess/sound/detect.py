@@ -503,12 +503,13 @@ def generate_stim_dicts(digital_codes, sample_rate, playbacks_db):
     return stim_dicts 
 
 
-def generate_event_dicts_operant(digital_codes, digital_events, sample_rate, playbacks_db):
+def generate_event_dicts_operant(digital_codes, sample_rate, playbacks_db):
     """Generate segment data from digital signal data and sound (stim) database
 
     Args:
     digital_signals : neo.core.Events
-    digital_events : list( ( string, neo.core.Epochs ) )
+    events_db : pandas.DataFrame
+        dataframe of events that occurred
     playbacks_db : pandas.DataFrame
         dataframe of stimuli played
 
@@ -521,12 +522,6 @@ def generate_event_dicts_operant(digital_codes, digital_events, sample_rate, pla
     if not all([code[1]["action"] == "queu" for code in digital_codes]):
         raise Exception("There are corrupted bits in the digital signals."
                 "Should look into it before proceeding")
-        # digital_codes = [
-        #   code for code in digital_codes
-        #   if code[1]["action"] == "queu"]
-
-    # Some data files have the digital pulses missing; in this case, we want
-    # to carefully align the stimuli to the envelope (based on timestamp)
 
     stim_dicts = []
 
@@ -551,20 +546,21 @@ def generate_event_dicts_operant(digital_codes, digital_events, sample_rate, pla
         else:
             # TODO (kevin): check what stim_id ends up being
             stim_id = stim.index[0]
-            stim = dict(stim.iloc[0])
-
-        vocalizer_relation = get_vocalizer_relation(stim)
+            stim = stim.iloc[0]
 
         stim_dicts.append({
-            "name": "playback_{}".format(stim["emitter"]),
-            "description": "",
-            "sound_type": "playback",
-            "vocalization_type": stim.get("callid", "UV"),
-            "vocalizer": vocalizer_relation,
-            "playback_file": stim.get("stimulus_name"),
+            "name": "playback_{}".format(stim.stimulus_name.split('/')[-1]),
+            "rewarded": stim.rewarded,
+            "correct": stim.correct,
+            "event_type": "playback",
+            "sound_type": stim.type,
+            "condition_name": stim.condition_name,
+            "response": stim.response,
+            "playback_file": stim.stimulus_name,
             "stim_id": stim_id,
             "start_time": start_time,
-            "duration": stim["duration"],
+            "trial": stim.trial,
+            "duration": stim.duration,
         })
 
     return stim_dicts 

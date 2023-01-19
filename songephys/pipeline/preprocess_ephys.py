@@ -137,7 +137,7 @@ class DetectSpikesInSession(luigi.Task):
         # method might be evaluated before the first file has even been downloaded
         # or the configuration file is even first set up!
         # TODO figure out a better fix here
-        site_dirs, _ = get_session_sites(self.session_dir)
+        site_dirs, _, _ = get_session_sites(self.session_dir)
         if not len(site_dirs):
             return DetectSpikesOnElectrode(self.session_dir, 0).output()
 
@@ -362,6 +362,18 @@ class PreprocessOperantSite( luigi.Task ):
     no_sort = luigi.BoolParameter()
 
     def requires(self):
-        from .preprocess_sound import MergePlaybacksCSV
-        from .preprocess_events import CombineEventMetadata
+        from .preprocess_sound import MergeOperantCSV
+        if self.no_sort:
+            return [
+                DefineSessions(self.site_dir),
+                MergeOperantCSV(self.site_dir),
+                #CombineSiteSpikes(self.site_dir)
+            ]
+        return [
+            DefineSessions(self.site_dir),
+            MergeOperantCSV(self.site_dir),
+            PrepareSorting(self.site_dir)
+        ]
 
+    def run(self):
+        pass

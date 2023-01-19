@@ -2,6 +2,7 @@ import glob
 import logging
 import os
 from collections import defaultdict
+import datetime
 
 import luigi
 import numpy as np
@@ -10,13 +11,18 @@ import quantities as pq
 import soundfile as sf
 from neo.io import IntanIO
 
+from ..utils import get_session_starttime
 from ..format.io import load_yaml
 from ..format.intan_utils import timestamp_from_intan_filename
 from ..format.wav import AudioFile
 from ..preprocess.sound.playback_utils import (
     convert_digital_to_metadata,
-    convert_pyoperant_csvs,
-    read_pyoperant_csv
+    convert_pyoperant_playback_csvs,
+    convert_pyoperant_operant_csvs,
+    read_pyoperant_playback_csv,
+    create_digital_events_df,
+    calculate_event_timedelta,
+    fix_stimulus_codes
 )
 from ..preprocess.sound.playback_alignment import (
     compute_realigned_trial_times,
@@ -126,7 +132,7 @@ class CreateMicrophoneAlignedCodes(luigi.Task):
 
         new_codes = []
         for csv_file, stim_dir in zip(csv_files, stim_dirs):
-            playback_df = read_pyoperant_csv(csv_file, stim_dir)
+            playback_df = read_pyoperant_playback_csv(csv_file, stim_dir)
             session_start_timestamp = timestamp_from_intan_filename(self.session_dir)
 
             aligned_times = compute_realigned_trial_times(
@@ -224,7 +230,7 @@ class CombinePlaybackMetadata(luigi.Task):
 
         # Combine the data from the csvs into a single pickled dataframe
         logger.info("Saving stim database {}".format(self.output().path))
-        convert_pyoperant_csvs(
+        convert_pyoperant_playback_csvs(
                 stimulus_codes,
                 csv_files,
                 stim_dirs,
@@ -294,6 +300,143 @@ class PlaybacksCSV(luigi.Task):
         df = pd.DataFrame(playback_dicts, columns=playback_columns)
         df.to_csv(self.output().path, index=False)
 
+class CombineOperantMetadata(luigi.Task):
+    """Combine data from multiple csvs and the recorded digital input signal
+
+    Every time a playback is played, a digital code is sent and recorded in the intan
+    system. A playback session created by our pyoperant code makes a csv
+    with one row for each playback trial - there can be multiple playback sessions
+    (i.e. multiple csvs) in one session. A second issue is that the beginning or
+    end of a playback session may be cut off at the ends of the session recorded.
+
+    This task attempts to resolve this by comparing the data from multiple csvs to the
+    digital codes received in the recording software. It puts all the stimulus
+    presentations in the session into a single pandas dataframe in order of presentation.
+
+    Inputs
+    ------
+    session_dir : str
+        Path to session. The session_dir/raw directory must contain csv files for
+        all playbacks played during the session.
+
+    Outputs a pickle file containing a pandas dataframe with the playback metadata
+    for all playbacks in the session,
+    """
+
+    session_dir = SessionParameter()
+
+    def requires(self):
+        return {
+            "files": DownloadSession(self.session_dir)
+        }
+
+    def output(self):
+        segmentation_dir = os.path.join(self.session_dir, "segmentation")
+        if not os.path.exists(segmentation_dir):
+            os.makedirs(segmentation_dir)
+
+        combined_db = "playbacks.pkl"
+
+        return {
+            "playbacks": luigi.LocalTarget(
+                os.path.join(segmentation_dir, combined_db)
+            ),
+            "events": luigi.LocalTarget(
+                os.path.join(segmentation_dir, "events.pkl")
+            )
+        }
+
+    def run(self):
+        input_directory = os.path.join(self.session_dir, "raw")
+        stimuli_directory = os.path.join(self.session_dir, "stimuli")
+
+        csv_files = sorted(glob.glob(os.path.join(input_directory, "*_trialdata.csv")))
+        log_files = sorted(glob.glob(os.path.join(input_directory, "*_events.log")))
+
+        if not len(csv_files) and not len(log_files):
+            # no playback csvs -> create a dummy dataframe
+            pd.DataFrame([]).to_csv(self.output()['playbacks'].path)
+            pd.DataFrame([]).to_csv(self.output()['events'].path)
+            return
+
+        # Identify and locate the stimulus directory (e.g. TutFamBos)
+        # associated with each pyoperant csv
+        # TODO these dirs should be the same for csv and log files
+        # but may want to assert thats true here.
+        stim_dirs = _get_stim_dirs(csv_files, stimuli_directory)
+
+        # determine how many playback sets there were and how many
+        rhd_file = self.input()["files"]["rhd"].path
+        rhd = IntanIO(rhd_file)
+        # if this is a rhd we can check the samplerate of one of the signal channels
+        # TODO maybe vet which channel we are checking. this is usually one of the 
+        #   ephys channels
+        sampling_rate = rhd.header['signal_channels'][0][2]
+        block = rhd.read_block(lazy=True)
+
+        if not len(block.segments[0].events):
+            raise IOError("No Events in %s" % rhd_file)
+            
+        # The events channel of our rhd files is always the digital codes
+        events = block.segments[0].events[0].load()
+        # note in the HPIWHI5668M files, these codes are all 0.... oops
+        stimulus_codes = convert_digital_to_metadata(events,sample_rate=sampling_rate)
+        
+        # now to process epochs
+        digital_epochs = [ epoch.load() for epoch in block.segments[0].epochs ]
+        # First of all, we need to calculate how far off all of our times are in the csv files from the rhd files
+        # This can be done using the TTL pulse, we know is every 10s 
+        # TODO the THIS DICT SHOULD BE PART OF THE CONFIG
+        digital_epoch_channels = {
+            "I-1" : "TTL",
+            "I-2": "PeckPort",
+            "I-3" : "Feeder" 
+        }
+        if "TTL" not in digital_epoch_channels.values():
+            logger.info("TTL is not on one of the digital channels, assuming that 'I-1' is the TTL Channel" )
+            digital_epoch_channels['I-1'] = "TTL"
+        file_timeoffset = datetime.timedelta()
+
+        digital_epochs_to_save = dict()
+
+        session_start = get_session_starttime(self.session_dir)
+        for dep in digital_epochs:
+            # IF this is the TTL pulse we dont save it (should we? maybe to align with video etc...)
+            if digital_epoch_channels.get(dep.annotations['id'],None) == "TTL":
+                file_timeoffset = calculate_event_timedelta(dep.times, log_files, session_start )
+            else:
+            # IF it is not the TTL pulse and its present in the digital_epoch channels, then save it
+                if dep.annotations['id'] in digital_epoch_channels:
+                    save_name = digital_epoch_channels[dep.annotations['id']]
+                    digital_epochs_to_save[save_name] = dep
+        # here we will do some processing to spoof the trial data... hopefully this is not necessary in the future
+        # TODO not sure where to add this file_timeoffset.... to the df or not 
+        #   we may want to subtract them from the dataframes
+        if len(stimulus_codes) > 0 and np.all([t[1]['trial'] == 0 for t in stimulus_codes]):
+            logger.info("Fixing stim codes because they are all 0")
+            stimulus_codes = fix_stimulus_codes(stim_codes=stimulus_codes, 
+                                                csv_files=csv_files,stim_dirs=stim_dirs,
+                                                sample_rate=sampling_rate, 
+                                                session_starttime=session_start,
+                                                session_offset=file_timeoffset)
+
+
+        # Combine the data from the csvs into a single pickled dataframe
+        logger.info("Saving stim database {}".format(self.output()["playbacks"].path))
+        convert_pyoperant_operant_csvs(
+                stimulus_codes,
+                csv_files,
+                stim_dirs,
+                self.output()["playbacks"].path)
+
+        
+        logger.info("Saving event databse {}".format(self.output()["events"].path))
+        create_digital_events_df(
+            digital_epochs_to_save,
+            self.output()["events"].path
+        )
+        rhd.close()
+
 class OperantCSV(luigi.Task):
     """Locate time periods containing playback sounds and time periods of events
 
@@ -306,22 +449,21 @@ class OperantCSV(luigi.Task):
     def requires(self):
         return {
             "wav_files": Rhd2Wav(self.session_dir),
-            "aligned_codes": CreateMicrophoneAlignedCodes(self.session_dir),
-            "playback_metadata": CombinePlaybackMetadata(self.session_dir)
+            "metadata": CombineOperantMetadata(self.session_dir)
         }
 
     def output(self):
         segmentation_dir = os.path.join(self.session_dir, "segmentation")
         segment_data_file = "playback_segments.csv"
-        return luigi.LocalTarget(
-            os.path.join(segmentation_dir, segment_data_file)
-        )
+        event_datafile = "event_segments.csv"
+        return {
+            "playbacks": luigi.LocalTarget( os.path.join(segmentation_dir, segment_data_file)),
+            "events":  luigi.LocalTarget( os.path.join(segmentation_dir, event_datafile)),
+        }
 
     def run(self):
-        
-
         try:
-            playbacks_db = pd.read_pickle(self.input()["playback_metadata"].path)
+            playbacks_db = pd.read_pickle(self.input()["metadata"]['playbacks'].path)
         except:
             logger.warning("No pyoperant file found (no playbacks)")
             playback_dicts = []
@@ -335,15 +477,12 @@ class OperantCSV(luigi.Task):
             sampling_rate = rhd.header['signal_channels'][0][2]
 
             if not len(block.segments[0].events):
-                # Live vocalization detection is now delegated to the FindLiveCalls task
-                mic = AudioFile(self.input()["wav_files"]["mic.wav"].path)
-                stimulus_codes = np.load(self.input()["aligned_codes"].path, allow_pickle=True)[()]
-                #sampling_rate = mic.sampling_rate
-            else:
-                # load the digital signals (lazy loaded)
-                digital_signals = block.segments[0].events[0].load()
-                stimulus_codes = convert_digital_to_metadata(digital_signals)
+                raise IOError("No Events in %s" % rhd_file)
 
+            # load the digital signals (lazy loaded)
+            digital_signals = block.segments[0].events[0].load()
+            stimulus_codes = convert_digital_to_metadata(digital_signals)
+            
             playback_dicts = generate_event_dicts_operant(
                     stimulus_codes,
                     sampling_rate,
@@ -355,7 +494,13 @@ class OperantCSV(luigi.Task):
             rhd.close()
 
         df = pd.DataFrame(playback_dicts, columns=playback_columns)
-        df.to_csv(self.output().path, index=False)
+        df.to_csv(self.output()['playbacks'].path, index=False)
+        try:
+            events_db = pd.read_pickle(self.input()["metadata"]['events'].path)
+        except:
+            logger.warning("No pyoperant file found (no events)")
+            events_db = pd.DataFrame(None, columns=playback_columns)
+        events_db.to_csv(self.output()['events'].path, index=False)
 
 
 class FindLiveCalls(luigi.Task):
@@ -461,13 +606,17 @@ class MergeOperantCSV(luigi.Task):
             yield OperantCSV(session_dir=session_dir)
 
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir, "playback_segments.csv"))
+        return {
+            "playbacks": luigi.LocalTarget(os.path.join(self.site_dir, "playback_segments.csv")),
+            "events": luigi.LocalTarget(os.path.join(self.site_dir, "event_segments.csv"))
+        }
 
     def run(self):
         site_config = self.input()[0].data()
-        playback_csvs = self.input()[1:]
+        playback_csvs = [input['playbacks'] for input in self.input()[1:]]
         session_offsets = [session["t"] for session in site_config["sessions"]]
 
+        # First concatenate all playback data
         # vocal_period_data = [np.load(s.path, allow_pickle=True)[()] for s in self.input()]
         vocal_period_data = [pd.read_csv(s.path) for s in playback_csvs]
 
@@ -475,7 +624,17 @@ class MergeOperantCSV(luigi.Task):
             vocal_periods["start_time"] += offset
 
         df = pd.concat(vocal_period_data, axis=0)
-        df.to_csv(self.output().path, index=False)
+        df.to_csv(self.output()["playbacks"].path, index=False)
+
+        # now concatenate all event data
+        event_csvs = [input['events'] for input in self.input()[1:]]
+        event_period_data = [pd.read_csv(s.path) for s in event_csvs]
+
+        for event_periods, offset in zip(event_period_data, session_offsets):
+            event_periods["start_time"] += offset
+        
+        df = pd.concat(event_period_data, axis=0)
+        df.to_csv(self.output()['events'].path, index=False)
 
 
 class MergeLiveCalls(luigi.Task):

@@ -2,6 +2,7 @@
 """
 import datetime
 import os
+import re
 
 import numpy as np
 import pandas as pd
@@ -71,6 +72,19 @@ def _parse_julie_filename_metadata(fname):
 
     return metadata
 
+def _parse_filename_bird_type_data(fname):
+    # all we want to find is the CallType and the bird name
+    fname = os.path.basename(fname)
+    metadata = {"type":None,"source":None}
+    vals = fname.split("_")
+    # TODO fill this in
+    calltypes = ["So","DC", "LT", "Te", "Tu", "Ag"]
+    for val in vals:
+        if val in calltypes:
+            metadata['type'] = val
+        if re.match('^[A-Za-z]{6}\d{4}$',val) is not None:
+            metadata['source'] = val
+    return metadata
 
 def _parse_ladder_filename_data(fname):
     fname = os.path.basename(fname)
@@ -122,14 +136,8 @@ def _parse_ladder_filename_data(fname):
     return metadata
 
 
-def _get_duration(wav_file):
-    # rate, data = scipy.io.wavfile.read(wav_file)
-    w = wavio.read(wav_file)
-    rate, data = w.rate, w.data
-    return data.shape[0] / np.float(rate)
 
-
-def _transform_pyoperant_csv(df, stim_loc):
+def _transform_pyoperant_playback_csv(df, stim_loc):
     """Transform dataframe into correct datatypes and derive columns
 
     New columns:
@@ -169,7 +177,13 @@ def _transform_pyoperant_csv(df, stim_loc):
     df["stimulus_name"] = df["stimulus_name"].apply(
         locate_stimulus_directory
     )
+
     # Fill in duration column for dataframe by reading wav files
+    def _get_duration(wav_file):
+        # rate, data = scipy.io.wavfile.read(wav_file)
+        w = wavio.read(wav_file)
+        rate, data = w.rate, w.data
+        return data.shape[0] / np.float(rate)
     df["duration"] = df["stimulus_name"].apply(_get_duration)
 
     metadata = df["stimulus_name"].apply(_parse_julie_filename_metadata)
@@ -178,10 +192,10 @@ def _transform_pyoperant_csv(df, stim_loc):
     return df[["duration", "stimulus_name", "trial", "time"]].join(metadata)
 
 
-def read_pyoperant_csv(path, stim_loc):
+def read_pyoperant_playback_csv(path, stim_loc):
     """Basically just load the csv"""
     df = pd.read_csv(path)
-    return _transform_pyoperant_csv(df, stim_loc=stim_loc)
+    return _transform_pyoperant_playback_csv(df, stim_loc=stim_loc)
 
 
 def save_pyoperant_db(df, dest_path):
@@ -212,7 +226,7 @@ def group_digital_code_trials(digital_codes):
     return [np.array(r) for r in result]
 
 
-def convert_pyoperant_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, dest_path):
+def convert_pyoperant_playback_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, dest_path):
     """Convert one or more pyoperant csvs to a pickled dataframe
 
     1. Combine csvs by time column, and reindex column
@@ -226,7 +240,7 @@ def convert_pyoperant_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, dest_path)
     trial_set = group_digital_code_trials(stimulus_codes)
 
     pyoperant_dataframes = [
-        read_pyoperant_csv(filename, stim_dir)
+        read_pyoperant_playback_csv(filename, stim_dir)
         for filename, stim_dir in zip(pyoperant_csvs, stim_dirs)
     ]
 
@@ -250,6 +264,181 @@ def convert_pyoperant_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, dest_path)
 
     save_pyoperant_db(new_df, dest_path)
 
+
+## Operant task 
+def _transform_pyoperant_operant_csv(df, stim_loc):
+    """Transform dataframe into correct datatypes and derive columns
+
+    New columns:
+    source, type, duration
+
+    Params
+    df (pd.DataFrame)
+    stim_loc (str): path to stimulus directory
+    """
+    df = df.rename(columns={"index": "trial"})
+
+    def _convert_datetime(t):
+        try:
+            return datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S.%f")
+        except:
+            return datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S")
+
+    df["time"] = df["time"].apply(_convert_datetime)
+    df["stimulus_name"] = df["stimulus_name"].apply(
+        lambda path: path.replace("\\", "/")
+    )
+
+    def locate_stimulus_directory(path):
+        # Starts with the basename of the path, and goes up until it finds a file
+        # that exists in stim_dir
+        # TODO make sure this works on other projects
+        path, relative_path_of_stim = os.path.split(path)
+        path_of_stim = os.path.join(stim_loc,relative_path_of_stim)
+        while not os.path.exists(path_of_stim) and path != '':
+            path, basename = os.path.split(path)
+            relative_path_of_stim = os.path.join(basename, relative_path_of_stim)
+            path_of_stim = os.path.join(stim_loc,relative_path_of_stim)
+        if path == '':
+            raise IOError("Got to end of path without finding the file in stim_dir")
+        return path_of_stim
+
+    df["stimulus_name"] = df["stimulus_name"].apply(
+        locate_stimulus_directory
+    )
+    # Fill in duration column for dataframe by reading wav files
+    df['duration'] = df['rt']
+    # TODO check that this number is right... it could be a stim timeout
+    mask = df['rt'].isnull()
+    df.loc[mask,'duration'] = df['max_wait'][mask]
+
+    metadata = df["stimulus_name"].apply(_parse_filename_bird_type_data)
+    metadata = pd.DataFrame.from_records(metadata)
+
+    return df[["duration", "stimulus_name", "trial", "time", "condition_name", "response", "correct", "reward"]].join(metadata)
+
+
+def read_pyoperant_operant_csv(path, stim_loc):
+    """Basically just load the csv"""
+    df = pd.read_csv(path)
+    return _transform_pyoperant_operant_csv(df, stim_loc=stim_loc)
+
+def convert_pyoperant_operant_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, dest_path):
+    """Convert one or more pyoperant csvs to a pickled dataframe
+
+    1. Combine csvs by time column, and reindex column
+    2. save as a pickled dataframe
+
+    Params
+    pyoperant_csvs (list of str): list of pyoperant csv paths to combine
+    stim_dirs (list of str): list of paths to directories containing
+        the new wavs for each pyoperant csv
+    """
+    trial_set = group_digital_code_trials(stimulus_codes)
+
+    pyoperant_dataframes = [
+        read_pyoperant_operant_csv(filename, stim_dir)
+        for filename, stim_dir in zip(pyoperant_csvs, stim_dirs)
+    ]
+
+    if not (len(pyoperant_dataframes) == len(trial_set)):
+        raise Exception("Different number of pyoperant csvs ({}) than in digital signal ({})".format(len(pyoperant_dataframes), len(trial_set)))
+
+    pyoperant_dataframes = [
+        df.loc[np.isin(df["trial"], trials)]
+        for df, trials in zip(pyoperant_dataframes, trial_set)
+    ]
+
+    pyoperant_lengths = [len(df) for df in pyoperant_dataframes]
+    digital_lengths = [len(trials) for trials in trial_set]
+
+    if not all([a == b for a, b in zip(pyoperant_lengths, digital_lengths)]):
+        raise Exception("Wrong number of trials detected in pyoperants and digital signal: {} and {}".format(pyoperant_lengths, digital_lengths))
+    
+    # TODO We may want to use the stim code time as the column here instead of the pyop time
+    new_df = pd.concat(pyoperant_dataframes)
+    new_df = new_df.sort_values("time")
+    new_df.index = np.arange(len(new_df))
+
+    save_pyoperant_db(new_df, dest_path)
+
+def create_digital_events_df( digital_epochs, dest_path ):
+    # time, duration, name
+    times = []
+    durations = []
+    names = []
+    def _convert_to_seconds(epoch_time):
+        return epoch_time.item()
+    for event_type in digital_epochs:
+        events = digital_epochs[event_type]
+        times.extend(list(map(_convert_to_seconds,events.times)))
+        durations.extend(list(map(_convert_to_seconds,events.durations)))
+        names.extend([event_type]*len(events))
+    df = pd.DataFrame({"start_time": times, "duration": durations, "event_name": names})
+    save_pyoperant_db(df, dest_path)
+
+def fix_stimulus_codes(stim_codes, csv_files, stim_dirs, sample_rate, session_starttime, session_offset):
+    # This is only used in the case that you dont output stimulus codes
+    csv_starts = []
+    csv_dfs = []
+    for csv, stim_dir in zip(csv_files, stim_dirs):
+        start = csv.strip("_trialdata.csv").split('_')[-1]
+        csv_start = datetime.datetime.strptime(start, "%Y%m%d%H%M%S")
+        csv_starts.append(csv_start)
+        csv_dfs.append(read_pyoperant_operant_csv(csv,stim_dir))
+    
+    dels = []
+    for stim_code in stim_codes:
+        # save datetimes in stim codes for easy access later
+        stim_code[1]['datetime'] = session_starttime + session_offset + datetime.timedelta(seconds=stim_code[0] / sample_rate)
+        
+        # get the smallest positive delta for stim_date - csv_start
+        deltas = np.asarray([(stim_code[1]['datetime'] - st).total_seconds() for st in csv_starts])
+        deltas[deltas < 0] = np.inf
+        csv_df = csv_dfs[np.argmin([deltas])]
+
+        # now get the smallest delta within that csv
+        dels.append(np.min(np.abs(csv_df['time'] - stim_code[1]['datetime'])))
+        stim_code[1]['trial'] = csv_df.loc[np.argmin(np.abs(csv_df['time'] - stim_code[1]['datetime'])),'trial']
+    print(np.mean(dels))
+    return stim_codes
+
+def calculate_event_timedelta(ttl_times, event_logs, session_starttime, ttl_pulse_width=10.0):
+    # there is an offset between the timedeltas calculated from sampletime + file starttime
+    # when compared to pyoperant computer time. This is probably from some small delay from filestart to actually starting 
+    log_starts = []
+    log_dfs = []
+    for log in event_logs:
+        start = log.strip("_events.log").split('_')[-1]
+        log_start = datetime.datetime.strptime(start, "%Y%m%d%H%M%S")
+        log_starts.append(log_start)
+        log_df = pd.read_csv(log, delimiter='\t',names=['time','label','action','etc'])
+        log_df['time'] = pd.to_datetime(log_df['time'], format="%Y-%m-%d %H:%M:%S.%f")
+        # filter out all but the TTL pulses
+        log_df = log_df.loc[log_df['label'] == 'TTLMonitor']
+        log_dfs.append(log_df)
+    
+    timedeltas = []
+    for ttl_time in ttl_times:
+        # save datetimes in stim codes for easy access later
+        ttl_abstime = session_starttime + datetime.timedelta(seconds=ttl_time.item())
+        
+        # get the smallest positive delta for stim_date - csv_start
+        deltas = np.asarray([(ttl_abstime - st).total_seconds() for st in log_starts])
+        deltas[deltas < 0] = np.inf
+        log_df = log_dfs[np.argmin([deltas])]
+
+        # now get the smallest delta within that csv
+        smallest_delta = log_df.iloc[np.argmin(np.abs(log_df['time'] - ttl_abstime))]['time'] - ttl_abstime
+        if np.abs(smallest_delta.seconds) > ttl_pulse_width/2.:
+            # If we cant find the TTL log code for this then we shouldnt record the time.
+            # the TTL pulses go on during the break between operant tasks, so this is quite common
+            continue
+        else:
+            timedeltas.append(log_df.loc[np.argmin(np.abs(log_df['time'] - ttl_abstime)),'time'] - ttl_abstime)
+    return np.mean(timedeltas)
+
+# End Operant task
 
 def binary_converter(code, bits_per_char):
     """Coinvert binary code into character strings
@@ -333,7 +522,7 @@ def get_vocalizer_relation(annotations):
 
 
 __all__ = [
-    "convert_pyoperant_csvs",
+    "convert_pyoperant_playback_csvs",
     "convert_digital_to_metadata",
     "get_vocalizer_relation"
 ]

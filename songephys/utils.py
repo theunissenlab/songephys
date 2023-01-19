@@ -1,5 +1,6 @@
 import logging
 import time
+import datetime
 from functools import wraps
 
 import numpy as np
@@ -11,6 +12,9 @@ logger = logging.getLogger(__name__)
 class DeprecatedFunction(Exception):
     pass
 
+def get_session_starttime(session_name):
+    dt_str = session_name[-13:]
+    return datetime.datetime.strptime(dt_str,'%y%m%d_%H%M%S')
 
 def deprecated(msg, force=True):
     """Mark a function as deprecated. Specify what new function to use in the msg.

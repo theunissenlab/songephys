@@ -104,7 +104,7 @@ class SessionConfig(luigi.Task):
         default=["download_type", "experiment_name", "filelist", "sessions"])
 
     def config_path(self):
-        site_dirs, _ = get_session_sites(self.session_dir)
+        site_dirs, _, _ = get_session_sites(self.session_dir)
         if not len(site_dirs):
             raise Exception(
                 "No valid site with a config file found for session {}".format(self.session_dir))
@@ -317,6 +317,7 @@ class DefineSessions(luigi.Task):
                        if f.endswith(".rhd")],
             experiment_name=site_config["experiment_name"],
             downloader=downloader,
+            include_events=np.any([f.endswith("events.log") for f in site_config['filelist']])
         )
         site_config["sessions"] = session_dicts
 
@@ -352,7 +353,7 @@ class DownloadSession(luigi.Task):
     def requires(self):
         self.session_name = session_basename(self.session_dir)
         output_directory = os.path.join(self.session_dir, "raw")
-        self.site_dirs, self.pyoperants = get_session_sites(self.session_dir)
+        self.site_dirs, self.pyoperants, self.events = get_session_sites(self.session_dir)
 
         return {
             "define_sessions": DefineSessions(self.site_dirs[0]),
@@ -365,7 +366,7 @@ class DownloadSession(luigi.Task):
 
         self.session_name = session_basename(self.session_dir)
         output_directory = os.path.join(self.session_dir, "raw")
-        self.site_dirs, self.pyoperants = get_session_sites(self.session_dir)
+        self.site_dirs, self.pyoperants, self.events = get_session_sites(self.session_dir)
 
         return {
             "rhd": luigi.LocalTarget(os.path.join(
@@ -375,6 +376,11 @@ class DownloadSession(luigi.Task):
                 luigi.LocalTarget(os.path.join(
                     output_directory, "{}.csv".format(filename)
                 )) for filename in self.pyoperants
+            ],
+            "events": [
+                luigi.LocalTarget(os.path.join(
+                    output_directory, "{}.log".format(filename)
+                )) for filename in self.events
             ]
         }
 
@@ -396,6 +402,7 @@ class DownloadSession(luigi.Task):
             self.session_name,
             save_to=self.session_dir,
             pyoperant_files=self.pyoperants,
+            event_files = self.events
         )
 
 
@@ -522,7 +529,7 @@ class Nix2Wav(luigi.Task):
         elec_path = os.path.join(raw_dir, "ephys.wav")
         motion_path = os.path.join(raw_dir, "motion.wav")
 
-        site_dirs, _ = get_session_sites(self.session_dir)
+        site_dirs, _, _ = get_session_sites(self.session_dir)
         config_path = os.path.join(site_dirs[0], "site_config.yaml")
 
         return {
@@ -622,7 +629,7 @@ class Rhd2Wav(luigi.Task):
         elec_path = os.path.join(raw_dir, "ephys.wav")
         motion_path = os.path.join(raw_dir, "motion.wav")
 
-        site_dirs, _ = get_session_sites(self.session_dir)
+        site_dirs, _, _ = get_session_sites(self.session_dir)
         config_path = os.path.join(site_dirs[0], "site_config.yaml")
 
         return {
@@ -783,7 +790,7 @@ class Nwb2Wav(luigi.Task):
         elec_path = os.path.join(raw_dir, "ephys.wav")
         motion_path = os.path.join(raw_dir, "motion.wav")
 
-        site_dirs, _ = get_session_sites(self.session_dir)
+        site_dirs, _, _ = get_session_sites(self.session_dir)
         config_path = os.path.join(site_dirs[0], "site_config.yaml")
 
         return {

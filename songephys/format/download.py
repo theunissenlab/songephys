@@ -11,7 +11,7 @@ To work in the pipeline, the downloader object should implement two methods:
     def download_csvs(self, experiment_name, csv_list, save_to=None):
         ...
 
-    def download_session(self, experiment_name, session_id, save_to=None, pyoperant_files=tuple())
+    def download_session(self, experiment_name, session_id, save_to=None, pyoperant_files=tuple(), event_files=tuple())
         ...
 
 It is up to the internals of the downloader object to figure out how to do those tasks
@@ -129,6 +129,7 @@ class BaseDownloader(object):
                 session_id,
                 save_to=None,
                 pyoperant_files=tuple(),
+                event_files=tuple()
             ):
         """Download a recording session data into the proper location
 
@@ -142,7 +143,10 @@ class BaseDownloader(object):
             save_to (str): Path of directory to download session to
             pyoperant_files (list of str):
                 Each element is a name of a pyoperant file
-                (e.g. "GreYel3594M_trialdata_20170912164335.csv")
+                (e.g. "GreYel3594M_operant_20170912164335_trialdata.csv")
+            event_files (list of str):
+                Each element is a name of a event file
+                (e.g. "GreYel3594M_operant_20170912164335_events.log")
         """
         self.connect()
 
@@ -191,6 +195,19 @@ class BaseDownloader(object):
 
         if pyoperant_files:
             self.download_stim_dirs(pyoperant_files, experiment_name, raw_dir, stimuli_dir)
+        
+        for event_file in event_files:
+            if not event_file.endswith(".log"):
+                event_file = "{}.log".format(event_file)
+
+            try:
+                log_file = self.locate_pyoperant_file(experiment_name, event_file)
+            except:
+                logger.warning("File {} not found! "
+                               "Skipping...".format(event_file))
+                continue
+
+            self.download_file(log_file, os.path.join(raw_dir, event_file))
 
         self.close()
 
