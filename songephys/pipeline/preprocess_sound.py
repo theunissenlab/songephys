@@ -33,6 +33,7 @@ from ..preprocess.sound.detect import (
     generate_stim_dicts,
     generate_event_dicts_operant,
     playback_columns,
+    operant_columns,
     autodetected_columns,
 )
 from ..preprocess.sound.stimuli import merge_segments
@@ -235,7 +236,6 @@ class CombinePlaybackMetadata(luigi.Task):
                 csv_files,
                 stim_dirs,
                 self.output().path)
-        rhd.close()
 
 
 class PlaybacksCSV(luigi.Task):
@@ -295,7 +295,6 @@ class PlaybacksCSV(luigi.Task):
             logger.info("Identified {} playback periods".format(
                 len(playback_dicts))
             )
-            rhd.close()
 
         df = pd.DataFrame(playback_dicts, columns=playback_columns)
         df.to_csv(self.output().path, index=False)
@@ -409,6 +408,8 @@ class CombineOperantMetadata(luigi.Task):
                 if dep.annotations['id'] in digital_epoch_channels:
                     save_name = digital_epoch_channels[dep.annotations['id']]
                     digital_epochs_to_save[save_name] = dep
+                else:
+                    print("Not saving %s"%dep)
         # here we will do some processing to spoof the trial data... hopefully this is not necessary in the future
         # TODO not sure where to add this file_timeoffset.... to the df or not 
         #   we may want to subtract them from the dataframes
@@ -435,7 +436,6 @@ class CombineOperantMetadata(luigi.Task):
             digital_epochs_to_save,
             self.output()["events"].path
         )
-        rhd.close()
 
 class OperantCSV(luigi.Task):
     """Locate time periods containing playback sounds and time periods of events
@@ -449,7 +449,8 @@ class OperantCSV(luigi.Task):
     def requires(self):
         return {
             "wav_files": Rhd2Wav(self.session_dir),
-            "metadata": CombineOperantMetadata(self.session_dir)
+            "metadata": CombineOperantMetadata(self.session_dir),
+            "files": DownloadSession(self.session_dir)
         }
 
     def output(self):
@@ -481,7 +482,7 @@ class OperantCSV(luigi.Task):
 
             # load the digital signals (lazy loaded)
             digital_signals = block.segments[0].events[0].load()
-            stimulus_codes = convert_digital_to_metadata(digital_signals)
+            stimulus_codes = convert_digital_to_metadata(digital_signals,sampling_rate)
             
             playback_dicts = generate_event_dicts_operant(
                     stimulus_codes,
@@ -491,15 +492,14 @@ class OperantCSV(luigi.Task):
             logger.info("Identified {} playback periods".format(
                 len(playback_dicts))
             )
-            rhd.close()
 
-        df = pd.DataFrame(playback_dicts, columns=playback_columns)
+        df = pd.DataFrame(playback_dicts, columns=operant_columns)
         df.to_csv(self.output()['playbacks'].path, index=False)
         try:
             events_db = pd.read_pickle(self.input()["metadata"]['events'].path)
         except:
             logger.warning("No pyoperant file found (no events)")
-            events_db = pd.DataFrame(None, columns=playback_columns)
+            events_db = pd.DataFrame(None, columns=["start_time","duration","event_name"])
         events_db.to_csv(self.output()['events'].path, index=False)
 
 

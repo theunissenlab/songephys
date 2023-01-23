@@ -307,10 +307,16 @@ def _transform_pyoperant_operant_csv(df, stim_loc):
         locate_stimulus_directory
     )
     # Fill in duration column for dataframe by reading wav files
-    df['duration'] = df['rt']
-    # TODO check that this number is right... it could be a stim timeout
+    def conv_to_sec(x):
+        return float(x.split(":")[-1])
     mask = df['rt'].isnull()
-    df.loc[mask,'duration'] = df['max_wait'][mask]
+    df.loc[~mask,'rt'] = df.loc[~mask,'rt'].apply(conv_to_sec)
+    # TODO check that this number is right... it could be a stim timeout
+    df.loc[mask,'rt'] = df['max_wait'][mask]
+
+    df['duration'] = df['rt']
+
+
 
     metadata = df["stimulus_name"].apply(_parse_filename_bird_type_data)
     metadata = pd.DataFrame.from_records(metadata)
@@ -381,26 +387,58 @@ def fix_stimulus_codes(stim_codes, csv_files, stim_dirs, sample_rate, session_st
     # This is only used in the case that you dont output stimulus codes
     csv_starts = []
     csv_dfs = []
+    trial_groups = []
     for csv, stim_dir in zip(csv_files, stim_dirs):
         start = csv.strip("_trialdata.csv").split('_')[-1]
         csv_start = datetime.datetime.strptime(start, "%Y%m%d%H%M%S")
         csv_starts.append(csv_start)
         csv_dfs.append(read_pyoperant_operant_csv(csv,stim_dir))
-    
-    dels = []
-    for stim_code in stim_codes:
+        trial_groups.append([])
+
+    for ix, stim_code in enumerate(stim_codes):
         # save datetimes in stim codes for easy access later
         stim_code[1]['datetime'] = session_starttime + session_offset + datetime.timedelta(seconds=stim_code[0] / sample_rate)
         
         # get the smallest positive delta for stim_date - csv_start
         deltas = np.asarray([(stim_code[1]['datetime'] - st).total_seconds() for st in csv_starts])
         deltas[deltas < 0] = np.inf
-        csv_df = csv_dfs[np.argmin([deltas])]
 
-        # now get the smallest delta within that csv
-        dels.append(np.min(np.abs(csv_df['time'] - stim_code[1]['datetime'])))
-        stim_code[1]['trial'] = csv_df.loc[np.argmin(np.abs(csv_df['time'] - stim_code[1]['datetime'])),'trial']
-    print(np.mean(dels))
+        trial_groups[np.argmin([deltas])].append(ix)
+    
+    for csv_df,trial_group in zip(csv_dfs,trial_groups):
+        # get approx first trial
+        min_stim_code = stim_codes[trial_group[0]]
+        min_ind = np.argmin(np.abs(csv_df['time'] - min_stim_code[1]['datetime']))
+        min_trial = csv_df.loc[min_ind,'trial']
+
+        # get all datetimes
+        stim_datetimes = [stim_codes[sc][1]['datetime'] for sc in trial_group]
+
+        def calc_errors(stim_datetimes, df_datetimes):
+            errors = [np.abs(sd-dfd) for (sd,dfd) in zip(stim_datetimes,df_datetimes)]
+            return np.sum(errors)
+        
+
+        possible_inds = [min_trial]
+        if min_trial > 1:
+            possible_inds.append(min_trial-1)
+        if min_trial+len(trial_group) < max(csv_df.trial):
+            possible_inds.append(min_trial+1)
+
+        if len(possible_inds) == 1:
+            starting_ind = possible_inds[0]
+        else:
+            errors = []
+            for start_ind in possible_inds:
+                trial_range = range(start_ind,start_ind+len(trial_group))
+                df_datetimes = [csv_df.loc[csv_df.trial == t,'time'].iloc[0] for t in trial_range]
+                errors.append(calc_errors(stim_datetimes,df_datetimes))
+            
+            starting_ind = possible_inds[np.argmin(errors)]
+        trial_range = range(starting_ind,starting_ind+len(trial_group))
+        for t,final_trial in zip(trial_group,trial_range):
+            stim_codes[t][1]['trial'] = final_trial
+
     return stim_codes
 
 def calculate_event_timedelta(ttl_times, event_logs, session_starttime, ttl_pulse_width=10.0):
@@ -414,7 +452,6 @@ def calculate_event_timedelta(ttl_times, event_logs, session_starttime, ttl_puls
         log_starts.append(log_start)
         log_df = pd.read_csv(log, delimiter='\t',names=['time','label','action','etc'])
         log_df['time'] = pd.to_datetime(log_df['time'], format="%Y-%m-%d %H:%M:%S.%f")
-        # filter out all but the TTL pulses
         log_df = log_df.loc[log_df['label'] == 'TTLMonitor']
         log_dfs.append(log_df)
     
@@ -422,7 +459,7 @@ def calculate_event_timedelta(ttl_times, event_logs, session_starttime, ttl_puls
     for ttl_time in ttl_times:
         # save datetimes in stim codes for easy access later
         ttl_abstime = session_starttime + datetime.timedelta(seconds=ttl_time.item())
-        
+
         # get the smallest positive delta for stim_date - csv_start
         deltas = np.asarray([(ttl_abstime - st).total_seconds() for st in log_starts])
         deltas[deltas < 0] = np.inf
@@ -435,7 +472,7 @@ def calculate_event_timedelta(ttl_times, event_logs, session_starttime, ttl_puls
             # the TTL pulses go on during the break between operant tasks, so this is quite common
             continue
         else:
-            timedeltas.append(log_df.loc[np.argmin(np.abs(log_df['time'] - ttl_abstime)),'time'] - ttl_abstime)
+            timedeltas.append(smallest_delta)
     return np.mean(timedeltas)
 
 # End Operant task
@@ -482,13 +519,13 @@ def convert_digital_to_metadata(digital_signal, sample_rate, code_length=384, bi
         try:
             metadata["repetition"] = int(code[8:12])
         except ValueError:
-            print("Repetition is not an integer! Setting to 0.")
+            #print("Repetition is not an integer! Setting to 0.")
             #raise Exception
             metadata["repetition"] = 0
         try:
             metadata["trial"] = int(code[12:16])
         except ValueError:
-            print("Trial is not an integer! Setting to 0.")
+            #print("Trial is not an integer! Setting to 0.")
             metadata["trial"] = 0
         metadata["md5"] = code[16:]
         codes.append((start, metadata))

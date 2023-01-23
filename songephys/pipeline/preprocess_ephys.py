@@ -303,6 +303,11 @@ class PrepareSorting(luigi.Task):
     def run(self):
         pass
 
+    def complete(self):
+        # TODO: this relies on the project config already being created.
+        project_cfg = SiteProjectConfig(self.site_dir).output().data()        
+        return np.all([ManualSorting(site_dir=self.site_dir, electrode_idx=elec).complete() for elec in range(project_cfg["EPHYS"]["ELECTRODE_N"])])
+
 
 class ManualSorting(luigi.Task):
     site_dir = SiteParameter()
@@ -374,6 +379,9 @@ class PreprocessOperantSite( luigi.Task ):
             MergeOperantCSV(self.site_dir),
             PrepareSorting(self.site_dir)
         ]
+
+    def complete(self):
+        return np.all([t.complete() for t in self.requires()])
 
     def run(self):
         pass
