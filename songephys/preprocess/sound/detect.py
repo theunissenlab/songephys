@@ -19,6 +19,8 @@ from .playback_utils import (
 from ...utils import intervals_overlap
 
 
+operant_columns = ["name", "reward", "correct","event_type","sound_type","condition_name","response",
+                "playback_file","stim_id","start_time","trial","duration"]
 playback_columns = ["name", "description", "sound_type", "vocalization_type", "playback_file", "stim_id", "start_time", "duration"]
 autodetected_columns = ["description", "name", "playback_file", "sound_type", "vocalization_type",
             "vocalizer", "start_time", "duration", "label"]
@@ -550,7 +552,7 @@ def generate_event_dicts_operant(digital_codes, sample_rate, playbacks_db):
 
         stim_dicts.append({
             "name": "playback_{}".format(stim.stimulus_name.split('/')[-1]),
-            "rewarded": stim.rewarded,
+            "reward": stim.reward,
             "correct": stim.correct,
             "event_type": "playback",
             "sound_type": stim.type,
@@ -562,5 +564,4 @@ def generate_event_dicts_operant(digital_codes, sample_rate, playbacks_db):
             "trial": stim.trial,
             "duration": stim.duration,
         })
-
     return stim_dicts 

@@ -334,7 +334,7 @@ class ManualSorting(luigi.Task):
         pass
 
 
-class PreprocessSite(luigi.Task):
+class PreprocessSite(luigi.WrapperTask):
     """Preprocess ephys data for entire site
     """
 
@@ -355,10 +355,7 @@ class PreprocessSite(luigi.Task):
             PrepareSorting(self.site_dir)
         ]
 
-    def run(self):
-        pass
-
-class PreprocessOperantSite( luigi.Task ):
+class PreprocessOperantSite( luigi.WrapperTask ):
     """Preprocess ephys data for entire site
     This will run additional tasks <TODO INSERT TASK NAMES>
     """
@@ -380,8 +377,3 @@ class PreprocessOperantSite( luigi.Task ):
             PrepareSorting(self.site_dir)
         ]
 
-    def complete(self):
-        return np.all([t.complete() for t in self.requires()])
-
-    def run(self):
-        pass

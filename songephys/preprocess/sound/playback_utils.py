@@ -422,7 +422,7 @@ def fix_stimulus_codes(stim_codes, csv_files, stim_dirs, sample_rate, session_st
         possible_inds = [min_trial]
         if min_trial > 1:
             possible_inds.append(min_trial-1)
-        if min_trial+len(trial_group) < max(csv_df.trial):
+        if min_trial+len(trial_group) <= max(csv_df.trial):
             possible_inds.append(min_trial+1)
 
         if len(possible_inds) == 1:

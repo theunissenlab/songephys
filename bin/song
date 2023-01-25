@@ -278,12 +278,15 @@ def create_site(site_dir):
         xml_file = filelist[np.where(xml_check)[0][0]]
         print("Loading electrode config from %s" % xml_file)
         electrode_config = parse_settings_file(xml_file)
+        # TODO we should make sure these labels are pulled from the intan header file
+        # Amplifier -> RHD2000 amplifier channel
+        # Board ADC -> USB board ADC input channel
         chosen_config_option = SiteConfigOption(
                 instructions="loaded from %s"%xml_file,
                 settings={
                     "wavmap": {
-                        "ephys.wav": [["Amplifier", [0, len(electrode_config['Amplifier'])]]],
-                        "mic.wav": [["Board ADC", [0, len(electrode_config['Analog'])]]],
+                        "ephys.wav": [["RHD2000 amplifier channel", [0, len(electrode_config['Amplifier'])]]],
+                        "mic.wav": [["USB board ADC input channel", [0, len(electrode_config['Analog'])]]],
                         "digital.wav": [["Digital Input", [0, len(electrode_config['Digital'])]]],
                     },
                     "filtering": {
@@ -422,6 +425,7 @@ def gen_filelists(experiment_name, pyoperant_days=[]):
     
 
 def parse_settings_file(settings_path):
+    # TODO make this but with the header, and fill in wavmap
     import xml.etree.ElementTree as ET
     tree = ET.parse(settings_path)
     enabled_channels = dict({
@@ -432,7 +436,7 @@ def parse_settings_file(settings_path):
     })
     for child in tree.getroot():
         if child.tag == "SignalGroup":
-            if child.attrib['Prefix'] == 'A':
+            if child.attrib['Prefix'] in ['A','B','C','D']:
                 # This is the ephys signals from port A
                 for chan in child:
                     if chan.attrib['Enabled'] == 'True':
