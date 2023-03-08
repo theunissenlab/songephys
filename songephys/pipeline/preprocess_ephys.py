@@ -21,7 +21,7 @@ from ..preprocess.ephys.filter import common_average_filter
 from ..preprocess.ephys.detect import calculate_snippet_dimensions, extract_spikes
 from ..preprocess.ephys.sort import sort, create_hierarchy
 
-from .file_setup import Rhd2Wav, SiteConfig, SessionConfig, SessionProjectConfig, SiteProjectConfig, DefineSessions
+from .file_setup import Rhd2Wav, Rhd2Numpy, SiteConfig, SessionConfig, SessionProjectConfig, SiteProjectConfig, DefineSessions
 from .pipeline_utils import SiteParameter, SessionParameter, get_session_sites
 
 
@@ -164,6 +164,32 @@ class DetectSpikesInSession(luigi.Task):
         for channel in range(input_file.channels):
             yield DetectSpikesOnElectrode(session_dir=self.session_dir, electrode_idx=channel)
 
+
+class GenerateSiteNumpyArrays(luigi.Task):
+    """
+    Generate numpy binary arrays of ephys data.
+    
+    This is used as input to kilosort
+    Generates on .dat file for each session containing all channels of ephys
+    """
+    site_dir = SiteParameter()
+
+    def requires(self):
+        return {
+            "site_config": DefineSessions(self.site_dir),
+            "project_config": SiteProjectConfig(self.site_dir)
+        }
+    
+    def output(self):
+        # Force this task to always run if requested
+        return luigi.LocalTarget("dummy")
+    
+    def run(self):
+        site_config = self.input()["site_config"].data()
+        sessions_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions")
+
+        for session in site_config["sessions"]:
+            yield Rhd2Numpy(os.path.join(sessions_dir, session["id"]))
 
 class CombineSiteSpikes(luigi.Task):
     """Merge together multiple sessions via offsets
@@ -308,6 +334,9 @@ class PrepareSorting(luigi.Task):
         project_cfg = SiteProjectConfig(self.site_dir).output().data()        
         return np.all([ManualSorting(site_dir=self.site_dir, electrode_idx=elec).complete() for elec in range(project_cfg["EPHYS"]["ELECTRODE_N"])])
 
+# class KiloSortSorting(luigi.Task):
+#     site_dir = SiteParameter()
+#     def requires(self):
 
 class ManualSorting(luigi.Task):
     site_dir = SiteParameter()
@@ -362,6 +391,7 @@ class PreprocessOperantSite( luigi.WrapperTask ):
 
     site_dir = SiteParameter()
     no_sort = luigi.BoolParameter()
+    kilosort = luigi.BoolParameter()
 
     def requires(self):
         from .preprocess_sound import MergeOperantCSV
@@ -371,9 +401,16 @@ class PreprocessOperantSite( luigi.WrapperTask ):
                 MergeOperantCSV(self.site_dir),
                 #CombineSiteSpikes(self.site_dir)
             ]
-        return [
-            DefineSessions(self.site_dir),
-            MergeOperantCSV(self.site_dir),
-            PrepareSorting(self.site_dir)
-        ]
+        elif self.kilosort:
+            return [
+                DefineSessions(self.site_dir),
+                MergeOperantCSV(self.site_dir),
+               # KilosortSorting(self.site_dir)
+            ]
+        else:
+            return [
+                DefineSessions(self.site_dir),
+                MergeOperantCSV(self.site_dir),
+                PrepareSorting(self.site_dir)
+            ]
 

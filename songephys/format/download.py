@@ -353,7 +353,10 @@ class BaseLocalSymlinker(BaseDownloader):
     def locate_rhd_file(self, experiment_name, session_id):
         rhd_file = os.path.join(self.rhd_drive(experiment_name), "{}.rhd".format(session_id))
         if not os.path.exists(rhd_file):
-            raise IOError
+            rhd_possibilities = glob.glob(os.path.join(self.rhd_drive(experiment_name), "*/{}.rhd".format(session_id)))
+            if len(rhd_possibilities) == 0 or len(rhd_possibilities) > 1:
+                raise IOError("%s not found in %s"%(session_id, os.path.join(self.rhd_drive(experiment_name), "/*/{}.rhd".format(session_id))))
+            rhd_file = rhd_possibilities[0]
         return rhd_file
 
     def locate_pyoperant_file(self, experiment_name, pyoperant_file):
