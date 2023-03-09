@@ -182,7 +182,7 @@ def associate_pyoperant_csvs_to_rhds(csv_files, rhd_files, experiment_name, down
 
     rhd_dicts = [
         {
-            "id": os.path.splitext(rhd_name)[0],
+            "id": os.path.splitext(os.path.basename(rhd_name))[0],
             "t": (rhd_time - t0).total_seconds(),
         } for rhd_time, rhd_name in rhd_times
     ]
@@ -262,12 +262,10 @@ def get_session_sites(session_path):
         list of pyoperant csv files that the session is associated with from the site configs
     """
     session_name = session_basename(session_path)
-    prefix = session_name.split("_")[0]
 
     potential_site_dirs = glob.glob(os.path.join(
         os.path.dirname(os.path.dirname(session_path)),
-        "sites",
-        "{}*".format(prefix)
+        "sites/*"
     ))
 
     site_dirs = []
