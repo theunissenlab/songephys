@@ -15,7 +15,8 @@ from soundsig.signal import bandpass_filter
 from suss.core import SpikeDataset
 import suss.io
 
-from ..format.io import load_yaml
+from .targets import YamlTarget
+from ..format.io import load_yaml, save_yaml
 from ..format.wav import AudioFile, MultiWavReader
 from ..preprocess.ephys.filter import common_average_filter
 from ..preprocess.ephys.detect import calculate_snippet_dimensions, extract_spikes
@@ -181,15 +182,21 @@ class GenerateSiteNumpyArrays(luigi.Task):
         }
     
     def output(self):
+        site_config = self.input()["site_config"].path
         # Force this task to always run if requested
-        return luigi.LocalTarget("dummy")
+        return YamlTarget(site_config,'np_arrays_generated')
     
     def run(self):
         site_config = self.input()["site_config"].data()
         sessions_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions")
+        all_sessions = site_config["sessions"]
+        for i,session in enumerate(all_sessions):
+            npy_output = yield Rhd2Numpy(os.path.join(sessions_dir, session["id"]))
+            all_sessions[i]['raw_numpy'] = npy_output["ephys.npy"].path
+        site_config['sessions'] = all_sessions
+        site_config['np_arrays_generated'] = True
+        save_yaml(self.input()["site_config"].path, site_config)
 
-        for session in site_config["sessions"]:
-            yield Rhd2Numpy(os.path.join(sessions_dir, session["id"]))
 
 class CombineSiteSpikes(luigi.Task):
     """Merge together multiple sessions via offsets
@@ -334,9 +341,37 @@ class PrepareSorting(luigi.Task):
         project_cfg = SiteProjectConfig(self.site_dir).output().data()        
         return np.all([ManualSorting(site_dir=self.site_dir, electrode_idx=elec).complete() for elec in range(project_cfg["EPHYS"]["ELECTRODE_N"])])
 
-# class KiloSortSorting(luigi.Task):
-#     site_dir = SiteParameter()
-#     def requires(self):
+class KiloSortSorting(luigi.Task):
+    site_dir = SiteParameter()
+    def requires(self):
+        return {
+            "site_config": DefineSessions(self.site_dir),
+            "project_config": SiteProjectConfig(self.site_dir),
+            "npy_arrays": GenerateSiteNumpyArrays(self.site_dir)
+        }
+
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir,'kilosort_output','params.py'))
+
+
+    def run(self):
+        from pykilosort.io.probes import cambridge_neurotech_assy_236_h10
+        from pykilosort import run as kilosort_run
+        from pathlib import Path
+
+        site_config = self.input()["site_config"].data()
+        # offsets of each session
+        session_offsets = [session["t"] for session in site_config["sessions"]]
+        # paths to npy files from base folder
+        session_npys = [session['raw_numpy'] for session in site_config['sessions']]
+        sorted_npy_paths = [Path(x) for _,x in sorted(zip(session_offsets,session_npys))]
+        print(sorted_npy_paths)
+        
+        out_dir = os.path.join(self.site_dir,'kilosort_output')
+        kilosort_run(sorted_npy_paths, dir_path=self.site_dir, output_dir=out_dir,
+                     probe = cambridge_neurotech_assy_236_h10(),
+                     n_channels=64,data_dtype='uint16')
+
 
 class ManualSorting(luigi.Task):
     site_dir = SiteParameter()
