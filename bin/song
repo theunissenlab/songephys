@@ -385,7 +385,6 @@ def gen_filelists(experiment_name, pyoperant_days=[]):
     import datetime, pandas
     import numpy as np
     from songephys.config import get_config
-
     project_cfg = get_config(experiment_name)
 
     pyop_dir = project_cfg['LOCAL_RAW_FILES']['pyoperant_drive']
@@ -407,21 +406,42 @@ def gen_filelists(experiment_name, pyoperant_days=[]):
         print("---------------------------------------")
         print(exp_name)
         print("Files:")
-        print(exp_name+"_events.log")
-        print(exp_name+"_trialdata.csv")
+        print(os.path.relpath(exp_name+"_events.log",pyop_dir))
+        print(os.path.relpath(exp_name+"_trialdata.csv",pyop_dir))
         # get individual rhd recordings
         # TODO Make this code work, to do this, we need to know how long each pyoperant file is
         #       This should be possible by loading the csv and getting the datetime for the final entry.
-        experiments = np.unique([os.path.dirname(x) for x in all_rhd_files])
+        #experiments = np.unique([os.path.dirname(x) for x in all_rhd_files])
+        experiments = np.unique([os.path.dirname(f) for f in all_rhd_files])
+        experiments_used = dict()
+        exp_filelists = dict()
         for f in all_rhd_files:
-            experiment = os.path.dirname(f)
+            experiment = os.path.basename(os.path.dirname(f))
             exp_start = datetime.datetime.strptime(experiment.split('__')[-1],'%y%m%d_%H%M%S')
             rhd_name = os.path.basename(f).split('.rhd')[0]
             rhd_start = datetime.datetime.strptime(rhd_name.split('__')[-1],'%y%m%d_%H%M%S')
             rhd_end = rhd_start + datetime.timedelta(0,0,0,0,30)
             if (exp_start < start_date) and (rhd_start < end_date) and (rhd_end > start_date):
-                file_lists[exp_name].append(f)
-                print(f)
+                #file_lists[exp_name].append(f)
+                #print(f)
+                if experiment not in exp_filelists:
+                    exp_filelists[experiment] = []
+                exp_filelists[experiment].append(os.path.relpath(f,rhd_dir))
+                #print(os.path.relpath(f,rhd_dir))
+                if experiment in experiments_used:
+                    experiments_used[experiment] = min(experiments_used[experiment],rhd_start)
+                else:
+                    experiments_used[experiment] = rhd_start
+        cur_latest = None
+        for exp in experiments_used:
+            exp_filelists[exp].append(os.path.join(rhd_dir,exp,'settings.xml'))
+            if cur_latest is None:
+                cur_latest = exp
+            else:
+                if experiments_used[exp] > experiments_used[cur_latest]:
+                    cur_latest = exp
+        for f in exp_filelists[cur_latest]:
+            print(f)
     
 
 def parse_settings_file(settings_path):

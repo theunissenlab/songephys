@@ -8,7 +8,7 @@ from neo.io import NixIO, IntanIO, NWBIO
 
 from ..format.download import downloaders
 from ..format.io import load_yaml, save_yaml
-from ..format.wav import get_wavfile_data_from_neo
+from ..format.wav import get_wavfile_data_from_neo,get_raw_data_from_neo
 from .targets import YamlTarget
 from .pipeline_utils import (
     SessionParameter,
@@ -722,7 +722,7 @@ class Rhd2Numpy(luigi.Task):
     def output(self):
         sess_name = os.path.basename(self.session_dir)
         raw_dir = os.path.join(self.session_dir, "raw")
-        elec_path = os.path.join(raw_dir, "%s.npy"%sess_name)
+        elec_path = os.path.join(raw_dir, "%s_16bit.npy"%sess_name)
 
         site_dirs, _, _ = get_session_sites(self.session_dir)
         config_path = os.path.join(site_dirs[0], "site_config.yaml")
@@ -737,12 +737,13 @@ class Rhd2Numpy(luigi.Task):
         rhd_file = self.input()["files"]["rhd"].path
         session_config = self.input()["config"].data()
 
-        arrays = get_wavfile_data_from_neo(rhd_file, session_config["wavmap"])
+        arrays = get_raw_data_from_neo(rhd_file, session_config["wavmap"])
 
         if not os.path.exists(self.output()["ephys.npy"].path):
             with open(self.output()["ephys.npy"].path,'wb') as f:
                 np.save(f,arrays['ephys']['data'])
         
+
         # Finally, write the channel name mappings to the configuration file
         # This is kind of an extra thing; not sure if I should put it in the
         # task outputs / set it as a new task, or what?
@@ -755,7 +756,73 @@ class Rhd2Numpy(luigi.Task):
         config_out["dat_to_original_channels"] = {
             "{}.wav".format(k): v["channel_names"] for k, v in arrays.items()
         }
+        
         save_yaml(self.output()["config_original_channels"].path, config_out)
+
+class Rhd2Binary(luigi.Task):
+    """Write analogsignals to disk as binary memmaps
+
+    Outputs files for the microphone and electrode data arrays,
+    and also writes the mapping between the channels in these files
+    to their original channels into the configuration file.
+
+    The microphone data is also normalized and zero-centered according
+    to the filter groups defined in the config "filtering" key
+
+    Inputs
+    ------
+    session_dir : str
+        Path to session
+    """
+
+    session_dir = SessionParameter()
+
+    def requires(self):
+        return {
+            "files": DownloadSession(self.session_dir),
+            "config": SessionConfig(self.session_dir),
+        }
+
+    def output(self):
+        sess_name = os.path.basename(self.session_dir)
+        raw_dir = os.path.join(self.session_dir, "raw")
+        elec_path = os.path.join(raw_dir, "%s.bin"%sess_name)
+
+        site_dirs, _, _ = get_session_sites(self.session_dir)
+        config_path = os.path.join(site_dirs[0], "site_config.yaml")
+
+        return {
+            "ephys.bin": luigi.LocalTarget(elec_path),
+            "config_original_channels": YamlTarget(config_path, "bin_to_original_channels")
+        }
+
+    def run(self):
+
+        rhd_file = self.input()["files"]["rhd"].path
+        session_config = self.input()["config"].data()
+        
+        bad_chans = session_config.get('bad_channels',None)
+        print("BAD CHANNS %s"%bad_chans)
+        arrays = get_raw_data_from_neo(rhd_file, session_config["wavmap"],bad_chans)
+
+        if not os.path.exists(self.output()["ephys.bin"].path):
+            arrays['ephys']['data'].tofile(self.output()["ephys.bin"].path)
+        
+        # Finally, write the channel name mappings to the configuration file
+        # This is kind of an extra thing; not sure if I should put it in the
+        # task outputs / set it as a new task, or what?
+
+        # FIXME: The NixIO seems to change the order of the signals...
+        # The order in the .rhd file is fine, why is it when saved to/loaded from nix
+        # the order gets messed up? This can mess up any tasks that rely
+        # on plain integer indexing (like filtering) so need to investigate this
+        config_out = self.output()["config_original_channels"].data()
+        config_out["bin_to_original_channels"] = {
+            "{}.wav".format(k): v["channel_names"] for k, v in arrays.items()
+        }
+        
+        save_yaml(self.output()["config_original_channels"].path, config_out)
+
 
 
 class Rhd2Nwb(luigi.Task):

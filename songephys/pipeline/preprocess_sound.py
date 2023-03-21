@@ -448,7 +448,7 @@ class OperantCSV(luigi.Task):
 
     def requires(self):
         return {
-            "wav_files": Rhd2Wav(self.session_dir),
+            #"wav_files": Rhd2Wav(self.session_dir),
             "metadata": CombineOperantMetadata(self.session_dir),
             "files": DownloadSession(self.session_dir)
         }

@@ -12,7 +12,7 @@ def time_to_index(t, sampling_rate):
     """Convert a time to an index"""
     return int(round(t * sampling_rate))
 
-def get_raw_data_from_neo(neo_file, mapping):
+def get_raw_data_from_neo(neo_file, mapping, bad_channels=None):
     if neo_file.endswith(".nix"):
         neo = NixIO(neo_file)
     elif neo_file.endswith(".rhd"):
@@ -59,8 +59,13 @@ def get_raw_data_from_neo(neo_file, mapping):
                 else:
                     channels = list(range(*channels))
                 for channel in channels:
-                    data.append(np.array(neo._raw_data[str(neo_names[sig_name][channel])]).flatten())
-                    channel_names.append([str(sig_name), str(neo_names[sig_name][channel])])
+                    if bad_channels is not None and str(neo_names[sig_name][channel]) in bad_channels.get(config_key,dict()).get(sig_name,[]):
+                        print("Skipping %s"%channel)
+                    else:
+                        #if bad_channels is not None:
+                        #    print("%s not in %s"%(channel,bad_channels.get(config_key,dict()).get(sig_name,[])))
+                        data.append(np.array(neo._raw_data[str(neo_names[sig_name][channel])]).flatten())
+                        channel_names.append([str(sig_name), str(neo_names[sig_name][channel])])
                 sampling_rate = neo_signals[sig_name].sampling_rate
             data = np.ascontiguousarray(np.vstack(data).T)
             #data.sampling_rate = sampling_rate
