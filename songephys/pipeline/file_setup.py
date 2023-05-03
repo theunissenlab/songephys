@@ -436,6 +436,41 @@ class DownloadSite(luigi.Task):
                 yield DownloadSession(session_dir, force=self.force)
 
 
+class GenerateSiteMemmaps(luigi.Task):
+    """
+    Generate numpy binary arrays of ephys data.
+    
+    This is used as input to kilosort
+    Generates on .dat file for each session containing all channels of ephys
+    """
+    site_dir = SiteParameter()
+    force = luigi.BoolParameter(default=False)
+
+    def requires(self):
+        return {
+            "site_config": DefineSessions(self.site_dir),
+            "project_config": SiteProjectConfig(self.site_dir)
+        }
+    
+    def output(self):
+        site_config = self.input()["site_config"].path
+        # Force this task to always run if requested
+        # TODO: Fix this by checking for files
+        if self.force:
+            return luigi.LocalTarget("dummy")
+        return YamlTarget(site_config,'bin_arrays_generated')
+    
+    def run(self):
+        site_config = self.input()["site_config"].data()
+        sessions_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions")
+        all_sessions = site_config["sessions"]
+        for i,session in enumerate(all_sessions):
+            bin_output = yield Rhd2Binary(os.path.join(sessions_dir, session["id"]))
+            all_sessions[i]['raw_bin'] = bin_output["ephys.bin"].path
+        site_config['sessions'] = all_sessions
+        site_config['bin_arrays_generated'] = True
+        save_yaml(self.input()["site_config"].path, site_config)
+
 class Rhd2Nix(luigi.Task):
     """Converts an RHD file to a NIX file, and clean up the RHD file
 
@@ -788,11 +823,17 @@ class Rhd2Binary(luigi.Task):
         raw_dir = os.path.join(self.session_dir, "raw")
         elec_path = os.path.join(raw_dir, "%s.bin"%sess_name)
 
+        audio_path = os.path.join(raw_dir, "%s_audio.wav"%sess_name)
+        
+        motion_path = os.path.join(raw_dir, "%s_motion.wav"%sess_name)
+
         site_dirs, _, _ = get_session_sites(self.session_dir)
         config_path = os.path.join(site_dirs[0], "site_config.yaml")
 
         return {
             "ephys.bin": luigi.LocalTarget(elec_path),
+            "audio.wav": luigi.LocalTarget(audio_path),
+            #"motion.wav": luigi.LocalTarget(motion_path),
             "config_original_channels": YamlTarget(config_path, "bin_to_original_channels")
         }
 
@@ -807,6 +848,31 @@ class Rhd2Binary(luigi.Task):
 
         if not os.path.exists(self.output()["ephys.bin"].path):
             arrays['ephys']['data'].tofile(self.output()["ephys.bin"].path)
+        
+        if not os.path.exists(self.output()['audio.wav'].path):
+            with soundfile.SoundFile(
+                            self.output()["audio.wav"].path,
+                            "w+",
+                            samplerate=arrays["mic"]["sampling_rate"],
+                            format="RF64",
+                            subtype="FLOAT",
+                            channels=arrays["mic"]["data"].shape[1]) as f:
+                arrays["mic"]["data"] = np.array(arrays["mic"]["data"])
+                arrays["mic"]["data"] -= np.median(arrays["mic"]["data"], axis=0)
+                for group_start, group_end in session_config["filtering"]["mic.wav"]:
+                    arrays["mic"]["data"][:, group_start:group_end] /= np.max(
+                        np.abs(arrays["mic"]["data"][:, group_start:group_end]))
+                f.write(arrays["mic"]["data"])
+
+        # if "motion" in arrays and arrays["motion"]["data"] is not None:
+        #     with soundfile.SoundFile(
+        #             self.output()["motion.wav"].path,
+        #             "w+",
+        #             samplerate=arrays["motion"]["sampling_rate"],
+        #             format="RF64",
+        #             subtype="FLOAT",
+        #             channels=arrays["motion"]["data"].shape[1]) as f:
+        #         f.write(arrays["motion"]["data"])
         
         # Finally, write the channel name mappings to the configuration file
         # This is kind of an extra thing; not sure if I should put it in the

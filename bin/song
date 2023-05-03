@@ -440,8 +440,9 @@ def gen_filelists(experiment_name, pyoperant_days=[]):
             else:
                 if experiments_used[exp] > experiments_used[cur_latest]:
                     cur_latest = exp
-        for f in exp_filelists[cur_latest]:
-            print(f)
+        if cur_latest is not None:
+            for f in exp_filelists[cur_latest]:
+                print(f)
     
 
 def parse_settings_file(settings_path):

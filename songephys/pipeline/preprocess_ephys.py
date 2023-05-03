@@ -22,7 +22,7 @@ from ..preprocess.ephys.filter import common_average_filter
 from ..preprocess.ephys.detect import calculate_snippet_dimensions, extract_spikes
 from ..preprocess.ephys.sort import sort, create_hierarchy
 
-from .file_setup import Rhd2Wav, Rhd2Binary, SiteConfig, SessionConfig, SessionProjectConfig, SiteProjectConfig, DefineSessions
+from .file_setup import Rhd2Wav, Rhd2Binary, SiteConfig, SessionConfig, SessionProjectConfig, SiteProjectConfig, DefineSessions, GenerateSiteMemmaps
 from .pipeline_utils import SiteParameter, SessionParameter, get_session_sites
 
 
@@ -165,37 +165,6 @@ class DetectSpikesInSession(luigi.Task):
         for channel in range(input_file.channels):
             yield DetectSpikesOnElectrode(session_dir=self.session_dir, electrode_idx=channel)
 
-
-class GenerateSiteMemmaps(luigi.Task):
-    """
-    Generate numpy binary arrays of ephys data.
-    
-    This is used as input to kilosort
-    Generates on .dat file for each session containing all channels of ephys
-    """
-    site_dir = SiteParameter()
-
-    def requires(self):
-        return {
-            "site_config": DefineSessions(self.site_dir),
-            "project_config": SiteProjectConfig(self.site_dir)
-        }
-    
-    def output(self):
-        site_config = self.input()["site_config"].path
-        # Force this task to always run if requested
-        return YamlTarget(site_config,'bin_arrays_generated')
-    
-    def run(self):
-        site_config = self.input()["site_config"].data()
-        sessions_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions")
-        all_sessions = site_config["sessions"]
-        for i,session in enumerate(all_sessions):
-            bin_output = yield Rhd2Binary(os.path.join(sessions_dir, session["id"]))
-            all_sessions[i]['raw_bin'] = bin_output["ephys.bin"].path
-        site_config['sessions'] = all_sessions
-        site_config['bin_arrays_generated'] = True
-        save_yaml(self.input()["site_config"].path, site_config)
 
 
 class CombineSiteSpikes(luigi.Task):
@@ -341,6 +310,7 @@ class PrepareSorting(luigi.Task):
         project_cfg = SiteProjectConfig(self.site_dir).output().data()        
         return np.all([ManualSorting(site_dir=self.site_dir, electrode_idx=elec).complete() for elec in range(project_cfg["EPHYS"]["ELECTRODE_N"])])
 
+
 class KiloSortSorting(luigi.Task):
     site_dir = SiteParameter()
     def requires(self):
@@ -355,11 +325,17 @@ class KiloSortSorting(luigi.Task):
 
 
     def run(self):
-        from pykilosort.io.probes import cambridge_neurotech_assy_236_h10
+        from pykilosort.io.probes import cambridge_neurotech_assy_236_h10, cambridge_neurotech_assy_236_P1
         from pykilosort import run as kilosort_run
         from pathlib import Path
 
+        probes = dict({
+            "P1": cambridge_neurotech_assy_236_P1, # 4 shank
+            "H10": cambridge_neurotech_assy_236_h10 # 2 shank 
+        })
         site_config = self.input()["site_config"].data()
+        project_config = self.input()['project_config'].data()
+
         chan_names = [x[1] for x in site_config['bin_to_original_channels']['ephys.wav']]
         # offsets of each session
         session_offsets = [session["t"] for session in site_config["sessions"]]
@@ -371,8 +347,9 @@ class KiloSortSorting(luigi.Task):
         bad_chans = site_config.get('bad_channels',dict()).get('ephys.wav',dict()).get('RHD2000 amplifier channel',[])
         chan_names = np.array(chan_names)[~np.in1d(chan_names,bad_chans)]
         out_dir = os.path.join(self.site_dir,'kilosort_output')
+        probe_fun = probes[project_config["EPHYS"].get('PROBETYPE','H10')]
         kilosort_run(sorted_npy_paths, dir_path=self.site_dir, output_dir=out_dir,
-                     probe = cambridge_neurotech_assy_236_h10(chan_names = chan_names),
+                     probe = probe_fun(chan_names = chan_names),
                      n_channels=len(chan_names),data_dtype='uint16')
 
 

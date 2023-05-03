@@ -527,6 +527,9 @@ def generate_event_dicts_operant(digital_codes, sample_rate, playbacks_db):
 
     stim_dicts = []
 
+    if len(digital_codes) == len(playbacks_db) + 1:
+        digital_codes = digital_codes[:-1]
+    
     if len(playbacks_db) != len(digital_codes):
         raise Exception("Number of stimuli in database "
             "does not match number of digital pulses during sesssion")

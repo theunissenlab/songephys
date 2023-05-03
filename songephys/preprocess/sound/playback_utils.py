@@ -340,6 +340,7 @@ def convert_pyoperant_operant_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, de
     stim_dirs (list of str): list of paths to directories containing
         the new wavs for each pyoperant csv
     """
+    
     trial_set = group_digital_code_trials(stimulus_codes)
 
     pyoperant_dataframes = [
@@ -347,8 +348,15 @@ def convert_pyoperant_operant_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, de
         for filename, stim_dir in zip(pyoperant_csvs, stim_dirs)
     ]
 
+    if len(stimulus_codes) == 0:
+        # No stim codes were found in this 
+        df_empty = pd.DataFrame().reindex_like(pyoperant_dataframes[0]).dropna()
+        save_pyoperant_db(df_empty, dest_path)
+        return
+
     if not (len(pyoperant_dataframes) == len(trial_set)):
         raise Exception("Different number of pyoperant csvs ({}) than in digital signal ({})".format(len(pyoperant_dataframes), len(trial_set)))
+
 
     pyoperant_dataframes = [
         df.loc[np.isin(df["trial"], trials)]
@@ -359,8 +367,13 @@ def convert_pyoperant_operant_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, de
     digital_lengths = [len(trials) for trials in trial_set]
 
     if not all([a == b for a, b in zip(pyoperant_lengths, digital_lengths)]):
-        raise Exception("Wrong number of trials detected in pyoperants and digital signal: {} and {}".format(pyoperant_lengths, digital_lengths))
-    
+        # if just the last one is off by one, fix it
+        if pyoperant_lengths[-1] == digital_lengths[-1] - 1:
+            trial_set[-1] = trial_set[-1][:-1]
+            digital_lengths[-1] = len(trial_set[-1])
+        if not all([a == b for a, b in zip(pyoperant_lengths, digital_lengths)]):
+            raise Exception("Wrong number of trials detected in pyoperants and digital signal: {} and {}".format(pyoperant_lengths, digital_lengths))
+
     # TODO We may want to use the stim code time as the column here instead of the pyop time
     new_df = pd.concat(pyoperant_dataframes)
     new_df = new_df.sort_values("time")
@@ -488,6 +501,41 @@ def binary_converter(code, bits_per_char):
 
     return "".join(map(chr, vals.astype(np.uint8)))
 
+def create_gaussian_window(half_window: int, nstd: float):
+    """ From Soundsep2: Create a gaussian window
+
+    Returns gaussian window with array size 2*half_window.
+
+    [ half_window | half_window ]
+    [             _             ]
+    [          .'   '.          ]
+    [         .       .         ]
+    [......-'           '-......]
+
+                  --- 1 std
+                  ------ 2 std
+                  --------- 3 std
+
+
+    The steepness of the decline on each side is determined
+    by nstd
+
+    :param half_window: Half width of the gaussian window
+    :type half_window: int
+    :param nstd: Number of standard deviations of the gaussian the window should
+        cover. Larger means that the edges will fall more quickly, weighting points
+        closer to the center. Smaller values of nstd means the fall-off will be
+        more gradual and edge points will be weighted more cloesly to the center.
+    :type nstd: float
+
+
+    """
+    t = np.arange(-half_window, half_window + 1)
+    std = 2.0 * float(half_window) / float(nstd)
+    return (
+        np.exp(-t**2 / (2.0 * std**2))
+        / (std * np.sqrt(2 * np.pi))
+    )
 
 def convert_digital_to_metadata(digital_signal, sample_rate, code_length=384, bits_per_char=8):
     """Detect periods of digital codes and decode stimulus metadata
@@ -497,6 +545,8 @@ def convert_digital_to_metadata(digital_signal, sample_rate, code_length=384, bi
     """
     #sample_rate = digital_signal.annotations["sampling_rate"]
     on_times = np.array(np.round(digital_signal.times * sample_rate)).astype("int")
+    if len(on_times) == 0:
+        return list()
     # There is a certain bug where the pulses start in the on state
     # and the first pulse is missed.
     gaps = np.hstack([np.array(np.inf), np.diff(on_times)])

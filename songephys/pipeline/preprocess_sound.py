@@ -10,6 +10,7 @@ import pandas as pd
 import quantities as pq
 import soundfile as sf
 from neo.io import IntanIO
+from scipy.fft import rfft
 
 from ..utils import get_session_starttime
 from ..format.io import load_yaml
@@ -22,7 +23,8 @@ from ..preprocess.sound.playback_utils import (
     read_pyoperant_playback_csv,
     create_digital_events_df,
     calculate_event_timedelta,
-    fix_stimulus_codes
+    fix_stimulus_codes,
+    create_gaussian_window
 )
 from ..preprocess.sound.playback_alignment import (
     compute_realigned_trial_times,
@@ -38,7 +40,7 @@ from ..preprocess.sound.detect import (
 )
 from ..preprocess.sound.stimuli import merge_segments
 
-from .file_setup import Rhd2Wav, SiteConfig, SessionConfig, DownloadSession
+from .file_setup import Rhd2Wav, SiteConfig, SessionConfig, DownloadSession, GenerateSiteMemmaps
 from .pipeline_utils import SiteParameter, SessionParameter
 
 
@@ -543,6 +545,75 @@ class FindLiveCalls(luigi.Task):
         df = pd.DataFrame(seg_dicts, columns=autodetected_columns)
         df.to_csv(self.output().path, index=False)
 
+class GenerateFullSpectrogram(luigi.Task):
+    """Generates one full spectrogram for this site
+    """
+
+    site_dir = SiteParameter()
+    # TODO things to put in settings
+    half_window = 100#128 looks good but is big file
+    fft_size = half_window * 2 + 1
+    fft_step = 30
+
+    def requires(self):
+        return {
+            "wav_files": GenerateSiteMemmaps(self.site_dir),
+            "config": SiteConfig(self.site_dir, required_keys=["sessions"]),
+        }
+    def output(self):
+        # TODO get SR through site config or something for full audio name
+        return {
+            "spectrogram": luigi.LocalTarget(os.path.join(self.site_dir,"audio_spectrogram_st%d_w%d.npy"%(self.fft_step,self.fft_size))),
+            "full_audio" : luigi.LocalTarget(os.path.join(self.site_dir,'site_audio_30000.npy'))
+        }
+    
+    def run(self):
+        
+        gaussian_window = create_gaussian_window(self.half_window, nstd=6)
+        padding = np.zeros(self.half_window)
+
+        # first load all wav files into a contiguous array
+        site_config = self.input()['config'].data()
+        ignore_channels = site_config['playback_mic_channels']
+        session_ids = [session["id"] for session in site_config["sessions"]]
+        audio_sr = None
+        # pad the beginning
+        audio_data = [padding]
+        for session in session_ids:
+            audio_file = 'sessions/%s/raw/%s_audio.wav'%(session,session)
+            data, sr = sf.read(audio_file)
+            # remove the channels that are just playback
+            inds= np.arange(data.shape[1])
+            inds = inds[np.in1d(inds,ignore_channels,invert=True)]
+            if audio_sr is None:
+                audio_sr = sr
+            assert( audio_sr == sr )
+
+            #average the data
+            avg_mic = np.mean(data[:,inds],axis=1)
+            audio_data.append(avg_mic)
+        # pad the end
+        audio_data.append(padding)
+
+        full_audio = np.concatenate(audio_data)
+        np.save(self.output()['full_audio'].path,full_audio)
+        # cleanup some messy overhead memory
+        del audio_data
+
+        # get sliding window array view
+        def apply_func(window):
+            return np.abs(rfft(window*gaussian_window,self.fft_size,axis=0))
+        # perform STFT on windows in the array, writing to output array
+        # Produce a view of shape (steps, samples, channels)
+        strides = np.lib.stride_tricks.sliding_window_view(full_audio, self.fft_size)[::self.fft_step]
+        fft_output = np.apply_along_axis(apply_func,1,strides)
+        #for ix, window in enumerate(strides):
+        #    window_data = window * gaussian_window
+        #    fft_output[ix,:] = np.abs(rfft(window_data, n=self.fft_size, axis=0))
+
+        # saving to output
+        np.save(self.output()['spectrogram'].path,fft_output)
+        return
 
 class MergePlaybacksCSV(luigi.Task):
     """Merge together vocal period dicts from all sessions in a site

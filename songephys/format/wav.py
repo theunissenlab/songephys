@@ -4,6 +4,7 @@ import os
 import numpy as np
 import soundfile
 from neo.io import NixIO, IntanIO, NWBIO
+from neo.io.proxyobjects import AnalogSignalProxy
 
 from .io import load_yaml
 
@@ -48,12 +49,15 @@ def get_raw_data_from_neo(neo_file, mapping, bad_channels=None):
             raise IOError("Signal_channels information not found in header or annotations of %s"%neo_file)
         i+= sig.shape[1]
 
-    def gather(config_key, default_sig_name):
+    def gather(config_key, default_sig_name, raw=True):
         """Return a tuple of original chnanel names, data array, sampling rate"""
         if config_key in mapping and mapping[config_key]:
             data = []
             channel_names = []
             for sig_name, channels in mapping[config_key]:
+                if not raw and isinstance(neo_signals[sig_name],AnalogSignalProxy):
+                    # load the signal if we need to
+                    neo_signals[sig_name] = neo_signals[sig_name].load()
                 if isinstance(channels, int):
                     channels = [channels]
                 else:
@@ -64,12 +68,18 @@ def get_raw_data_from_neo(neo_file, mapping, bad_channels=None):
                     else:
                         #if bad_channels is not None:
                         #    print("%s not in %s"%(channel,bad_channels.get(config_key,dict()).get(sig_name,[])))
-                        data.append(np.array(neo._raw_data[str(neo_names[sig_name][channel])]).flatten())
+                        if raw:
+                            data.append(np.array(neo._raw_data[str(neo_names[sig_name][channel])]).flatten())
+                        else:
+                            data.append(neo_signals[sig_name][:, channel])
                         channel_names.append([str(sig_name), str(neo_names[sig_name][channel])])
                 sampling_rate = neo_signals[sig_name].sampling_rate
-            data = np.ascontiguousarray(np.vstack(data).T)
+            if raw:
+                data = np.ascontiguousarray(np.vstack(data).T)
+                sampling_rate = int(round(sampling_rate.item()))
+            else:
+                data = np.hstack(data)
             #data.sampling_rate = sampling_rate
-            sampling_rate = int(round(sampling_rate.item()))
         else:
             print("OHNO")
             sampling_rate = None
@@ -89,9 +99,13 @@ def get_raw_data_from_neo(neo_file, mapping, bad_channels=None):
         }
 
     ephys = gather("ephys.wav", "Amplifier")
+    mic = gather("mic.wav", "Board ADC",raw=False)
+    motion = gather("motion.wav", "AUX Input",raw=False)
 
     return {
-        "ephys": ephys
+        "ephys": ephys,
+        "mic": mic,
+        "motion": motion
     }
 
 def get_wavfile_data_from_neo(neo_file, mapping):
