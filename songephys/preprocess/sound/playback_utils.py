@@ -368,9 +368,13 @@ def convert_pyoperant_operant_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, de
 
     if not all([a == b for a, b in zip(pyoperant_lengths, digital_lengths)]):
         # if just the last one is off by one, fix it
-        if pyoperant_lengths[-1] == digital_lengths[-1] - 1:
-            trial_set[-1] = trial_set[-1][:-1]
-            digital_lengths[-1] = len(trial_set[-1])
+        # if any of them are off by one its probably because the pyoperant was interrupted before it actually wrote to the csv
+        # 
+        for i in range(len(pyoperant_lengths)):
+            if pyoperant_lengths[i] == digital_lengths[i] - 1:
+                trial_set[i] = trial_set[i][:-1]
+                digital_lengths[i] = len(trial_set[i])
+
         if not all([a == b for a, b in zip(pyoperant_lengths, digital_lengths)]):
             raise Exception("Wrong number of trials detected in pyoperants and digital signal: {} and {}".format(pyoperant_lengths, digital_lengths))
 

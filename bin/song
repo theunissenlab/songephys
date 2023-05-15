@@ -351,6 +351,10 @@ def create_site(site_dir):
 
     config_data["playback_mic_channels"] = playback_channels
 
+    response = input("What is the depth of this recording? (in mm)")
+    response = response.strip()
+    config_data['depth_mm'] = float(response)
+
     click.echo("Okay. Saving {}".format(config_path))
 
     save_yaml(config_path, config_data)
