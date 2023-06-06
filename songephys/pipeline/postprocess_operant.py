@@ -14,7 +14,7 @@ from .file_setup import SiteProjectConfig, SiteConfig
 from .pipeline_utils import SiteParameter
 from .preprocess_sound import MergeOperantCSV
 from .preprocess_ephys import KiloSortSorting
-
+from ..plot_utils import plot_pecking_test_data, color_by_reward
 
 """
 This file Will have all jobs for post (afer spike-sorting) analysis
@@ -69,17 +69,20 @@ def _plot_trials(spikes,peck_times,title,spect,t_start,t_end,mode='rasters',colo
     ax.set_ylim(-.5,len(spikes)-.5)
     ax.set_xlabel('Time')
     ax.set_ylabel('Trial')
+    if spect is None:
+        ax.set_title(title)
     
-    axl = plt.subplot(gs[1,0], sharey=ax) # Instantiate left KDE plot area
+    axl = plt.subplot(gs[1,0], sharey=ax) # Instantiate left plot area
     axl.spines["right"].set_visible(False)
     axl.spines["top"].set_visible(False)
     axl.spines["bottom"].set_visible(False)
 
-    axu = plt.subplot(gs[0,1],sharex=ax)
-    f,t,Sxx = spect
-    axu.pcolormesh(t, f, Sxx, shading='gouraud')
-    axu.set_ylabel('Frequency [Hz]')
-    axu.set_title(title)
+    if spect is not None:
+        axu = plt.subplot(gs[0,1],sharex=ax)
+        f,t,Sxx = spect
+        axu.pcolormesh(t, f, Sxx, shading='gouraud')
+        axu.set_ylabel('Frequency [Hz]')
+        axu.set_title(title)
     
     axb = plt.subplot(gs[2,1], sharex=ax) # Instantiate bottom KDE plot area
     axb.get_xaxis().set_visible(False) # Hide tick marks and spines
@@ -107,15 +110,16 @@ def _plot_trials(spikes,peck_times,title,spect,t_start,t_end,mode='rasters',colo
             heatmap[i,:] = hist
         ax.imshow(heatmap, interpolation='nearest',  aspect='auto',extent = (t_start,t_end,-.5,len(spikes)-.5),origin='lower')
     elif mode == 'rasters':
-        #if colors is not None:
-        #    ax.eventplot(spikes,colors=[cat_color_lookup[cat] for cat in colors])
-        #    # TODO PLot peck times
-        #else:            
         ax.eventplot(spikes)
         for i in range(len(peck_times)):
             peck_time = peck_times.iloc[i]
             if peck_time > 0:
                 ax.vlines([peck_time],i-.5,i+.5,colors='red')
+        early_rate = []
+        for i in range(len(spikes)):
+            # get firing rate in first 500 ms
+            early_rate.append(np.sum(np.logical_and(spikes.iloc[i]>0,spikes.iloc[i]<.5)))
+        axl.plot(early_rate, np.arange(len(early_rate)))
         
     # Plot data for each categorical variable as scatter and marginal KDE plots:
     for c in np.unique(colors):
@@ -168,6 +172,36 @@ class GenStimInfoDB(luigi.Task):
         self.output().makedirs()
         playbacks_and_timings.to_pickle(self.output().path)
 
+class GenBehaviorDB(luigi.Task):
+    site_dir = SiteParameter()
+    def requires(self):
+        return GenStimInfoDB(self.site_dir)
+    def output(self):
+        # TODO I could put a list here of jobs ran
+        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","data","dfBehavior.pkl"))
+    def run(self):
+        playback_and_timings = pandas.read_pickle(self.input().path)
+
+        project_dir = self.site_dir.split("sites")[0]
+        novel_stim_db = pandas.read_csv(os.path.join(project_dir,"novel_stims.csv"))
+
+        # go through and inject informative trials
+        informative_dfs = []
+        playback_and_timings['novel'] = "Learned"
+        for bird, birddf in playback_and_timings.groupby('bird_name'):
+            didnt_respond_previously = (~birddf.response).shift()
+            didnt_respond_previously.iloc[0] = 0
+            informative_trials = didnt_respond_previously.cumsum() # the first interrupted should be 0
+            informative_trials.name = 'informative_trials'
+            informative_dfs.append(informative_trials)
+            site = self.site_dir.split('sites/')[-1]
+            is_novel = novel_stim_db[(novel_stim_db.site == site)&(novel_stim_db.bird==bird)].novel.iloc[0]
+            playback_and_timings.loc[playback_and_timings.bird_name == bird,'novel'] = "Novel" if is_novel else "Learned"
+        playback_and_timings = playback_and_timings.join(pandas.concat(informative_dfs))
+        
+        self.output().makedirs()
+        playback_and_timings.to_pickle(self.output().path)
+
 class GenSpectrogramDB(luigi.Task):
     """ Generates database of spectrograms for each stim"""
     site_dir = SiteParameter()
@@ -215,15 +249,15 @@ class GenSpectrogramDB(luigi.Task):
 # region Descriptive Stats
 class GenClusterAuditorySpikeRatesDB(luigi.Task):
     """ OUTPUTS: 
-            data/<CLUSTER>/dfPlaybackSpikes.pkl
+            data/<CLUSTER>/dfAuditorySpikes.pkl
     """
     site_dir = SiteParameter()
-    cluster_id = luigi.NumericalParameter(var_type=int,min_value=0,max_value=4000)
+    cluster_id = luigi.IntParameter()
 
     def requires(self):
         return {
             "project_config": SiteProjectConfig(self.site_dir),
-            "playback_info": GenStimInfoDB(self.site_dir),
+            "playback_info": GenBehaviorDB(self.site_dir),
             "kilosort": KiloSortSorting(self.site_dir)
         }
     
@@ -266,12 +300,20 @@ class GenClusterAuditorySpikeRatesDB(luigi.Task):
                 if row_end < end_time:
                     end_time = row_end
                 sound_times.append([start_time,end_time,trial_row.condition_name])
+            if not trial_row.response and trial_row.reward:
+                sound_end = end_time+1.5
+                if i < len(playbacks_and_timings)-1:
+                    next_row = playbacks_and_timings.iloc[i+1]
+                    if next_row.start_time < sound_end:
+                        sound_end = next_row.start_time
+                sound_times.append([end_time,sound_end,'RewardSound'])
         # now make opposite, silent_times
         prev_stop = 0
         silent_times = []
         for start,stop,_ in sound_times:
-            silent_times.append((prev_stop,start))
-            prev_stop = stop
+            if prev_stop < start-.1: #minimum .1s time
+                silent_times.append((prev_stop,start))
+                prev_stop = stop
             # TODO think about this, I am skipping the last part of the recording
         
         # now sound_times is a list of tuples of start and stop of playback sounds. I can check for all spikes how many spikes are in sound times and silent times
@@ -314,7 +356,9 @@ class PlotClusterAuditorySpikeRates(luigi.Task):
         dfSpikeRate = dfSpikeRate[dfSpikeRate.Duration > .15]
 
         plt.figure()
-        seaborn.ecdfplot(x=dfSpikeRate.NSpikes/dfSpikeRate.Duration,hue=dfSpikeRate.Label)
+        #seaborn.ecdfplot(x=dfSpikeRate.NSpikes/dfSpikeRate.Duration,hue=dfSpikeRate.Label)
+
+        seaborn.displot(x=dfSpikeRate.NSpikes/dfSpikeRate.Duration,hue=dfSpikeRate.Label,kind='kde',common_norm=False)
         #seaborn.violinplot(x=dfSpikeRate.Label,y=dfSpikeRate.NSpikes/dfSpikeRate.Duration,hue=dfSpikeRate.Label)
         #plt.bar([1,3,4,5],[ _get_spikerate(dfSpikeRate.Label == 'Silent'), _get_spikerate(dfSpikeRate.Label != 'Silent'), _get_spikerate(dfSpikeRate.Label == 'Rewarded'), _get_spikerate(dfSpikeRate.Label == 'Unrewarded')],
         #            label=['No Stim','All Sound','Rewarded','Unrewarded'], color=['black','blue','green','red'])
@@ -436,7 +480,7 @@ class GenSiteSummary(luigi.Task):
                 actual_template = ks_templates[template,20:,np.where(chan_map == chan)]
                 templates_list.append(actual_template.flatten())
             template_avg = np.average(templates_list,axis=0,weights=counts/np.sum(counts))
-            plt.plot(np.arange(len(template_avg))/30000, template_avg)
+            #plt.plot(np.arange(len(template_avg))/30000, template_avg)
 
             
             sorted_inds = np.argsort(template_avg)
@@ -452,6 +496,18 @@ class GenSiteSummary(luigi.Task):
             cluster_info['site'] = self.site_dir
             cluster_info['template'] = [template_avg]
             cluster_info['depth'] = site_config.get('depth_mm',0) - cluster_info['depth']/1000
+
+
+            #TODO do this better
+            cluster_rate = pandas.read_pickle(GenClusterAuditorySpikeRatesDB(self.site_dir,cluster_id = cid).output().path)
+            for lbl in np.unique(cluster_rate.Label):
+                sub_df = cluster_rate[cluster_rate.Label == lbl]
+                sub_df 
+                avg_rate = np.average(sub_df.SpikeRate,weights=sub_df.Duration)
+                std_rate = np.sqrt(np.average((sub_df.SpikeRate - avg_rate)**2, weights=sub_df.Duration))
+                cluster_info["%s_avg"%lbl] = avg_rate
+                cluster_info["%s_std"%lbl] = std_rate
+
             new_infos.append(cluster_info)
             #plt.plot(template_avg)
         #plt.figure()
@@ -495,7 +551,7 @@ class GenPlaybackSpikesDB(luigi.Task):
     def requires(self):
         return {
             "project_config": SiteProjectConfig(self.site_dir),
-            "playback_info": GenStimInfoDB(self.site_dir),
+            "playback_info": GenBehaviorDB(self.site_dir),
             "kilosort": KiloSortSorting(self.site_dir),
             "spect": GenSpectrogramDB(self.site_dir)
         }
@@ -513,7 +569,9 @@ class GenPlaybackSpikesDB(luigi.Task):
 
         playbacks_and_timings = pandas.read_pickle(self.input()['playback_info'].path)
 
-        out_df = {"Rendition_Index":[], "Rendition_Name":[],"Trial_Number":[],"Spike_Times":[],"Start":[],"End":[],"Peck":[], "Rate":[], "Bird":[], "Category":[]}
+        out_df = {"Rendition_Index":[], "Rendition_Name":[],"Trial_Number":[],
+                  "Spike_Times":[],"Start":[],"End":[],"Peck":[], "Rate":[], 
+                  "Bird":[], "Category":[], "Novel": [], "Informative_Trials":[]}
         # Go through all stims, grouped by bird
         for bird in np.unique(playbacks_and_timings.bird_name):
             # all playbacks for this vocalizer
@@ -557,7 +615,10 @@ class GenPlaybackSpikesDB(luigi.Task):
                         out_df['Spike_Times'].append(spike_times)
                         out_df['Rate'].append(rate)
                         out_df['Category'].append(trial_row.condition_name)
+                        out_df['Novel'].append(trial_row.novel)
+                        out_df['Informative_Trials'].append(trial_row.informative_trials)
         spike_df = pandas.DataFrame(out_df)
+        spike_df = spike_df.sort_values(by='Start')
         self.output().makedirs()
         spike_df.to_pickle(self.output().path)
 
@@ -575,6 +636,7 @@ class PlotTrialSpikeRasters(luigi.Task):
     def run(self):
         # Load the spike dataframe from GenPlaybackSpikeDB
         spike_df = pandas.read_pickle(self.input()['spikes'].path)
+        #spike_df.sor
         df_song_spect = pandas.read_pickle(self.input()['spectrograms'].path)
         
         # One plot for each bird, rend pair
@@ -587,11 +649,48 @@ class PlotTrialSpikeRasters(luigi.Task):
                 
                 out_fn = "Rasterplot_%s.png"%song
                 out_root = self.output().path
-                out_dir = os.path.join(out_root,"%s_%s"%(rend_df.Category.iloc[0],bird))
+                out_dir = os.path.join(out_root,"%s_%s_%s"%(rend_df.Category.iloc[0],bird,rend_df.Novel.iloc[0]))
                 os.makedirs(out_dir,exist_ok=True)
                 plt.savefig(os.path.join(out_dir,out_fn))
                 plt.close()
 
+            # now save by bird
+            _plot_trials(bird_df.Spike_Times - bird_df.Start, bird_df.Peck, bird,None,-1,7,mode='rasters')
+            out_fn = "Raster_%s.png"%bird
+            out_root = self.output().path
+            out_dir = os.path.join(out_root,"%s_%s_%s"%(rend_df.Category.iloc[0],bird,rend_df.Novel.iloc[0]))
+            os.makedirs(out_dir,exist_ok=True)
+            plt.savefig(os.path.join(out_dir,out_fn))
+            plt.close()
+
+class PlotSpikeRateByTrial(luigi.Task):
+    site_dir = SiteParameter()
+    cluster_id = luigi.IntParameter()
+    pad_s = luigi.FloatParameter(default=1.0)
+        
+    def requires(self):
+        return GenPlaybackSpikesDB(self.site_dir,pad_s=self.pad_s, cluster_id=self.cluster_id)
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","figures","Cluster_%d"%self.cluster_id,"spike_rasters_%.2f"%(self.pad_s),'SpikeRate_ByBird.png'))
+    def run(self):
+        # now save avg spikerate by trial
+        spike_df = pandas.read_pickle(self.input().path)
+        rates = []
+        for ix, row in spike_df.iterrows():
+            spike_times = row.Spike_Times-row.Start
+            start = -.05
+            end = .55
+            rate = np.logical_and(spike_times > start, spike_times < end).sum() / (end-start)
+            rates.append(rate)
+        spike_df['rate_onset'] = rates
+        
+        plt.figure()
+        seaborn.lineplot(spike_df,x='Start',y='rate_onset',hue='Bird')
+
+        self.output().makedirs()
+        plt.savefig(self.output().path)
+        plt.close()
+        
 
 # endregion
 # region PCA Population stuff
@@ -636,7 +735,7 @@ class GenPopulationPCA(luigi.Task):
         #time_bins = np.arange(0,len(pop_timeseries))*bin_step_s
         # do pca on the 
         print("Running PCA on the zscored bins")
-        pca = PCA(n_components=5) 
+        pca = PCA(n_components=min(5,len(cluster_ids_good))) 
         # pca_timeseries is <NPC>x<NTime>
         pca_timeseries = pca.fit_transform(pop_timeseries).T
 
@@ -682,7 +781,7 @@ class GenPlaybackPCADB(luigi.Task):
                 pb_end_time = min(pb_row.start_time + pb_row.duration + 2, next_pb.start_time-.05)
             else:
                 pb_end_time = pb_row.start_time + pb_row.duration + 2
-            pb_inds = np.logical_and(time_bins > pb_row.start_time,time_bins < pb_end_time)
+            pb_inds = np.logical_and( (time_bins+self.bin_size_s) > pb_row.start_time,time_bins < pb_end_time)
             #bin_labels[pb_inds] = 1 if pb_row.condition_name == 'Rewarded' else 2
             paths['Stim'].append(pb_row['name'])
             paths['Category'].append(pb_row.condition_name)
@@ -796,6 +895,69 @@ class PlotBirdPopulationPCA(luigi.Task):
         df_pc_paths = pandas.read_pickle(self.input()['pca'].path)
         df_song_spect = pandas.read_pickle(self.input()['spect'].path)
 
+        for bird in np.unique(df_pc_paths.Bird):
+            bird_df = df_pc_paths[df_pc_paths.Bird == bird]
+            # Plot pcs in a heatmap type layout
+            # Second plot PC components stacked on a time axis
+            out_fn = "%s_%s.png"%(bird_df.Category.iloc[0],bird)
+            
+            # Plot Spectrogram, with all PCs below it
+            gs = gridspec.GridSpec(3,2,width_ratios=[10,1])
+            gs.update(hspace=.3,wspace=.3)
+            title = "PC Heatmap"
+            fig = plt.figure(title,figsize=(5,12))
+            fig.patch.set_facecolor('white')
+            maxlen = max([x.shape[1] for x in bird_df.pc_path])
+            
+            
+            # PC0 Axis
+            ax = plt.subplot(gs[0,0])
+            ax.set_xlim(0,maxlen * self.bin_step_s)
+
+            ax1 = plt.subplot(gs[1,0],sharex=ax)
+            ax2 = plt.subplot(gs[2,0],sharex=ax)
+
+            n_pcs = 3
+            pc_im = np.zeros((n_pcs,len(bird_df),maxlen))
+            pc_im.fill(np.nan)
+            t_val = np.arange(maxlen) * self.bin_step_s
+            i=0
+            for ix,row in bird_df.iterrows():
+                for pc in range(n_pcs):
+                    n_tval = len(row.pc_path[pc,:])
+                    pc_im[pc,i,:n_tval] = row.pc_path[pc,:]
+                i+=1
+            ax.imshow(pc_im[0,:,:],extent=(0,maxlen * self.bin_step_s,len(bird_df),0),aspect='auto')
+            #ax.invert_yaxis()
+            ax1.imshow(pc_im[1,:,:],extent=(0,maxlen * self.bin_step_s,len(bird_df),0),aspect='auto')
+            #ax1.invert_yaxis()
+            ax2.imshow(pc_im[2,:,:],extent=(0,maxlen * self.bin_step_s,len(bird_df),0),aspect='auto')
+            #ax2.invert_yaxis()
+
+            out_dir = self.output().path
+            os.makedirs(out_dir,exist_ok=True)
+            plt.savefig(os.path.join(out_dir,out_fn))
+
+
+class Plot2dPCScatter(luigi.Task):
+    site_dir = SiteParameter()
+    bin_size_s= luigi.FloatParameter(default = .15)
+    bin_step_s= luigi.FloatParameter(default =.050)
+    def requires(self):
+        return {
+            'pca': GenPlaybackPCADB(self.site_dir,bin_size_s=self.bin_size_s,bin_step_s=self.bin_step_s)
+        }
+    def output(self):
+        # This is a directory that will contain all the PC Plots
+        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","figures","pcplots_%.2f_step%.2f"%(self.bin_size_s,self.bin_step_s),"scatter"))
+    def run(self):
+        labels = dict({
+            "Unrewarded": "#a40e4c",
+            "Rewarded": "#64f58d"
+        })
+        df_pc_paths = pandas.read_pickle(self.input()['pca'].path)
+
+        plt.figure()
         for bird in np.unique(df_pc_paths.Bird):
             bird_df = df_pc_paths[df_pc_paths.Bird == bird]
             # Plot pcs in a heatmap type layout
@@ -1109,6 +1271,186 @@ class PlotEventAlignedPCA(luigi.Task):
         plt.close()
 # endregion
 
+# region Decoding
+
+class GenClusterTimePCDB(luigi.Task):
+    site_dir = SiteParameter()
+    def requires(self):
+        return KiloSortSorting(self.site_dir)
+    def output(self):
+        pass
+    def run(self):
+        # TODO COpy from here https://github.com/theunissenlab/jupyterNotebook/blob/master/notebooks/fet/chronic/GenerateDataBase.ipynb
+        # Load necessary kilosort output files
+        ks_output_dir =  os.path.dirname(self.input().path)
+        ks_spike_times = np.load(os.path.join(ks_output_dir, 'spike_times.npy'))
+        ks_spike_cluster = np.load(os.path.join(ks_output_dir, 'spike_clusters.npy'))
+        ks_cluster_info = pandas.read_csv(os.path.join(ks_output_dir, 'cluster_info.tsv'),delimiter='\t')
+
+
+        cluster_ids_good = []
+        for ix,cluster in ks_cluster_info.iterrows():
+            if cluster['group'] != 'noise' and cluster.fr > 2.0:#  and cluster.fr > 5:#cluster.n_spikes > 8000:# or cluster['group'] == 'mua':
+                cluster_ids_good.append(cluster.cluster_id)
+        cluster_ids_good = np.asarray(cluster_ids_good)
+        # take all responses to all stimuli and generate PCs
+        # TODO could get this from project or site config or something
+        t_start = np.floor(ks_spike_times.min()/30000)
+        t_stop = np.ceil(ks_spike_times.max()/30000)
+        tot_time = t_start - t_stop
+
+        # T x Cluster
+        spike_arr_30k = np.zeros((int(t_stop*30000),len(cluster_ids_good)),dtype=np.uint8)
+        for ix,p in enumerate(cluster_ids_good):
+            spike_arr_30k[:,ix][ks_spike_times[ks_spike_cluster==p]] = 1
+        
+        # now we window it and sum for each cluster 
+        # TODO get samplerate from some config
+        pop_timeseries = np.lib.stride_tricks.sliding_window_view(spike_arr_30k, int(np.round(self.bin_size_s*30000)), axis=0)[::int(np.round(self.bin_step_s*30000))].sum(axis=2)
+        # Now z score the pop vector by cluster
+        pop_timeseries = stats.zscore(pop_timeseries)
+        #time_bins = np.arange(0,len(pop_timeseries))*bin_step_s
+        # do pca on the 
+        print("Running PCA on the zscored bins")
+        pca = PCA(n_components=min(5,len(cluster_ids_good))) 
+        # pca_timeseries is <NPC>x<NTime>
+        pca_timeseries = pca.fit_transform(pop_timeseries).T
+
+        self.output().makedirs()
+        np.save(self.output().path,pca_timeseries)
+        pass
+
+
+class DecodeLabelsNB(luigi.Task):
+    site_dir = SiteParameter()
+    bin_size_s = luigi.FloatParameter(default=.01)
+    test_size = luigi.FloatParameter(default=.2)
+    def requires(self):
+        return {
+            "spikes": KiloSortSorting(self.site_dir),
+            "behavior": GenBehaviorDB(self.site_dir)
+        }
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","data","dfPerf_zscore_%.2f_%.2f.pkl"%(self.bin_size_s,self.test_size)))
+    def run(self):
+        # Load necessary kilosort output files
+        ks_output_dir =  os.path.dirname(self.input()["spikes"].path)
+        ks_spike_times = np.load(os.path.join(ks_output_dir, 'spike_times.npy'))
+        ks_spike_cluster = np.load(os.path.join(ks_output_dir, 'spike_clusters.npy'))
+        ks_cluster_info = pandas.read_csv(os.path.join(ks_output_dir, 'cluster_info.tsv'),delimiter='\t')
+
+        cluster_ids_good = []
+        for ix,cluster in ks_cluster_info.iterrows():
+            if cluster['group'] != 'noise' and cluster.fr > 2.0:#  and cluster.fr > 5:#cluster.n_spikes > 8000:# or cluster['group'] == 'mua':
+                cluster_ids_good.append(cluster.cluster_id)
+        cluster_ids_good = np.asarray(cluster_ids_good)
+
+        # T x Cluster
+        t_start = 0#np.floor(ks_spike_times.min()/30000)
+        t_stop = np.ceil(ks_spike_times.max()/30000)
+        edges = np.arange(t_start,t_stop*30000,int(self.bin_size_s*3000))
+        num_bins = edges.shape[0]-1
+        num_neurons = len(cluster_ids_good)
+        neural_data=np.empty([num_bins,num_neurons])
+        for ix,p in enumerate(cluster_ids_good):
+            neural_data[:,ix] = np.histogram(ks_spike_times[ks_spike_cluster==p],edges)[0]
+
+
+        # now we have binned neural data at bin_size_s bins
+        # lets make an array of onset responses
+        playback_and_timings = pandas.read_pickle(self.input()["behavior"].path)
+        # half sec of the start of each stimuli
+        bins_after_onset = int(.5 / self.bin_size_s)
+        onset_times = (playback_and_timings.start_time/self.bin_size_s).astype(np.int)
+        X = np.lib.stride_tricks.sliding_window_view(neural_data, bins_after_onset, axis=0)[onset_times]
+        # reshape it into a flat format
+        X = X.reshape(X.shape[0],X.shape[1]*X.shape[2])
+        from sklearn.model_selection import train_test_split
+        from sklearn.naive_bayes import GaussianNB
+
+        out_df =dict({
+            "Performance": [],
+            "Random_mean": [],
+            "Random_Std" :[],
+            "Label": []
+        })
+
+        # Now test prediction performance for Category, Stim_name, Bird_Name, Novel
+        for label in ['condition_name','bird_name','name','novel']:
+            Y = np.asarray(playback_and_timings[label])
+            X_train, X_test, Y_train, Y_test = train_test_split(X,Y,test_size=self.test_size)
+            # remove rare inputs
+            X_train_inds = np.where(X_train.sum(axis=0)>0)[0]
+            X_train = X_train[:,X_train_inds]
+            X_test = X_test[:,X_train_inds]
+            # zscore inputs 
+            X_mean=np.nanmean(X_train,axis=0)
+            X_std=np.nanstd(X_train,axis=0)
+            X_train =(X_train-X_mean)/X_std
+            X_test=(X_test-X_mean)/X_std
+
+            gnb = GaussianNB()
+            Y_pred = gnb.fit(X_train,Y_train).predict(X_test)
+            perf = (Y_test == Y_pred).sum() / X_test.shape[0]
+            out_df["Performance"].append(perf)
+            rand_perf = []
+            for i in range(50):
+                np.random.shuffle(Y)
+                X_train, X_test, Y_train, Y_test = train_test_split(X,Y,test_size=self.test_size)
+                # remove rare inputs
+                X_train_inds = np.where(X_train.sum(axis=0)>0)[0]
+                X_train = X_train[:,X_train_inds]
+                X_test = X_test[:,X_train_inds]
+                # zscore inputs 
+                X_mean=np.nanmean(X_train,axis=0)
+                X_std=np.nanstd(X_train,axis=0)
+                X_train =(X_train-X_mean)/X_std
+                X_test=(X_test-X_mean)/X_std
+                gnb = GaussianNB()
+                Y_pred = gnb.fit(X_train,Y_train).predict(X_test)
+                rand_perf.append((Y_test == Y_pred).sum() / X_test.shape[0])
+            out_df["Random_mean"].append(np.mean(rand_perf))
+            out_df["Random_Std"].append(np.std(rand_perf))
+            out_df['Label'].append(label)
+        perf_df = pandas.DataFrame(out_df)
+        self.output().makedirs()
+        perf_df.to_pickle(self.output().path)
+
+
+
+class GenerateBinnedStimResponse(luigi.Task):
+    site_dir = SiteParameter()
+    bin_size_s = luigi.FloatParameter(default=.05)
+    def requires(self):
+        return {
+            "spikes": KiloSortSorting(self.site_dir),
+            "behavior": GenBehaviorDB(self.site_dir)
+        }
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","data","binned_spikes_%.2f.npy"%self.bin_size_s))
+    def run(self):
+        pass
+# endregion
+
+# region Behavior Plotting
+
+
+class PlotBehaviorTrials(luigi.Task):
+    site_dir = SiteParameter()
+    def requires(self):
+        return GenBehaviorDB(self.site_dir)
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","figures","Behavior_Trials.png"))
+    def run(self):
+        playback_and_timings = pandas.read_pickle(self.input().path)
+        plot_pecking_test_data(playback_and_timings,['bird_name','condition_name',"novel"])
+        self.output().makedirs()
+        plt.savefig(self.output().path)
+        
+
+
+
+#endregion
 
 # region Wrapper Tasks 
 class SiteFigureGeneration(luigi.Task):
@@ -1130,6 +1472,8 @@ class SiteFigureGeneration(luigi.Task):
         yield PlotStimPopulationPCA(site_dir=self.site_dir)
         yield PlotBirdPopulationPCA(site_dir=self.site_dir)
         yield PlotEventAlignedPCA(site_dir =self.site_dir)
+        yield PlotBehaviorTrials(site_dir=self.site_dir)
+        yield DecodeLabelsNB(site_dir = self.site_dir)
         cluster_ids_good = []
         for ix,cluster in ks_cluster_info.iterrows():
             if cluster['group'] != 'noise'  and cluster.fr > 2.0:#cluster.n_spikes > 8000:# or cluster['group'] == 'mua':
@@ -1139,6 +1483,7 @@ class SiteFigureGeneration(luigi.Task):
                 yield PlotPostStimResponses(site_dir=self.site_dir,cluster_id=cluster.cluster_id)
                 yield PlotEventAlignedRaster(site_dir =self.site_dir, cluster_id=cluster.cluster_id)
                 yield PlotClusterSummary(site_dir =self.site_dir, cluster_id=cluster.cluster_id)
+                yield PlotSpikeRateByTrial(site_dir =self.site_dir, cluster_id=cluster.cluster_id)
         cluster_ids_good = np.asarray(cluster_ids_good)
         yield PlotSiteSummary(site_dir = self.site_dir)
     

@@ -81,7 +81,7 @@ def get_raw_data_from_neo(neo_file, mapping, bad_channels=None):
                 data = np.hstack(data)
             #data.sampling_rate = sampling_rate
         else:
-            print("OHNO")
+            print("OHNO %s"%config_key)
             sampling_rate = None
             data = neo_signals.get(default_sig_name, None)
             channel_names = [[str(default_sig_name), str(name)] for name in neo_names.get(default_sig_name, [])]
