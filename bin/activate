@@ -14,4 +14,4 @@ if [ $# -eq 0 ]
   env=$PROJECT_ROOT/$1
 fi
 
-. $env/bin/activate
+# . $env/bin/activate
