@@ -825,15 +825,16 @@ class Rhd2Binary(luigi.Task):
 
         audio_path = os.path.join(raw_dir, "%s_audio.wav"%sess_name)
         
-        motion_path = os.path.join(raw_dir, "%s_motion.wav"%sess_name)
+        motion_path = os.path.join(raw_dir, "%s_motion.npy"%sess_name)
 
+        lfp_path = os.path.join(raw_dir,'%s_LFP.bin'%sess_name)
         site_dirs, _, _ = get_session_sites(self.session_dir)
         config_path = os.path.join(site_dirs[0], "site_config.yaml")
 
         return {
             "ephys.bin": luigi.LocalTarget(elec_path),
             "audio.wav": luigi.LocalTarget(audio_path),
-            #"motion.wav": luigi.LocalTarget(motion_path),
+            "motion.bin": luigi.LocalTarget(motion_path),
             "config_original_channels": YamlTarget(config_path, "bin_to_original_channels")
         }
 
@@ -848,7 +849,7 @@ class Rhd2Binary(luigi.Task):
 
         if not os.path.exists(self.output()["ephys.bin"].path):
             arrays['ephys']['data'].tofile(self.output()["ephys.bin"].path)
-        
+                
         if not os.path.exists(self.output()['audio.wav'].path):
             with soundfile.SoundFile(
                             self.output()["audio.wav"].path,
@@ -863,17 +864,20 @@ class Rhd2Binary(luigi.Task):
                     arrays["mic"]["data"][:, group_start:group_end] /= np.max(
                         np.abs(arrays["mic"]["data"][:, group_start:group_end]))
                 f.write(arrays["mic"]["data"])
-
-        # if "motion" in arrays and arrays["motion"]["data"] is not None:
-        #     with soundfile.SoundFile(
-        #             self.output()["motion.wav"].path,
-        #             "w+",
-        #             samplerate=arrays["motion"]["sampling_rate"],
-        #             format="RF64",
-        #             subtype="FLOAT",
-        #             channels=arrays["motion"]["data"].shape[1]) as f:
-        #         f.write(arrays["motion"]["data"])
         
+        if not os.path.exists(self.output()['motion.bin'].path):
+            if "motion" in arrays and arrays["motion"]["data"] is not None:
+                np.save(self.output()['motion.bin'].path,arrays['motion']['data'])
+                # previously it was a wav file
+                # with soundfile.SoundFile(
+                #         self.output()["motion.bin"].path,
+                #         "w+",
+                #         samplerate=arrays["motion"]["sampling_rate"],
+                #         format="RF64",
+                #         subtype="FLOAT",
+                #         channels=arrays["motion"]["data"].shape[1]) as f:
+                #     f.write(arrays["motion"]["data"])
+
         # Finally, write the channel name mappings to the configuration file
         # This is kind of an extra thing; not sure if I should put it in the
         # task outputs / set it as a new task, or what?
@@ -888,6 +892,30 @@ class Rhd2Binary(luigi.Task):
         }
         
         save_yaml(self.output()["config_original_channels"].path, config_out)
+
+
+class GenerateLFP(luigi.Task):
+    session_dir = SessionParameter()
+    def requires(self):
+        return Rhd2Binary(self.session_dir)
+    def output(self):
+        sess_name = os.path.basename(self.session_dir)
+        raw_dir = os.path.join(self.session_dir, "raw")
+        lfp_path = os.path.join(raw_dir,'%s_LFP.npy'%sess_name)
+        return luigi.LocalTarget(lfp_path)
+    def run(self):
+        from scipy.signal import butter, filtfilt,resample
+        in_data = np.fromfile(self.input()['ephys.bin'].path,dtype=np.uint16)
+        in_data = in_data.reshape((in_data.shape[0]//64,64))
+        hp_freq = 40
+        lp_freq = 300
+        filt_order = 4
+        FS = 30000
+        Fn = FS/2.
+        LFP_freq = 1000
+        b,a = butter(filt_order,(hp_freq/Fn,lp_freq/Fn),btype='bandpass')
+        filtered_data = resample(filtfilt(b=b,a=a,x=in_data,axis=0),int(in_data.shape[0]*LFP_freq//FS))
+        np.save(self.output().path,filtered_data)
 
 
 

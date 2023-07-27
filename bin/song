@@ -288,6 +288,7 @@ def create_site(site_dir):
                         "ephys.wav": [["RHD2000 amplifier channel", [0, len(electrode_config['Amplifier'])]]],
                         "mic.wav": [["USB board ADC input channel", [0, len(electrode_config['Analog'])]]],
                         "digital.wav": [["Digital Input", [0, len(electrode_config['Digital'])]]],
+                        "motion.wav": [["RHD2000 auxiliary input channel", [0, len(electrode_config['AUX'])]]]
                     },
                     "filtering": {
                         "ephys.wav": [[0, len(electrode_config['Amplifier'])]],

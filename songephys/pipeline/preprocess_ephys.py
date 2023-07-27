@@ -22,7 +22,7 @@ from ..preprocess.ephys.filter import common_average_filter
 from ..preprocess.ephys.detect import calculate_snippet_dimensions, extract_spikes
 from ..preprocess.ephys.sort import sort, create_hierarchy
 
-from .file_setup import Rhd2Wav, Rhd2Binary, SiteConfig, SessionConfig, SessionProjectConfig, SiteProjectConfig, DefineSessions, GenerateSiteMemmaps
+from .file_setup import Rhd2Wav, Rhd2Binary, SiteConfig, SessionConfig, SessionProjectConfig, SiteProjectConfig, DefineSessions, GenerateSiteMemmaps, GenerateLFP
 from .pipeline_utils import SiteParameter, SessionParameter, get_session_sites
 
 
@@ -232,7 +232,33 @@ class CombineSiteSpikes(luigi.Task):
             )
             suss.io.save_pickle(self.output()[electrode_idx].path, new_dataset)
 
+class GenerateSiteLFP(luigi.Task):
+    site_dir = SiteParameter()
+    def requires(self):
+        return {
+            "site_config": DefineSessions(self.site_dir),
+            "project_config": SiteProjectConfig(self.site_dir)
+        }
+    def output(self):
+        sorting_dir = os.path.join(self.site_dir, "spikes")
+        if not os.path.exists(sorting_dir):
+            os.makedirs(sorting_dir)
 
+        # TODO: this relies on the project config already being created.
+        project_cfg = SiteProjectConfig(self.site_dir).output().data()
+        return luigi.LocalTarget(os.path.join(self.site_dir,"siteLFP.bin"))
+    
+    def run(self):
+        site_config = self.input()["site_config"].data()
+        session_offsets = [session["t"] for session in site_config["sessions"]]
+        sessions_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions")
+
+        lfp_results = []
+        for session in site_config["sessions"]:
+            lfp = yield GenerateLFP(os.path.join(sessions_dir, session["id"]))
+            lfp_results.append(np.fromfile(lfp))
+        np.concatenate(lfp_results)
+        
 class SortSpikes(luigi.Task):
     """Run spike sorting code on a single channel
 
@@ -391,7 +417,8 @@ class PreprocessSite(luigi.WrapperTask):
             return [
                 DefineSessions(self.site_dir),
                 MergePlaybacksCSV(self.site_dir),
-                CombineSiteSpikes(self.site_dir)
+                KiloSortSorting(self.site_dir)
+                #CombineSiteSpikes(self.site_dir)
             ]
         return [
             DefineSessions(self.site_dir),
@@ -420,7 +447,7 @@ class PreprocessOperantSite( luigi.WrapperTask ):
             return [
                 DefineSessions(self.site_dir),
                 MergeOperantCSV(self.site_dir),
-               # KilosortSorting(self.site_dir)
+                KiloSortSorting(self.site_dir)
             ]
         else:
             return [

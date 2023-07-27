@@ -40,7 +40,7 @@ from ..preprocess.sound.detect import (
 )
 from ..preprocess.sound.stimuli import merge_segments
 
-from .file_setup import Rhd2Wav, SiteConfig, SessionConfig, DownloadSession, GenerateSiteMemmaps
+from .file_setup import Rhd2Binary, SiteConfig, SessionConfig, DownloadSession, GenerateSiteMemmaps
 from .pipeline_utils import SiteParameter, SessionParameter
 
 
@@ -186,7 +186,7 @@ class CombinePlaybackMetadata(luigi.Task):
     def requires(self):
         return {
             "files": DownloadSession(self.session_dir),
-            "aligned_codes": CreateMicrophoneAlignedCodes(self.session_dir)
+            #"aligned_codes": CreateMicrophoneAlignedCodes(self.session_dir)
         }
 
     def output(self):
@@ -226,6 +226,7 @@ class CombinePlaybackMetadata(luigi.Task):
 
         if not len(block.segments[0].events):
             # If we messed up the digital codes...
+            print("OH NO")
             stimulus_codes = np.load(self.input()["aligned_codes"].path, allow_pickle=True)[()]
         else:
             events = block.segments[0].events[0].load()
@@ -251,8 +252,9 @@ class PlaybacksCSV(luigi.Task):
 
     def requires(self):
         return {
-            "wav_files": Rhd2Wav(self.session_dir),
-            "aligned_codes": CreateMicrophoneAlignedCodes(self.session_dir),
+            #"wav_files": Rhd2Wav(self.session_dir),
+            #"aligned_codes": CreateMicrophoneAlignedCodes(self.session_dir),
+            "files": DownloadSession(self.session_dir),
             "playback_metadata": CombinePlaybackMetadata(self.session_dir)
         }
 
@@ -281,6 +283,7 @@ class PlaybacksCSV(luigi.Task):
             block = rhd.read_block(lazy = True)
 
             if not len(block.segments[0].events):
+                print("OH NO")
                 # Live vocalization detection is now delegated to the FindLiveCalls task
                 mic = AudioFile(self.input()["wav_files"]["mic.wav"].path)
                 stimulus_codes = np.load(self.input()["aligned_codes"].path, allow_pickle=True)[()]
@@ -638,7 +641,7 @@ class MergePlaybacksCSV(luigi.Task):
             yield PlaybacksCSV(session_dir=session_dir)
 
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir, "playback_segments.csv"))
+        return {'playbacks': luigi.LocalTarget(os.path.join(self.site_dir, "playback_segments.csv"))}
 
     def run(self):
         site_config = self.input()[0].data()
@@ -652,7 +655,7 @@ class MergePlaybacksCSV(luigi.Task):
             vocal_periods["start_time"] += offset
 
         df = pd.concat(vocal_period_data, axis=0)
-        df.to_csv(self.output().path, index=False)
+        df.to_csv(self.output()['playbacks'].path, index=False)
 
 class MergeOperantCSV(luigi.Task):
     """Merge together vocal period dicts from all sessions in a site
@@ -675,6 +678,7 @@ class MergeOperantCSV(luigi.Task):
         for session in site_config["sessions"]:
             session_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions", session["id"])
             yield OperantCSV(session_dir=session_dir)
+            yield CreateSoundsepFiles(session_dir=session_dir)
 
     def output(self):
         return {
@@ -791,9 +795,10 @@ class CreateSoundsepFiles(luigi.Task):
     session_dir = SessionParameter()
 
     def requires(self):
+        # TODO could check if operant or playback and do the right one here
         return {
-            "playbacks": PlaybacksCSV(self.session_dir),
-            "wav_files": Nix2Wav(self.session_dir),
+            "playbacks": OperantCSV(self.session_dir),
+            "wav_files": Rhd2Binary(self.session_dir),
         }
 
     def output(self):
@@ -807,20 +812,21 @@ class CreateSoundsepFiles(luigi.Task):
     def run(self):
         config_file = yield SessionConfig(self.session_dir)
         session_config = config_file.data()
-        playback_periods = pd.read_csv(self.input()["playbacks"].path)
+        playback_periods = pd.read_csv(self.input()["playbacks"]["playbacks"].path)
         playback_channels = session_config.get("playback_mic_channels", 0)
         if isinstance(playback_channels, int):
             playback_channel = playback_channels
         else:
             playback_channel = playback_channels[0] if len(playback_channels) else 0
 
-        sampling_rate = AudioFile(os.path.join(self.input()["wav_files"]["mic.wav"].path)).sampling_rate
+        audio_fn = self.input()["wav_files"]["audio.wav"].path
+        sampling_rate = AudioFile(os.path.join(audio_fn)).sampling_rate
 
         # Write a default config
         with open(self.output().path, "w+") as f:
             f.write("""audio_directory: ../raw
 recursive_search: false
-filename_pattern: mic.wav
+filename_pattern: "{subject}__{date}_{time}_audio.wav"
 block_keys: null
 channel_keys: null
 """)

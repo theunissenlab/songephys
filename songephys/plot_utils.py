@@ -26,12 +26,12 @@ class color_by_reward(object):
     def get(x):
         if "Rewarded" in x:
             if "Novel" in x:
-                return "#6EEB83" #blue
+                return "#32DDFF" #light blue
             else:
-                return "#0AA5D8" #green
+                return "#0AA5D8" #blue
         else:
             if "Novel" in x:
-                return "#E8AA14" #orange
+                return "#F07266" #light red
             else:
                 return "#C62533" #red
 
@@ -179,5 +179,5 @@ def plot_pecking_test_data(
 
     df.index = original_index
 
-    return fig
+    return fig,events_ax,prob_ax
 
