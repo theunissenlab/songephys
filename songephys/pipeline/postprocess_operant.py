@@ -43,7 +43,7 @@ def _weighted_avg_and_std(values, weights):
     variance = np.average((values-average)**2, weights=weights)
     return (average, math.sqrt(variance))
 
-def _get_spectrogram(arr,fs, db=120, fc=12500):
+def _get_spectrogram(arr: np.ndarray, fs: int, db: int=120, fc: int=12500) -> [np.ndarray, np.ndarray, np.ndarray]:
     # create the spectrogram for a 1d signal at a given sampling rate
     # arr: 1d signal
     # fs: sampling frequency
@@ -60,7 +60,7 @@ def _get_spectrogram(arr,fs, db=120, fc=12500):
     return (f, t, Sxx[f_inds,:])
 
 
-def _plot_trials(spikes,peck_times,title,spect,t_start,t_end,mode='rasters',colors=None):
+def _plot_trials(spikes: np.ndarray,peck_times: np.ndarray,title: str,spect: np.ndarray,t_start: float,t_end: float,mode: str='rasters',colors=None) -> None:
     # spikes is a list of lists of spike_times to plot
     # colors is a list of classes for spikes
     # peck_times is time into the trial a peck occurs
@@ -158,7 +158,7 @@ def _plot_trials(spikes,peck_times,title,spect,t_start,t_end,mode='rasters',colo
     lines, labels = axb.get_legend_handles_labels()
     axc.legend(lines, labels, loc = 'center', fontsize = 12)
 
-def _plot_motion_trials(motion,peck_times,title,spect,t_start,t_end):
+def _plot_motion_trials(motion: np.ndarray, peck_times: np.ndarray, title: str, spect: np.ndarray, t_start:float, t_end: float) -> None:
     # spikes is a list of lists of spike_times to plot
     # colors is a list of classes for spikes
     # peck_times is time into the trial a peck occurs
@@ -222,14 +222,14 @@ def _plot_motion_trials(motion,peck_times,title,spect,t_start,t_end):
 # endregion
 # region Prep Jobs
 
-def is_operant(site_dir):
+def is_operant(site_dir: str) -> bool:
     # TODO: Could do this smarter or in a different way
     return 'operant' in os.path.basename(os.path.normpath(site_dir))
 
-def is_playback(site_dir):
+def is_playback(site_dir: str) -> bool:
     return 'playback' in os.path.basename(os.path.normpath(site_dir))
 
-def is_communication(site_dir):
+def is_communication(site_dir: str) -> bool:
     return 'communication' in os.path.basename(os.path.normpath(site_dir))
 
 class GenStimInfoDB(luigi.Task):
@@ -706,7 +706,8 @@ class GenPlaybackSpikesDB(luigi.Task):
 
         out_df = {"Rendition_Index":[], "Rendition_Name":[],"Trial_Number":[],
                   "Spike_Times":[],"Start":[],"End":[],"Peck":[], "Rate":[], 
-                  "Bird":[], "Category":[], "Novel": [], "Informative_Trials":[]}
+                  "Bird":[], "Category":[], "Novel": [], "Informative_Trials":[],
+                  "PlaybackFile":[]}
         # Go through all stims, grouped by bird
         for bird in np.unique(playbacks_and_timings.bird_name):
             # all playbacks for this vocalizer
@@ -749,6 +750,7 @@ class GenPlaybackSpikesDB(luigi.Task):
                         out_df['Peck'].append(peck)
                         out_df['Spike_Times'].append(spike_times)
                         out_df['Rate'].append(rate)
+                        out_df['PlaybackFile'].append(trial_row.playback_file)
                         out_df['Category'].append(trial_row.condition_name)
                         out_df['Novel'].append(trial_row.novel)
                         out_df['Informative_Trials'].append(trial_row.informative_trials)
@@ -1606,12 +1608,13 @@ class DecodeLabelsNB(luigi.Task):
 
         cluster_ids_good = []
         for ix,cluster in ks_cluster_info.iterrows():
+            # TODO centralize this
             if cluster['group'] == 'good' and cluster.fr > 1.0:#  and cluster.fr > 5:#cluster.n_spikes > 8000:# or cluster['group'] == 'mua':
                 cluster_ids_good.append(cluster.cluster_id)
         cluster_ids_good = np.asarray(cluster_ids_good)
 
-        # T x Cluster
-        # TODO Firing rate
+        # T x Cluster zscored firing rate
+        # TODO Sample rate
         fs = 30000
         t_start = 0#np.floor(ks_spike_times.min()/fs)
         t_stop = np.ceil(ks_spike_times.max()/fs)
@@ -1791,6 +1794,7 @@ class PlotClusterDecoderResults(luigi.Task):
             plt.colorbar()
             os.makedirs(self.output().path,exist_ok=True)
             plt.savefig(os.path.join(self.output().path,"%s_%s_%s.png"%(stim,stim_df['novel'].iloc[0],stim_df['condition_name'].iloc[0])))
+# endregion
 
 class GenerateBinnedStimResponse(luigi.Task):
     site_dir = SiteParameter()
@@ -1844,12 +1848,12 @@ class SiteFigureGeneration(luigi.Task):
         # TODO
 
         # then thee PCA stuff
-        yield PlotStimPopulationPCA(site_dir=self.site_dir)
-        yield PlotBirdPopulationPCA(site_dir=self.site_dir)
-        if is_operant(self.site_dir):
-            yield PlotEventAlignedPCA(site_dir =self.site_dir)
-        yield PlotBehaviorTrials(site_dir=self.site_dir)
-        yield PlotDecoderResults(site_dir = self.site_dir,bin_size_s=.005)
+        #yield PlotStimPopulationPCA(site_dir=self.site_dir)
+        #yield PlotBirdPopulationPCA(site_dir=self.site_dir)
+        #if is_operant(self.site_dir):
+        #    yield PlotEventAlignedPCA(site_dir =self.site_dir)
+        #yield PlotBehaviorTrials(site_dir=self.site_dir)
+        #yield PlotDecoderResults(site_dir = self.site_dir,bin_size_s=.005)
         cluster_ids_good = []
         for ix,cluster in ks_cluster_info.iterrows():
             if cluster['group'] == 'good'  and cluster.fr > 1.0:#cluster.n_spikes > 8000:# or cluster['group'] == 'mua':
@@ -1863,6 +1867,7 @@ class SiteFigureGeneration(luigi.Task):
                 yield PlotClusterSummary(site_dir =self.site_dir, cluster=dict(cluster))
                 yield PlotSpikeRateByTrial(site_dir =self.site_dir, cluster=dict(cluster))
                 yield PlotClusterDecoderResults(site_dir =self.site_dir, cluster=dict(cluster),bin_size_s=.005)
+                yield PlotClusterSTRF(site_dir =self.site_dir, cluster=dict(cluster))
         cluster_ids_good = np.asarray(cluster_ids_good)
         yield PlotSiteSummary(site_dir = self.site_dir)
     

@@ -10,7 +10,7 @@ import scipy.io.wavfile
 import wavio
 from pathlib import PureWindowsPath
 
-def _parse_julie_filename_metadata(fname):
+def _parse_julie_filename_metadata(fname: str) -> dict:
     """Er
 
     MAT - male adult tutor
@@ -72,7 +72,7 @@ def _parse_julie_filename_metadata(fname):
 
     return metadata
 
-def _parse_filename_bird_type_data(fname):
+def _parse_filename_bird_type_data(fname: str) -> dict:
     # all we want to find is the CallType and the bird name
     fname = os.path.basename(fname)
     metadata = {"type":None,"source":None}
@@ -86,7 +86,7 @@ def _parse_filename_bird_type_data(fname):
             metadata['source'] = val
     return metadata
 
-def _parse_ladder_filename_data(fname):
+def _parse_ladder_filename_data(fname: str) -> dict:
     fname = os.path.basename(fname)
     fname = os.path.splitext(fname)[0]
     metadata = dict()
@@ -137,7 +137,7 @@ def _parse_ladder_filename_data(fname):
 
 
 
-def _transform_pyoperant_playback_csv(df, stim_loc):
+def _transform_pyoperant_playback_csv(df: pd.DataFrame, stim_loc: str) -> pd.DataFrame:
     """Transform dataframe into correct datatypes and derive columns
 
     New columns:
@@ -149,7 +149,7 @@ def _transform_pyoperant_playback_csv(df, stim_loc):
     """
     df = df.rename(columns={"index": "trial"})
 
-    def _convert_datetime(t):
+    def _convert_datetime(t: str) -> datetime.datetime:
         try:
             return datetime.datetime.strptime(t, "%Y-%m-%d %H:%M:%S.%f")
         except:
@@ -160,7 +160,7 @@ def _transform_pyoperant_playback_csv(df, stim_loc):
         lambda path: path.replace("\\", "/")
     )
 
-    def locate_stimulus_directory(path):
+    def locate_stimulus_directory(path: str) -> str:
         # Starts with the basename of the path, and goes up until it finds a file
         # that exists in stim_dir
         # TODO make sure this works on other projects
@@ -179,7 +179,7 @@ def _transform_pyoperant_playback_csv(df, stim_loc):
     )
 
     # Fill in duration column for dataframe by reading wav files
-    def _get_duration(wav_file):
+    def _get_duration(wav_file: str) -> float:
         # rate, data = scipy.io.wavfile.read(wav_file)
         w = wavio.read(wav_file)
         rate, data = w.rate, w.data
@@ -192,18 +192,18 @@ def _transform_pyoperant_playback_csv(df, stim_loc):
     return df[["duration", "stimulus_name", "trial", "time"]].join(metadata)
 
 
-def read_pyoperant_playback_csv(path, stim_loc):
+def read_pyoperant_playback_csv(path: str, stim_loc: str) -> pd.DataFrame:
     """Basically just load the csv"""
     df = pd.read_csv(path)
     return _transform_pyoperant_playback_csv(df, stim_loc=stim_loc)
 
 
-def save_pyoperant_db(df, dest_path):
+def save_pyoperant_db(df: pd.DataFrame, dest_path: str) -> None:
     """Pickle dataframe"""
     df.to_pickle(dest_path)
 
 
-def group_digital_code_trials(digital_codes):
+def group_digital_code_trials(digital_codes: list) -> list:
     """Group digital codes by the pyoperant session
 
     In one recording session, there may be multiple pyoperant sessions.
