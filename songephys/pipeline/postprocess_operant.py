@@ -1808,7 +1808,7 @@ class GenerateBinnedStimResponse(luigi.Task):
         return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","data","binned_spikes_%.2f.npy"%self.bin_size_s))
     def run(self):
         pass
-# endregion
+
 
 # region Behavior Plotting
 
