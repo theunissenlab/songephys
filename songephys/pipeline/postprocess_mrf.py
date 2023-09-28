@@ -21,10 +21,10 @@ from .postprocess_strf import GenerateSTRFRequirements
 from .postprocess_operant import SiteProjectConfig,GenStimInfoDB, GenPlaybackSpikesDB
 from .pipeline_utils import SiteParameter
 def _get_mrf_data_folder(site_dir,cluster):
-    return os.path.join(site_dir,"analysis","data","Cluster_%d"%cluster['cluster_id'],"MRF_B")
+    return os.path.join(site_dir,"analysis","data","Cluster_%d"%cluster['cluster_id'],"MRF")
 
 def _get_mrf_figure_folder(site_dir,cluster):
-    return os.path.join(site_dir,"analysis","figures","clusters_%s"%cluster['group'],"Cluster_%d"%cluster['cluster_id'],"MRF_B")
+    return os.path.join(site_dir,"analysis","figures","clusters_%s"%cluster['group'],"Cluster_%d"%cluster['cluster_id'],"MRF")
     
 
 class DataFrameColumn(luigi.Target): # TODO but not before lab meeting...
@@ -65,14 +65,30 @@ def _get_segments(data,sr,pad=50,amp_sr=1000,lp_hz=50, min_seg_size_ms=25,force_
     # find peaks in the derivative
     diff = np.diff(filtered)
     peaks, _ = find_peaks(diff, height=np.std(diff)*.5, distance=5)
+    amppad = int(pad * amp_sr / sr)
+    if peaks[0] > amppad + 50:
+        peaks = np.concatenate([[amppad+1],peaks])
+    # adjust peaks to be the first negative before the peak
+    for ix,peak in enumerate(peaks): # TODO this may be a bit too much
+        zeros_below_peak = np.where(diff<0)[0][np.where(diff<0)[0] < peak]
+        if len(zeros_below_peak) > 0:
+            peaks[ix] = zeros_below_peak[-1]
+        else:
+            peaks[ix] = amppad +1
+
     down_peaks, _ = find_peaks(-diff, height=np.std(diff)*.5)
+    # add the end to the downpeaks
+    down_peaks = np.concatenate([down_peaks,[len(diff)-1-amppad]])
     # now pair the peaks
     segments = []
     for ix, peak in enumerate(peaks):
-        if ix < len(peaks)-1:
-            next_peak = peaks[ix+1]
+        if ix < len(peaks):
+            if ix < len(peaks)-2:
+                next_peak = peaks[ix+1]
+            else:
+                next_peak = len(diff)-1-amppad
             possible_down_peaks = down_peaks[(down_peaks > peak) & (down_peaks < next_peak)]
-            if len(possible_down_peaks) > 0 and not force_next_up:
+            if len(possible_down_peaks) > 0 and (not force_next_up or next_peak - peak > .5*amp_sr):
                 # take the last possible down peak
                 down_peak = possible_down_peaks[-1]
             else:
@@ -117,7 +133,7 @@ class GenSegmentMPSDB(BaseTask):
         }
     
     def output(self):# SCHEMA TAG
-        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","raw","dfSongMPSSegments_sc-B_pad%d.pkl"%(self.padding_ms)))
+        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","raw","dfSongMPSSegments_sc-b_pad%d.pkl"%(self.padding_ms)))
     
     def run(self):
         # load the project config to get stim_drive location
@@ -162,6 +178,88 @@ class GenSegmentMPSDB(BaseTask):
 
         self.output().makedirs()
         df_song_segments.to_pickle(self.output().path)
+
+class PlotSegments(BaseTask):
+    """ Generates database of segments for each stim"""
+    site_dir = SiteParameter()
+    padding_ms = luigi.IntParameter(default=25)
+    extension = luigi.Parameter(default="png")
+    def requires(self):
+        return {
+            "segments": GenSegmentMPSDB(site_dir=self.site_dir,padding_ms=self.padding_ms),
+            "project_config": SiteProjectConfig(self.site_dir),
+            "playback_info": GenStimInfoDB(self.site_dir)
+        }
+    def output(self):
+        if not self.input()["playback_info"].path:
+            raise Exception("No pb_df found, Run GenStimInfoDB")
+        pb_df = pandas.read_pickle(self.input()["playback_info"].path)
+        num_stims = len(pb_df.name.unique())
+        outputs = []
+        for i in range(num_stims//10):
+            outputs.append(luigi.LocalTarget(os.path.join(self.site_dir,"analysis","figures","Segments","Segments_%d.%s"%(i,self.extension))))
+        return outputs
+    def run(self):
+        # load the segments database
+        df_song_segments = pandas.read_pickle(self.input()['segments'].path)
+        # load the project config to get stim_drive location
+        project_config = self.input()['project_config'].data()
+        stim_dir = os.path.join(project_config['LOCAL_RAW_FILES']['stimuli_drive'],"Operant")
+        # load playback db
+        playbacks_and_timings = pandas.read_pickle(self.input()['playback_info'].path)
+        
+        DBNOISE = 50  # Color Threshold for spectrogram
+
+        # group dataframe by the song name
+        spectrograms = []
+        segments = []
+        names = []
+        nstim = 0
+        for name, group in df_song_segments.groupby('Name'):
+            # load the playback file to get the spectrogram 
+            playback_file = playbacks_and_timings[playbacks_and_timings.name == name].iloc[0].playback_file
+            sr, data = wavfile.read(playback_file)
+            # now use BioSound to make the spectrogram
+            myBioSound = BioSound(soundWave=data, fs=sr, emitter='STRF', calltype = 'song')
+            myBioSound.spectroCalc(spec_sample_rate=1000, freq_spacing = 50, min_freq=0, max_freq=10000)
+
+            tfrep = myBioSound.spectro
+            t = myBioSound.to
+            f = myBioSound.fo
+
+            spectrograms.append((tfrep,t,f))
+            this_stim_segs = list(zip(group.tStart,group.tEnd))
+            segments.append(this_stim_segs)
+            names.append(name)
+            # Color map for spectrograms
+            spec_colormap()   # defined in 
+            if nstim % 10 == 10 - 1 or nstim == nstim-1:
+                f, arr_ax = plt.subplots(len(spectrograms), 1, sharex=True, dpi=200, figsize = (8,8))
+                for i in range((nstim % 10) +1):
+                    # if this is a multiple of 10 then plot the first 10 stims
+                    # Plot the spectrogram
+                    # The spectrogram
+                    tfrep,t,f = spectrograms[i]
+                    soundSpect = np.copy(tfrep)
+                    maxB = soundSpect.max()
+                    minB = maxB-DBNOISE
+                    soundSpect[soundSpect < minB] = minB
+                    minSpect = soundSpect.min()
+                    cmap = plt.get_cmap('SpectroColorMap')
+
+                    arr_ax[i].imshow(tfrep, extent=[t[0], t[-1], f[0]*1e-3, f[-1]*1e-3],
+                                aspect='auto', interpolation='nearest', origin='lower', cmap=cmap, vmin=minSpect, vmax=maxB)
+                    for st,end in segments[i]:
+                        arr_ax[i].axvspan(st,end,alpha=.3,color=np.random.rand(3,))
+                    arr_ax[i].text(np.mean(arr_ax[i].get_xlim()),arr_ax[i].get_ylim()[1]*.5,names[i],ha='center',va='top')
+                plt.xlabel('Temporal Frequency (Hz)')
+                plt.ylabel('Spectral Frequency (Cycles/KHz)')
+                self.output()[nstim//10].makedirs()
+                plt.savefig(self.output()[nstim//10].path)
+                spectrograms = []
+                names = []
+                segments = []
+            nstim += 1
 
 class GenSegmentSpikeDB(BaseTask):
     site_dir = SiteParameter()
@@ -248,131 +346,6 @@ class GenSegmentSpikeDB(BaseTask):
         print("Saving to %s"%self.output().path)
         segments_df.to_pickle(self.output().path)
 
-class GenerateMRFSegments(BaseTask): # Probably Deprecated
-    site_dir = SiteParameter()
-    cluster = luigi.DictParameter()
-    def requires(self):
-        return {
-            "segments" : GenSegmentSpikeDB(site_dir=self.site_dir)
-        }
-    def output(self):
-        return {
-            "chunk_id": luigi.LocalTarget(os.path.join(self.site_dir,"analysis","data","Cluster_%d"%self.cluster['cluster_id'],"dfMRFChunkID.pkl")),
-            "response": luigi.LocalTarget(os.path.join(self.site_dir,"analysis","data","Cluster_%d"%self.cluster['cluster_id'],'respMPS.npy')),
-            "stimuli": luigi.LocalTarget(os.path.join(self.site_dir,"analysis","data","Cluster_%d"%self.cluster['cluster_id'],'stimMPSFeat.pkl'))
-        }
-    def run(self):
-        pb_df = pandas.read_pickle(self.input()['pb_df'].path)
-        seg_df = pandas.read_pickle(self.input()['segments'].path)
-        minSilence = 10  # Minimum length of silence in points - time units given by stim sample rate
-        minSound = 10  # Minimum length of sound in points
-        segmentBuffer = 25 # Number of points on each side of segment for response and MPS - time units given by stim sample rate
-        respChunkLen = 500 # Response length in number of points 
-        ampfs = 1000 # TODO PUT IN ARGS
-
-        wHann = windows.hann(21, sym=True)   # The 21 ms (number of points) hanning window used to smooth the PSTH
-
-        stimMPS = []
-        respMPS = []
-        chunkID = {'set': [], 'indZero': [], 'indStart' : [], 'indEnd' : [], 'respIndStart' : [], 'respIndEnd' : []}
-
-        for ix,row in seg_df.iterrows():
-            # Get corresponding playback row
-            pb_row = pb_df[pb_df.name == row.Name].iloc[0]
-            # Get the stimulus
-            wavFile = pb_row.stim_rawfile
-            fs , soundStim = wavfile.read(wavFile)
-            soundLen = soundStim.size
-
-            pass
-
-        for ix,row in pb_df.iterrows():
-            wavFile = row.stim_rawfile
-
-            fs , soundStim = wavfile.read(wavFile)
-            soundLen = soundStim.size
-            
-            # Get segment information
-            segInfo = seg_df[seg_df.Name == row.name]
-
-            # Extract the MPS for each edge use 25 ms on each side as buffer
-            for jx,seg_row in segInfo.iterrows():
-                # First estimate MPS for chunk
-                indStart = max(0,segStart-segmentBuffer)
-                indEnd = min(segEnd+segmentBuffer,soundLen-1)
-
-                wavSound = soundStim[indStart:indEnd]
-
-                # Create BioSound Object and calculate basic sound features
-                myBioSound = BioSound(soundWave=wavSound, fs=fs, emitter='STRF', calltype = 'song')
-                myBioSound.spectroCalc(spec_sample_rate=1000, freq_spacing = 50, min_freq=0, max_freq=10000)
-                myBioSound.rms = myBioSound.sound.std() 
-                myBioSound.ampenv(cutoff_freq = 20, amp_sample_rate = 1000)
-                myBioSound.spectrum(f_high=10000)
-                myBioSound.mpsCalc(window=0.05, Norm = True)  # Norm equals true normalizes the spectrogram but not the MPS
-            
-                # Store in list
-                stimMPS.append(myBioSound.mps)
-
-                # Now extract response for the same chunk.
-                respChunk = np.zeros(respChunkLen) # TODO figure out if this is enough
-                indZero = int(segStart)
-    
-                indEnd = int(segEnd+segmentBuffer)
-                if indEnd > respDataLen:
-                    indEnd = respDataLen
-                respIndEnd = segmentBuffer + (indEnd-indZero)
-                if respIndEnd > respChunkLen:
-                    respIndEnd = respChunkLen
-                    indEnd = indZero + (respIndEnd-segmentBuffer)
-
-                respChunk[segmentBuffer:respIndEnd] = respSmoothed[indZero:indEnd]
-
-                respIndStart = 0
-                indStart = indZero - segmentBuffer
-                if indStart < 0:
-                    indStart = 0
-                    respIndStart = segmentBuffer - indZero
-
-                respChunk[respIndStart:segmentBuffer] = respSmoothed[indStart:indZero]
-
-                respMPS.append(respChunk)
-                chunkID['set'].append(ix)
-                chunkID['indStart'].append(indStart)
-                chunkID['indZero'].append(indZero)
-                chunkID['indEnd'].append(indEnd)
-                chunkID['respIndStart'].append(respIndStart)
-                chunkID['respIndEnd'].append(respIndEnd)
-
-        # Save the chunkID dictionary
-        self.output()["chunk_id"].makedirs()
-        chunkID = pandas.DataFrame(chunkID)
-        chunkID.to_pickle(self.output()["chunk_id"].path)
-
-        # save response
-        respMPS = np.array(respMPS)
-        np.save(self.output()["response"].path, respMPS)
-        
-        # save stims
-        stimMPS = np.array(stimMPS)
-        # Use center of MPS for feature
-
-        # Find the indices of the center
-        wt = myBioSound.wt
-        wf = myBioSound.wf
-        indwt = np.argwhere((wt > -100) & (wt < 100))
-        indwf = np.argwhere( (wf >= 0) & (wf <6e-3))
-
-        stimMPSFeat = stimMPS[:,int(indwf[0]):int(indwf[-1]+1),int(indwt[0]):int(indwt[-1]+1)].reshape(stimMPS.shape[0], len(indwt)*len(indwf))
-        stimMPSFeat = stimMPSFeat - stimMPSFeat.mean(axis=0)
-        stimOutputStruct = dict({
-            "stimMPS": stimMPSFeat,
-            "wt": wt[indwt],
-            "wf": wf[indwf],
-            "segmentBuffer": segmentBuffer
-        })
-        pickle.dump(stimOutputStruct,open(self.output()["stimuli"].path,'wb'))
-
 class GenerateMRF(BaseTask): # In progress
     site_dir = SiteParameter()
     cluster = luigi.DictParameter()
@@ -411,9 +384,9 @@ class GenerateMRF(BaseTask): # In progress
             "avg_resp": resp_kdes.mean(axis=0)
         })
         pickle.dump(out_resp_dict,open(self.output()["response"].path,'wb'))
-
+        
         # Perform cross-validated ridge regression for all PCs
-        Alphas = (1e7, 1e8, 1e9, 1e10)   # Ridge hyperparameter coeffiecients(1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 
+        Alphas = (1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13)   # Ridge hyperparameter coeffiecients(1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 
         nPC = respPC.shape[1]
 
 
@@ -426,14 +399,12 @@ class GenerateMRF(BaseTask): # In progress
         respPCPred = np.zeros(respPC.shape)
         MRF = np.zeros((nPC, stim_mps_feat.shape[1]))
 
+        clf = RidgeCV(alphas=Alphas)
+        clf.fit(stim_mps_feat, respPC)
+        respPCPred = clf.predict(stim_mps_feat)
+        MRF = clf.coef_
+        print('Best alpha = %g R2 = %.3f' % (clf.alpha_, clf.score(stim_mps_feat, respPC)))
 
-        for iPC in range(nPC):
-            clf = RidgeCV(alphas=Alphas)
-            clf.fit(stim_mps_feat, respPC[:,iPC])
-            respPCPred[:,iPC] = clf.predict(stim_mps_feat,cv=3)
-            MRF[iPC,:] = clf.coef_
-            print('PC %d: Best alpha = %g R2 = %.3f' % (iPC, clf.alpha_, clf.score(stim_mps_feat, respPC[:,iPC])))
-        # save the calculated MRFs for each PC
         dictOutputMRF = dict({
             "MRF": MRF,
             "wt": wt,
