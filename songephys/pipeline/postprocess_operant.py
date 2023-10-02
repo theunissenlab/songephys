@@ -4,6 +4,7 @@ import luigi
 import pandas
 import numpy as np
 import math
+import pickle
 from scipy.io import wavfile
 from scipy import signal,stats
 import matplotlib.pyplot as plt
@@ -16,7 +17,7 @@ from sklearn.naive_bayes import GaussianNB
 from scipy.stats import zscore
 
 from .file_setup import SiteProjectConfig, SiteConfig
-from .pipeline_utils import SiteParameter
+from .pipeline_utils import SiteParameter, BaseTask
 from .preprocess_sound import MergeOperantCSV, MergePlaybacksCSV
 from .preprocess_ephys import KiloSortSorting
 from ..plot_utils import plot_pecking_test_data, color_by_reward
@@ -1831,6 +1832,274 @@ class PlotBehaviorTrials(luigi.Task):
 
 #endregion
 
+# region Coherence
+from soundsig.coherence import multitapered_coherence
+
+
+class GenPlaybackOperantCoherence(BaseTask):
+    """Generate a coherence plot for each cluster"""
+    site_dir = SiteParameter()
+    cluster = luigi.DictParameter()
+    operant_site = SiteParameter()
+    operant_cluster = luigi.DictParameter()
+    window_size = luigi.IntParameter(default=1024)
+    min_trials = luigi.IntParameter(default=4)
+    bSmooth = luigi.BoolParameter(default=False)
+    def requires(self):
+        return {
+            "playback": GenPlaybackSpikesDB(site_dir=self.site_dir,cluster=self.cluster),
+            "operant": GenPlaybackSpikesDB(site_dir=self.operant_site,cluster=self.operant_cluster)
+        }
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","data","Cluster_%d"%self.cluster['cluster_id'],"coherence_pbvsop_%d_%s.pkl"%(self.window_size,"smooth" if self.bSmooth else "hist")))
+    def run(self):
+        # load the playback spikes
+        pb_spike_df = pandas.read_pickle(self.input()['playback'].path)
+        op_spike_df = pandas.read_pickle(self.input()["operant"].path)
+        
+        # filter pb to just be the stims that operant also had
+        pb_spike_df = pb_spike_df[pb_spike_df.Rendition_Name.isin(op_spike_df.Rendition_Name)]
+        # go through each stim
+        # TODO: can group here by rewarded and not rewarded etc... for now lets just do all stims
+        # sub_df = pb_spike_df[pb_spike_df.Rewarded == 1] or something
+        output_dict = dict()
+        for condition, condition_df in [('Playback',pb_spike_df),('Operant',op_spike_df)]:
+            categories = {
+                "Rewarded": (condition_df["Category"] == "Rewarded"),
+                "Unrewarded": (condition_df["Category"] == "Unrewarded"),
+                "All": np.ones(len(condition_df)).astype(np.bool)
+            }
+            output_dict[condition] = dict()
+            for category_name, category_selector in categories.items():
+                category_df = condition_df[category_selector]
+                X = []
+                for stim_name,stim_df in category_df.groupby("Rendition_Name"):
+                    nTrials = len(stim_df)
+                    if nTrials < self.min_trials:
+                        continue
+
+                    # Get actual response using a weighted sum of gaussians
+                    spike_times = stim_df.Spike_Times - stim_df.Start
+                    peck_times = stim_df.Peck.values.astype(float)
+                    peck_times[peck_times == 0.0] = np.nan
+
+                    #split them into two groups, even trials and odd trials
+                    even_trials = np.arange(0,nTrials,2)
+                    odd_trials = np.arange(1,nTrials,2)
+
+                    concatenated_spike_times_even = np.concatenate(np.asarray(spike_times.iloc[even_trials]))
+                    peck_times_even = peck_times[even_trials]
+                    concatenated_spike_times_odd = np.concatenate(np.asarray(spike_times.iloc[odd_trials]))
+                    peck_times_odd = peck_times[odd_trials]
+                    weights_even = np.array([1/(len(peck_times_even) - sum(peck_times_even < x)) for x in concatenated_spike_times_even])
+                    weights_odd = np.array([1/(len(peck_times_odd) - sum(peck_times_odd < x)) for x in concatenated_spike_times_odd])
+                    x_d = np.linspace(0,6,6001)#1ms bins
+                    if self.bSmooth:
+                        resp_even = sum(norm(xi,scale=.008).pdf(x_d)*w for xi,w in zip(concatenated_spike_times_even,weights_even))
+                        resp_odd = sum(norm(xi,scale=.008).pdf(x_d)*w for xi,w in zip(concatenated_spike_times_odd,weights_odd))
+                    else:
+                        resp_even = np.histogram(concatenated_spike_times_even,bins=x_d,weights=weights_even)[0]
+                        resp_odd = np.histogram(concatenated_spike_times_odd,bins=x_d,weights=weights_odd)[0]
+                    # TODO truncate by max peck_times
+                    if np.all(resp_even == 0) or np.all(resp_odd == 0):
+                        print("Stim: %s bad for %s"%(stim_name,category_name))
+                    X.append(np.array([resp_even,resp_odd]))
+                coherence_struct = multitapered_coherence(X,sampling_rate=1000,chunk_size=self.window_size)
+                output_dict[condition][category_name] = coherence_struct
+        self.output().makedirs()
+        pickle.dump(output_dict,open(self.output().path,'wb'))
+
+class PlotPlaybackOperantCoherence(BaseTask):
+    """Generate a coherence plot for each cluster"""
+    site_dir = SiteParameter()
+    cluster = luigi.DictParameter()
+    operant_site = SiteParameter()
+    operant_cluster = luigi.DictParameter()
+    window_size = luigi.IntParameter(default=1024)
+    min_trials = luigi.IntParameter(default=4)
+    bSmooth = luigi.BoolParameter(default=False)  
+    extension = luigi.Parameter(default="png")
+    def requires(self):
+        return GenPlaybackOperantCoherence(site_dir=self.site_dir,cluster=self.cluster,operant_site=self.operant_site,operant_cluster=self.operant_cluster,window_size=self.window_size,min_trials=self.min_trials,bSmooth=self.bSmooth)
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","figures","Cluster_%d"%self.cluster['cluster_id'],"coherence_pbvsop_%d_%s_All.%s"%(self.window_size,"smooth" if self.bSmooth else "hist",self.extension)))
+    def run(self):
+        coherence_struct = pickle.load(open(self.input().path,'rb'))
+
+        # first plot all
+        for condition in ['Playback','Operant']:
+            bi = _plot_coherence(coherence_struct[condition]['All'],self.extension)
+            print("All: %s %f"%(condition,bi))
+        plt.title('Coherence')
+        self.output().makedirs()
+        plt.savefig(self.output().path)
+        plt.close()
+
+class GenOperantCoherence(BaseTask):
+    """Generate a coherence plot for each cluster"""
+    site_dir = SiteParameter()
+    cluster = luigi.DictParameter()
+    window_size = luigi.IntParameter(default=1024)
+    min_trials = luigi.IntParameter(default=4)
+    bSmooth = luigi.BoolParameter(default=False)
+    def requires(self):
+        return GenPlaybackSpikesDB(site_dir=self.site_dir,cluster=self.cluster)
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","data","Cluster_%d"%self.cluster['cluster_id'],"coherence_%d_%s.pkl"%(self.window_size,"smooth" if self.bSmooth else "hist")))
+    def run(self):
+        # load the playback spikes
+        pb_spike_df = pandas.read_pickle(self.input().path)
+
+        
+        # go through each stim
+        # TODO: can group here by rewarded and not rewarded etc... for now lets just do all stims
+        # sub_df = pb_spike_df[pb_spike_df.Rewarded == 1] or something
+        categories = {
+            "Rewarded": (pb_spike_df["Category"] == "Rewarded"),
+            "Unrewarded": (pb_spike_df["Category"] == "Unrewarded"),
+            "Novel": (pb_spike_df["Novel"] == "Novel") & (pb_spike_df["Informative_Trials"] <= 10),
+            "Learned": (pb_spike_df["Novel"] == "Learned") & (pb_spike_df["Informative_Trials"] <= 10),
+            "All": np.ones(len(pb_spike_df)).astype(np.bool)
+        }
+        output_dict = dict()
+        for category_name, category_selector in categories.items():
+            category_df = pb_spike_df[category_selector]
+            X = []
+            for stim_name,stim_df in category_df.groupby("Rendition_Name"):
+                nTrials = len(stim_df)
+                if nTrials < self.min_trials:
+                    continue
+
+                # Get actual response using a weighted sum of gaussians
+                spike_times = stim_df.Spike_Times - stim_df.Start
+                peck_times = stim_df.Peck.values.astype(float)
+                peck_times[peck_times == 0.0] = np.nan
+
+                #split them into two groups, even trials and odd trials
+                even_trials = np.arange(0,nTrials,2)
+                odd_trials = np.arange(1,nTrials,2)
+
+                concatenated_spike_times_even = np.concatenate(np.asarray(spike_times.iloc[even_trials]))
+                peck_times_even = peck_times[even_trials]
+                concatenated_spike_times_odd = np.concatenate(np.asarray(spike_times.iloc[odd_trials]))
+                peck_times_odd = peck_times[odd_trials]
+                weights_even = np.array([1/(len(peck_times_even) - sum(peck_times_even < x)) for x in concatenated_spike_times_even])
+                weights_odd = np.array([1/(len(peck_times_odd) - sum(peck_times_odd < x)) for x in concatenated_spike_times_odd])
+                x_d = np.linspace(0,6,6001)#1ms bins
+                if self.bSmooth:
+                    resp_even = sum(norm(xi,scale=.008).pdf(x_d)*w for xi,w in zip(concatenated_spike_times_even,weights_even))
+                    resp_odd = sum(norm(xi,scale=.008).pdf(x_d)*w for xi,w in zip(concatenated_spike_times_odd,weights_odd))
+                else:
+                    resp_even = np.histogram(concatenated_spike_times_even,bins=x_d,weights=weights_even)[0]
+                    resp_odd = np.histogram(concatenated_spike_times_odd,bins=x_d,weights=weights_odd)[0]
+                # TODO truncate by max peck_times
+                if np.all(resp_even == 0) or np.all(resp_odd == 0):
+                    print("Stim: %s bad for %s"%(stim_name,category_name))
+                X.append(np.array([resp_even,resp_odd]))
+            coherence_struct = multitapered_coherence(X,sampling_rate=1000,chunk_size=self.window_size)
+            output_dict[category_name] = coherence_struct
+        self.output().makedirs()
+        pickle.dump(output_dict,open(self.output().path,'wb'))
+
+
+def compute_coherence_mean(x):
+    '''
+    x: 3dim: 
+    '''
+    dimx, dimy, dimz = x.shape
+    n = dimx*(dimy-1.0)
+    return ((np.sum(np.sum(x, 0),0) - np.sum(np.diagonal(x),1))/n)
+
+def compute_bits_info(x, delta):
+    '''
+    x: positive coherence
+    '''
+    # using a bound to zero out coherence under 0.05 CI
+    x[np.argwhere(x<np.percentile(x, 95))]=0
+    return np.sum(-np.log2(1-x)) * delta
+
+def viz(freqs, co_mean, bit, plot_error=False, error=False, output=False, save=False, format='eps'):
+    x = np.fft.fftshift(freqs)
+    y = np.fft.fftshift(co_mean)
+    plt.plot(x, y, "-k")
+    xaxis = np.max(freqs)
+    plt.xlim(0, 50)
+    plt.ylim(0, 1)
+    
+    if plot_error:
+        plt.fill_between(x, np.fft.fftshift(error[0]), np.fft.fftshift(error[1]), alpha=0.5)
+    if save:
+        plt.savefig(output, format=format)
+
+def viz_wrapper(freqs,
+               co_mean,
+               bit,
+               coherence_bounds,
+               output:str=None,
+               save:bool=False,
+               format:str='eps'):
+    error_prep = coherence_bounds
+    error_all = np.vstack([compute_coherence_mean(error_prep[i]) for i in range(len(error_prep))])
+
+    viz(freqs, co_mean, bit, plot_error=True, error=error_all, output=output, save=save, format=format)
+def _plot_coherence(cstruct,extension):
+    coherence_mean = compute_coherence_mean(cstruct["coherence"])
+    delta = np.fft.fftshift(cstruct["freqs"])[1]-np.fft.fftshift(cstruct["freqs"])[0]
+    bits_info = compute_bits_info(coherence_mean.copy(), delta)
+    viz_wrapper(cstruct['freqs'], coherence_mean, bits_info,
+                cstruct['coherence_bounds'],format=extension)
+    return bits_info
+    
+class PlotOperantCoherence(BaseTask):
+    site_dir = SiteParameter()
+    cluster = luigi.DictParameter()
+    window_size = luigi.IntParameter(default=1024)
+    bSmooth = luigi.BoolParameter(default=False)
+    extension = luigi.Parameter(default="png")
+    def requires(self):
+        return GenOperantCoherence(site_dir=self.site_dir,cluster=self.cluster,window_size=self.window_size,bSmooth=self.bSmooth)
+    def output(self):
+        return dict({
+            "All": luigi.LocalTarget(os.path.join(self.site_dir,"analysis","figures","clusters_%s"%self.cluster['group'],"Cluster_%d"%self.cluster['cluster_id'],"Coherence","coherence_%d_%s.%s"%(self.window_size,"smooth" if self.bSmooth else "hist",self.extension))),
+            "Reward": luigi.LocalTarget(os.path.join(self.site_dir,"analysis","figures","clusters_%s"%self.cluster['group'],"Cluster_%d"%self.cluster['cluster_id'],"Coherence","coherence_Reward_%d_%s.%s"%(self.window_size,"smooth" if self.bSmooth else "hist",self.extension))),
+            "Novel": luigi.LocalTarget(os.path.join(self.site_dir,"analysis","figures","clusters_%s"%self.cluster['group'],"Cluster_%d"%self.cluster['cluster_id'],"Coherence","coherence_Novel_%d_%s.%s"%(self.window_size,"smooth" if self.bSmooth else "hist",self.extension)))
+        })
+    def run(self):
+        coherence_struct = pickle.load(open(self.input().path,'rb'))
+
+        # first plot all
+        plt.figure()
+        bi = _plot_coherence(coherence_struct['All'],self.extension)
+        plt.title('Coherence')
+        print("-------")
+        print("All: Cluster %d: %f bits"%(self.cluster['cluster_id'],bi))
+        self.output()['All'].makedirs()
+        plt.savefig(self.output()['All'].path)
+        plt.close()
+
+        # now rewarded vs unrewarded
+        plt.figure()
+        for category_name in ['Rewarded', 'Unrewarded']:
+            bi = _plot_coherence(coherence_struct[category_name],self.extension)
+            print("%s: Cluster %d: %f bits"%(category_name,self.cluster['cluster_id'],bi))
+        plt.title('Rewarded vs Unrewarded')
+        self.output()["Reward"].makedirs()
+        plt.savefig(self.output()["Reward"].path)
+        plt.close()
+
+        # now Novel vs Learned
+        plt.figure()
+        for category_name in ['Novel', 'Learned']:
+            bi = _plot_coherence(coherence_struct[category_name],self.extension)
+            print("%s: Cluster %d: %f bits"%(category_name,self.cluster['cluster_id'],bi))
+        plt.title('Novel vs Learned')
+        self.output()["Novel"].makedirs()
+        plt.savefig(self.output()["Novel"].path)
+        plt.close()
+
+
+# endregion
+
 # region Wrapper Tasks 
 class SiteFigureGeneration(luigi.Task):
     site_dir = SiteParameter()
@@ -1867,7 +2136,6 @@ class SiteFigureGeneration(luigi.Task):
                 yield PlotClusterSummary(site_dir =self.site_dir, cluster=dict(cluster))
                 yield PlotSpikeRateByTrial(site_dir =self.site_dir, cluster=dict(cluster))
                 yield PlotClusterDecoderResults(site_dir =self.site_dir, cluster=dict(cluster),bin_size_s=.005)
-                yield PlotClusterSTRF(site_dir =self.site_dir, cluster=dict(cluster))
         cluster_ids_good = np.asarray(cluster_ids_good)
         yield PlotSiteSummary(site_dir = self.site_dir)
     

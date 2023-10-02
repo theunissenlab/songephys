@@ -19,12 +19,12 @@ from strfpy import preprocSound
 
 from .postprocess_strf import GenerateSTRFRequirements
 from .postprocess_operant import SiteProjectConfig,GenStimInfoDB, GenPlaybackSpikesDB
-from .pipeline_utils import SiteParameter
+from .pipeline_utils import SiteParameter, BaseTask
 def _get_mrf_data_folder(site_dir,cluster):
-    return os.path.join(site_dir,"analysis","data","Cluster_%d"%cluster['cluster_id'],"MRF")
+    return os.path.join(site_dir,"analysis","data","Cluster_%d"%cluster['cluster_id'],"MRF_Figs")
 
 def _get_mrf_figure_folder(site_dir,cluster):
-    return os.path.join(site_dir,"analysis","figures","clusters_%s"%cluster['group'],"Cluster_%d"%cluster['cluster_id'],"MRF")
+    return os.path.join(site_dir,"analysis","figures","clusters_%s"%cluster['group'],"Cluster_%d"%cluster['cluster_id'],"MRF_Figs")
     
 
 class DataFrameColumn(luigi.Target): # TODO but not before lab meeting...
@@ -38,14 +38,6 @@ class DataFrameColumn(luigi.Target): # TODO but not before lab meeting...
     def data(self):
         return self.df[self.column]
 
-class BaseTask(luigi.Task):
-    force = luigi.BoolParameter()
-    def complete(self):
-        outputs = luigi.task.flatten(self.output())
-        for output in outputs:
-            if self.force and output.exists():
-                output.remove()
-        return all(map(lambda output: output.exists(), outputs))
 def _old_get_segments(data,sr,pad=50,amp_sr=1000,lp_hz=50, min_seg_size_ms=25):
     data = np.pad(data, (pad,0), 'constant', constant_values=(0, 0))
     # calculate ampenv with biosound
@@ -120,8 +112,98 @@ def _generate_MPS(data,sr,mps_sr=1000):
     wf = myBioSound.wf[indwf]
     return mps, wt, wf
 
-
 class GenSegmentMPSDB(BaseTask):
+    """Generate a database of segments for each stim from the segment database generated in GenerateSegmentationDB"""
+    site_dir = SiteParameter()
+    padding_ms = luigi.IntParameter(default=25)
+
+    def requires(self):
+        return {
+            "project_config": SiteProjectConfig(self.site_dir),
+            "playback_info": GenStimInfoDB(self.site_dir)
+        }
+    def output(self):# SCHEMA TAG
+        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","raw","dfSongMPSSegments_fromdf_pad%d.pkl"%(self.padding_ms)))
+    
+    def run(self):
+        # load the project config to get stim_drive location
+        project_config = self.input()['project_config'].data()
+        rend_seg_df = pandas.read_pickle('/media/lthomas/Ephys/Data/OperantEphys/BluBlu1312F/Stimuli/rend_seg_soundsep_df.pkl')
+        stiminfo = pandas.read_csv("/media/lthomas/Ephys/Data/OperantEphys/BluBlu1312F/Stimuli/StimInfo.csv")
+
+        playbacks_and_timings = pandas.read_pickle(self.input()['playback_info'].path)
+        df_song_segments = {"Bird":[],"Name":[],"tStart":[], "tEnd":[], "MPS":[], "padding_ms":[],'wt':[],'wf':[]}
+
+        extend_segments = False
+        # Go through all emitters
+        for bird in np.unique(playbacks_and_timings.bird_name):
+            bird_df = playbacks_and_timings[(playbacks_and_timings.bird_name == bird)]
+            # all unique stim files for each emitter
+            for song in np.unique(bird_df.name):
+                # get all playbacks of this stim file
+                song_df = bird_df[bird_df.name == song]
+                row = song_df.iloc[0]
+
+                # read the wav data
+                sr, data = wavfile.read(row.playback_file)
+
+                # get the renditions for this song
+                rend_info = stiminfo[stiminfo.Filename == song].iloc[0]
+                segments = []
+                for rend_ind in range(1,4):
+                    rend_id = rend_info['rend%d'%rend_ind]
+                    tStart = rend_info['rend%d_st'%rend_ind]
+
+                    # get this rendition's segments
+                    rend_seg = rend_seg_df[(rend_seg_df.Rendition == rend_id) & (rend_seg_df.Bird == rend_info.bird_name)].iloc[0].Segments
+                    # min_seg_size_ms = 50
+                    for iseg,segment in enumerate(rend_seg):
+                        seg = [tStart+segment[0], tStart+segment[1]]
+                        # if segments are too short dont include them
+                        # if iseg>0 and seg[1] - seg[0] < min_seg_size_ms/1000:
+                        #     segments[-1][1] = seg[1]
+                        # else:
+                        if extend_segments and iseg>0:
+                            segments[-1][1] = seg[0]
+                            segments.append(seg)                
+                            
+
+                        segments.append([tStart+segment[0], tStart+segment[1]])
+
+                for segment in segments:
+                    # if segments are too short dont include them
+
+                    # if segment[1] - segment[0] < min_seg_size_ms/1000:
+                    #     continue
+
+                    # Generate MRF for this segment
+                    samp_start = max(0, int(segment[0]*sr) - int(self.padding_ms/1000*sr))
+                    samp_end = min(int(segment[1]*sr + self.padding_ms/1000*sr), len(data))
+                    if samp_end - samp_start < 2*self.padding_ms/1000*sr:
+                        samp_start = samp_end - 2*int(self.padding_ms/1000*sr) - 1
+                    if samp_start < 0:
+                        samp_end -= samp_start
+                        samp_start = 0
+                    data_segment = data[samp_start:samp_end]
+                    mps, wt, wf = _generate_MPS(data_segment,sr)
+
+                    df_song_segments['Bird'].append(bird)
+                    df_song_segments['Name'].append(song)
+                    df_song_segments['tStart'].append(segment[0])
+                    df_song_segments['tEnd'].append(segment[1])
+                    df_song_segments['MPS'].append(mps)
+                    df_song_segments['wt'].append(wt)
+                    df_song_segments['wf'].append(wf)
+                    df_song_segments['padding_ms'] = self.padding_ms
+
+            
+        df_song_segments = pandas.DataFrame(df_song_segments)
+
+        self.output().makedirs()
+        df_song_segments.to_pickle(self.output().path)
+
+
+class GenSegmentMPSDB_manual(BaseTask):
     """ Generates database of segments for each stim"""
     site_dir = SiteParameter()
     padding_ms = luigi.IntParameter(default=25)
@@ -373,6 +455,8 @@ class GenerateMRF(BaseTask): # In progress
                 resp_kdes[ix,:] = row.KDE[:kde_len]
             else:
                 resp_kdes[ix,:row.KDE.shape[0]] = row.KDE
+            
+            
 
         # Calculate the PCs
         pcaResp = PCA(n_components=10)
@@ -449,7 +533,7 @@ class PlotPCMRFs(BaseTask): # good
             maxabs = np.max((MRFPlot.max(), -MRFPlot.min()))
             cmap = plt.get_cmap('jet')
             ex = (wt.min(), wt.max(), wf.min()*1e3, wf.max()*1e3)
-            plt.imshow(MRFPlot,  aspect='auto', origin='lower', cmap=cmap, extent=ex) # interpolation='spline16',
+            plt.imshow(MRFPlot,  aspect='auto', origin='lower', cmap=cmap, extent=ex, interpolation='spline16')
             plt.ylabel('Spectral Frequency (Cycles/KHz)')
             plt.xlabel('Temporal Frequency (Hz)')
             plt.title('PC%d MRF'%i)
@@ -466,7 +550,7 @@ class PlotPCMRFs(BaseTask): # good
 class PlotMRFPCs(BaseTask): # good
     site_dir = SiteParameter()
     cluster = luigi.DictParameter()
-    nPCs = luigi.IntParameter(default=5)
+    nPCs = luigi.IntParameter(default=10)
     extension = luigi.Parameter(default="png")
     def requires(self):
         return GenerateMRF(site_dir=self.site_dir,cluster=self.cluster)
@@ -536,7 +620,7 @@ class PlotMRFPredictedResponses(BaseTask):
     site_dir = SiteParameter()
     cluster = luigi.DictParameter()
     stim_number = luigi.IntParameter(default=-1) # -1 will do all stims
-    nPC = luigi.IntParameter(default=5)
+    nPC = luigi.IntParameter(default=10)
     extension = luigi.Parameter(default="png")
     def requires(self):
         return {
@@ -563,6 +647,8 @@ class PlotMRFPredictedResponses(BaseTask):
         pcResp = pickle.load(open(self.input()["mrf"]["response"].path,'rb'))["pcaResp"]
 
         seg_df = pickle.load(open(self.input()["segments"].path,'rb'))
+        # filter out segments with no trials
+        seg_df = seg_df[seg_df.Trials > 0]
 
         # plot predicted responses
         # Generate, Store and Plot the Predictions by rejoining the predictions for each segment.
@@ -586,6 +672,7 @@ class PlotMRFPredictedResponses(BaseTask):
             actual_resps = []
             sampleLens = []
             stim_names = []
+            start_stops = []
             output_targets = self.output()
             stim_ix = 0
             nstims = len(pb_df.Rendition_Name.unique())
@@ -617,24 +704,26 @@ class PlotMRFPredictedResponses(BaseTask):
                 respPrediction = np.zeros_like(resp)
 
                 stim_seg_df = seg_df[seg_df.Name == stim_name]
+                samp_start_stop = []        
                 for iseg,seg_row in stim_seg_df.iterrows():
                     # Start the prediction with the mean PC
                     samp_padding = int(seg_row.padding_ms)
-                    samp_start = int(seg_row.tStart*1000)
-                    samp_end = min(int(seg_row.tEnd*1000),samp_start+500-samp_padding)# TODO make this param
-
-                    respIndStart = samp_padding
-                    respIndEnd = respIndStart + (samp_end-samp_start)
-                    respPrediction[samp_start:samp_end] += pcResp.mean_[respIndStart:respIndEnd]
+                    samp_start = int(seg_row.tStart*1000 - samp_padding)
+                    # samp_end = min(int(seg_row.tEnd*1000),samp_start+500-samp_padding)# TODO make this param
+                    samp_end = min(len(respPrediction)-1,samp_start+500-samp_padding*2)
+                    samp_start_stop.append((seg_row.tStart,seg_row.tEnd))
+                    respIndStart = max(0,-1*samp_start)
+                    respIndEnd = respIndStart + (samp_end-max(0,samp_start))
+                    respPrediction[max(0,samp_start):samp_end] += pcResp.mean_[respIndStart:respIndEnd]
                     # respPrediction[chunkID['indZero'][iChunk]:chunkID['indEnd'][iChunk]] += pcResp.mean_[segmentBuffer:chunkID['respIndEnd'][iChunk]]
                     # respPrediction[chunkID['indStart'][iChunk]:chunkID['indZero'][iChunk]] += pcResp.mean_[chunkID['respIndStart'][iChunk]:segmentBuffer]
                     
                     # Now add contribution of each PC fit if R2 above threshold
                     for iPC in range(self.nPC):
-                        respPrediction[samp_start:samp_end] += respPCPred[iseg, iPC]*pcResp.components_[iPC,respIndStart:respIndEnd]
+                        respPrediction[max(0,samp_start):samp_end] += respPCPred[iseg, iPC]*pcResp.components_[iPC,respIndStart:respIndEnd]
                         # respPrediction[chunkID['indZero'][iChunk]:chunkID['indEnd'][iChunk]] += respPCPred[iChunk, iPC]*pcResp.components_[iPC,segmentBuffer:chunkID['respIndEnd'][iChunk]]
                         # respPrediction[chunkID['indStart'][iChunk]:chunkID['indZero'][iChunk]] += respPCPred[iChunk, iPC]*pcResp.components_[iPC,chunkID['respIndStart'][iChunk]:segmentBuffer]
-
+                start_stops.append(samp_start_stop)
                 # Get raw spike data divided into two for coherency calculations
                 # if len(row.rawSpikeIndicies) > 1:
                 #     psthdata = preprocSound.split_psth(row.rawSpikeIndicies, resp.shape[0])
@@ -659,6 +748,9 @@ class PlotMRFPredictedResponses(BaseTask):
                         ax.yaxis.set_ticklabels([])
                         # # put text showing how many trials
                         ax.text(np.mean(ax.get_xlim()),ax.get_ylim()[1]*.9,stim_names[i],ha='center',va='top')
+
+                        for start,stop in start_stops[i]:
+                            ax.axvspan(start,stop,alpha=.3,color=np.random.rand(3,))
                     arr_ax[-1].set_xlabel('Time (s)')
                     plt.legend()
                     file_target = output_targets[stim_ix//10]
@@ -667,6 +759,7 @@ class PlotMRFPredictedResponses(BaseTask):
                     pred_resps = []
                     actual_resps = []
                     stim_names = []
+                    start_stops = []
                     plt.close()
                 stim_ix += 1
         else:
@@ -703,21 +796,23 @@ class PlotMRFPredictedResponses(BaseTask):
 
             stim_seg_df = seg_df[seg_df.Name == stim_name]
             samp_start_stop = []
-            for iseg,seg_row in stim_seg_df.iterrows():
+            for iseg, seg_row in stim_seg_df.iterrows():
+            # for iseg,seg_row in stim_seg_df.iterrows():
                 # Start the prediction with the mean PC
                 samp_padding = int(seg_row.padding_ms)
-                samp_start = int(seg_row.tStart*1000)
-                samp_end = min(int(seg_row.tEnd*1000),samp_start+500-samp_padding)# TODO make this param
+                samp_start = int(seg_row.tStart*1000 - samp_padding)
+                # samp_end = min(int(seg_row.tEnd*1000),samp_start+500-samp_padding)# TODO make this param
+                samp_end = min(len(respPrediction)-1,samp_start+500-samp_padding*2)
                 samp_start_stop.append((seg_row.tStart,seg_row.tEnd))
-                respIndStart = samp_padding
-                respIndEnd = respIndStart + (samp_end-samp_start)
-                respPrediction[samp_start:samp_end] += pcResp.mean_[respIndStart:respIndEnd]
+                respIndStart = max(0,-1*samp_start)
+                respIndEnd = respIndStart + (samp_end-max(0,samp_start))
+                respPrediction[max(0,samp_start):samp_end] += pcResp.mean_[respIndStart:respIndEnd]
                 # respPrediction[chunkID['indZero'][iChunk]:chunkID['indEnd'][iChunk]] += pcResp.mean_[segmentBuffer:chunkID['respIndEnd'][iChunk]]
                 # respPrediction[chunkID['indStart'][iChunk]:chunkID['indZero'][iChunk]] += pcResp.mean_[chunkID['respIndStart'][iChunk]:segmentBuffer]
                 
                 # Now add contribution of each PC fit if R2 above threshold
-                for iPC in range(self.nPC):
-                    respPrediction[samp_start:samp_end] += respPCPred[iseg, iPC]*pcResp.components_[iPC,respIndStart:respIndEnd]
+                for iPC in range(self.nPC): # TODO index this better...
+                    respPrediction[max(0,samp_start):samp_end] += respPCPred[iseg, iPC]*pcResp.components_[iPC,respIndStart:respIndEnd]
                     # respPrediction[chunkID['indZero'][iChunk]:chunkID['indEnd'][iChunk]] += respPCPred[iChunk, iPC]*pcResp.components_[iPC,segmentBuffer:chunkID['respIndEnd'][iChunk]]
                     # respPrediction[chunkID['indStart'][iChunk]:chunkID['indZero'][iChunk]] += respPCPred[iChunk, iPC]*pcResp.components_[iPC,chunkID['respIndStart'][iChunk]:segmentBuffer]
         
@@ -736,8 +831,7 @@ class PlotMRFPredictedResponses(BaseTask):
                         aspect='auto', interpolation='nearest', origin='lower', cmap=cmap, vmin=minSpect, vmax=maxB)
             ax1.set_ylim(0, 8)
             for start,stop in samp_start_stop:
-                ax1.axvline(start, 0,.5,c='r')
-                ax1.axvline(stop, 0,.5,c='b')
+                ax1.axvspan(start,stop,alpha=.3,color=np.random.rand(3,))
             ax1.set_ylabel('Frequency (kHz)')
             # The prediction
 
