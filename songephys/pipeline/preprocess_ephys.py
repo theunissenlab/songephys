@@ -256,7 +256,7 @@ class GenerateSiteLFP(luigi.Task):
         lfp_results = []
         for session in site_config["sessions"]:
             lfp = yield GenerateLFP(os.path.join(sessions_dir, session["id"]))
-            lfp_results.append(np.fromfile(lfp))
+            lfp_results.append(np.fromfile(lfp.path))
         np.concatenate(lfp_results)
         
 class SortSpikes(luigi.Task):
