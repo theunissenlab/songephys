@@ -904,7 +904,7 @@ class GenerateLFP(luigi.Task):
         lfp_path = os.path.join(raw_dir,'%s_LFP.npy'%sess_name)
         return luigi.LocalTarget(lfp_path)
     def run(self):
-        from scipy.signal import butter, filtfilt,resample
+        from scipy.signal import butter, filtfilt,decimate
         in_data = np.fromfile(self.input()['ephys.bin'].path,dtype=np.uint16)
         in_data = in_data.reshape((in_data.shape[0]//64,64))
         hp_freq = 40
@@ -914,8 +914,8 @@ class GenerateLFP(luigi.Task):
         Fn = FS/2.
         LFP_freq = 1000
         b,a = butter(filt_order,(hp_freq/Fn,lp_freq/Fn),btype='bandpass')
-        filtered_data = resample(filtfilt(b=b,a=a,x=in_data,axis=0),int(in_data.shape[0]*LFP_freq//FS))
-        np.save(self.output().path,filtered_data)
+        filtered_data = decimate(filtfilt(b=b,a=a,x=in_data,axis=0),int(LFP_freq//FS))
+        np.save(self.output().path,filtered_data.astype(np.uint16))
 
 
 
