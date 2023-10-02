@@ -914,7 +914,7 @@ class GenerateLFP(luigi.Task):
         Fn = FS/2.
         LFP_freq = 1000
         b,a = butter(filt_order,(hp_freq/Fn,lp_freq/Fn),btype='bandpass')
-        filtered_data = decimate(filtfilt(b=b,a=a,x=in_data,axis=0),int(LFP_freq//FS))
+        filtered_data = decimate(filtfilt(b=b,a=a,x=in_data,axis=0),int(FS//LFP_freq),axis=0)
         np.save(self.output().path,filtered_data.astype(np.uint16))
 
 
