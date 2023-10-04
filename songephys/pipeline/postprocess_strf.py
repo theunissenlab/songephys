@@ -10,7 +10,7 @@ from scipy.io import wavfile
 
 from strfpy import findDatasets, preprocSound, strfSetup, trnDirectFit, plotTfrep,calcAvg,calcAutoCorr,calcCrossCorr, calcStrf
 
-from .postprocess_operant import SiteProjectConfig,GenStimInfoDB
+from .postprocess_operant import SiteProjectConfig,GenStimInfoDB,GenPlaybackSpikesDB
 from .pipeline_utils import SiteParameter
 
 
@@ -38,7 +38,7 @@ class EstimateClusterSTRF(luigi.Task):
     def requires(self):
         return GenerateSTRFRequirements(site_dir=self.site_dir,cluster=self.cluster)
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","data","Cluster_%d"%self.cluster['cluster_id'],"clusterBestSTRF.pkl"))
+        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","data","Cluster_%d"%self.cluster['cluster_id'],"clusterBestSTRFwithCC.pkl"))
     def run(self):
         dfStrfLab = pickle.load(open(self.input().path, 'rb'))
 

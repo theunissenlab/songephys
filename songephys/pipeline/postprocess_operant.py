@@ -680,7 +680,7 @@ class PlotSiteSummary(luigi.Task):
 
 # endregion 
 # region Trial Raster Plots
-class GenPlaybackSpikesDB(luigi.Task):
+class GenPlaybackSpikesDB(BaseTask):
     site_dir = SiteParameter()
     cluster = luigi.DictParameter()
     pad_s = luigi.FloatParameter(default=1.0)

@@ -21,10 +21,10 @@ from .postprocess_strf import GenerateSTRFRequirements
 from .postprocess_operant import SiteProjectConfig,GenStimInfoDB, GenPlaybackSpikesDB
 from .pipeline_utils import SiteParameter, BaseTask
 def _get_mrf_data_folder(site_dir,cluster):
-    return os.path.join(site_dir,"analysis","data","Cluster_%d"%cluster['cluster_id'],"MRF_Figs")
+    return os.path.join(site_dir,"analysis","data","Cluster_%d"%cluster['cluster_id'],"MRF_Figs_500")
 
 def _get_mrf_figure_folder(site_dir,cluster):
-    return os.path.join(site_dir,"analysis","figures","clusters_%s"%cluster['group'],"Cluster_%d"%cluster['cluster_id'],"MRF_Figs")
+    return os.path.join(site_dir,"analysis","figures","clusters_%s"%cluster['group'],"Cluster_%d"%cluster['cluster_id'],"MRF_Figs_500")
     
 
 class DataFrameColumn(luigi.Target): # TODO but not before lab meeting...
@@ -423,7 +423,7 @@ class GenSegmentSpikeDB(BaseTask):
         segments_df['KDE_t'] = col_trate
         segments_df['KDE_width'] = self.kWidth_ms
         segments_df['AVG_rate'] = col_avg_rate
-
+        segments_df = segments_df[segments_df.Trials > 0].reset_index()
         self.output().makedirs()
         print("Saving to %s"%self.output().path)
         segments_df.to_pickle(self.output().path)
@@ -442,8 +442,6 @@ class GenerateMRF(BaseTask): # In progress
     def run(self):
         # Mean Response
         seg_spike_df = pandas.read_pickle(self.input().path)
-        # filter out segments with no trials
-        seg_spike_df = seg_spike_df[seg_spike_df.Trials > 0]
         
         # make all responses the same size 
         kde_len = 500
@@ -616,6 +614,7 @@ class PlotAverageMPS(BaseTask):  #BUG: not working
         self.output().makedirs()
         plt.savefig(self.output().path)
 
+from strfpy import trnDirectFit
 class PlotMRFPredictedResponses(BaseTask):
     site_dir = SiteParameter()
     cluster = luigi.DictParameter()
@@ -637,6 +636,8 @@ class PlotMRFPredictedResponses(BaseTask):
         if self.stim_number < 0:
             for i in range(num_stims//10):
                 outputs.append(luigi.LocalTarget(os.path.join(_get_mrf_figure_folder(self.site_dir,self.cluster),"PredictedResponses","Preview_%d.%s"%(i,self.extension))))
+            # append one output for the statistics
+            outputs.append(luigi.LocalTarget(os.path.join(_get_mrf_data_folder(self.site_dir,self.cluster),"PredictedResponse_Info.pkl")))
             return outputs
         else:
             return luigi.LocalTarget(os.path.join(_get_mrf_figure_folder(self.site_dir,self.cluster),"PredictedResponses","PredResp_%d.%s"%(self.stim_number,self.extension)))
@@ -647,8 +648,6 @@ class PlotMRFPredictedResponses(BaseTask):
         pcResp = pickle.load(open(self.input()["mrf"]["response"].path,'rb'))["pcaResp"]
 
         seg_df = pickle.load(open(self.input()["segments"].path,'rb'))
-        # filter out segments with no trials
-        seg_df = seg_df[seg_df.Trials > 0]
 
         # plot predicted responses
         # Generate, Store and Plot the Predictions by rejoining the predictions for each segment.
@@ -673,6 +672,11 @@ class PlotMRFPredictedResponses(BaseTask):
             sampleLens = []
             stim_names = []
             start_stops = []
+            corr_coefs = []
+            info_bits = []
+            all_resps = []
+            all_preds = []
+            jninfo = []
             output_targets = self.output()
             stim_ix = 0
             nstims = len(pb_df.Rendition_Name.unique())
@@ -734,6 +738,9 @@ class PlotMRFPredictedResponses(BaseTask):
 
                 pred_resps.append(respPrediction)
                 actual_resps.append(resp)
+                all_preds.extend(respPrediction)
+                all_resps.extend(resp)
+                corr_coefs.append(np.corrcoef(respPrediction,resp)[0,1])
                 if stim_ix % 10 == 10 - 1 or stim_ix == nstims-1:
                     # Plot the spectrogram and the prediction
                     f, arr_ax = plt.subplots(len(pred_resps), 1, sharex=True, dpi=100, figsize = (5,8))
@@ -762,6 +769,16 @@ class PlotMRFPredictedResponses(BaseTask):
                     start_stops = []
                     plt.close()
                 stim_ix += 1
+            # Save the correlation coefficients
+            corr_coefs = np.array(corr_coefs)
+            info_bits = np.log2(1+corr_coefs**2)
+            jninfo = trnDirectFit.compute_coherence_mean(np.array(all_preds).T, np.array(all_resps), 1000,100,.25)
+            print("Saving CC to %s"%output_targets[-1].path)
+            pickle.dump(dict({
+                "corr_coefs": corr_coefs,
+                "info_bits": info_bits,
+                "jninfo": jninfo
+            }),open(output_targets[-1].path,'wb'))
         else:
             # Get the stimulus (spectrogram) and the response
             #ds = srData['datasets'][iSet]
