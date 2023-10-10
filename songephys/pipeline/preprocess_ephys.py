@@ -231,9 +231,63 @@ class CombineSiteSpikes(luigi.Task):
                 sample_rate=spike_datasets[0].sample_rate
             )
             suss.io.save_pickle(self.output()[electrode_idx].path, new_dataset)
+class MemmapDataset(object): #TODO maybe subclass np.ndarray
+    """takes a list of memmap files and treats them as one long array."""
+    def __init__(self, memmap_fns, offsets, nchannels, sample_rate, dtype=np.uint16, mode="r"):
+        self.dtype = dtype
+        self.mode = mode
+        self.offsets = np.asarray(offsets)
+        # load the memmaps
+        self.memmaps = []
+        self.nchannels = nchannels
+        self.nsamps = 0
+        self.sample_rate = sample_rate
+        for fn in memmap_fns:
+            nsamps = os.path.getsize(fn) // (nchannels * dtype(0).itemsize)
+            self.memmaps.append(np.memmap(fn, dtype=dtype, shape=(nsamps,nchannels), mode=mode))
+            self.nsamps += nsamps
+
+    def __len__(self):
+        return self.nsamps
+    @property
+    def shape(self):
+        return (self.nsamps,self.nchannels)
+
+    def get(self, start, end, channels=None):
+        if channels is None:
+            channels = slice(None)
+        else:
+            channels = np.asarray(channels)
+        # find the memmap that contains the start and end
+        start_idx = np.searchsorted(self.offsets, start, side="right") - 1
+        end_idx = np.searchsorted(self.offsets, end, side="right") - 1
+        # get the start and end offsets
+        start_offset = start - self.offsets[start_idx]
+        end_offset = end - self.offsets[end_idx]
+        # get the data
+        data = []
+        output = np.zeros((end-start,channels.size),dtype=self.dtype)
+        nsamps_read = 0
+        for i in range(start_idx, end_idx+1):
+            if i == start_idx:
+                start = start_offset
+            else:
+                start = 0
+            if i == end_idx:
+                end = end_offset
+            else:
+                end = None
+            output[nsamps_read:nsamps_read+end-start] = self.memmaps[i][start:end,channels]
+            nsamps_read += end-start
+        return output
+
 
 class GenerateSiteLFP(luigi.Task):
     site_dir = SiteParameter()
+    lowpass_freq = luigi.FloatParameter(default=300.0)
+    highpass_freq = luigi.FloatParameter(default=0.0)
+    downsample_ratio = luigi.IntParameter(default=30)
+    win_length_sec = luigi.FloatParameter(default=60)
     def requires(self):
         return {
             "site_config": DefineSessions(self.site_dir),
@@ -253,11 +307,41 @@ class GenerateSiteLFP(luigi.Task):
         session_offsets = [session["t"] for session in site_config["sessions"]]
         sessions_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions")
 
-        lfp_results = []
+        memmap_targets = []
         for session in site_config["sessions"]:
-            lfp = yield GenerateLFP(os.path.join(sessions_dir, session["id"]))
-            lfp_results.append(np.fromfile(lfp.path))
-        np.concatenate(lfp_results)
+            bin = yield GenerateSiteMemmaps(os.path.join(sessions_dir, session["id"]))
+            memmap_targets.append(bin)
+        
+        dataset = MemmapDataset(memmap_fns, session_offsets, nchannels,sample_rate=30000, dtype=np.uint16, mode="r")
+
+        # Make an even window size for the hann window
+        win_size = (int(dataset.sample_rate * self.win_length_sec) // 2 )* 2
+        lfp_win_size = win_size // self.downsample_ratio
+        win_shift = win_size // 2
+        lfp_win_shift = lfp_win_size // 2
+        # Hann windows can be overlapped with 50% or 75% overlap
+        window = scipy.signal.hann(win_size, sym=False)
+        # for now we can assert that the window overlaps
+        assert(check_COLA(window,win_size,win_size//2))
+
+        # go through and filter        
+        n_wins = dataset.shape[0] // win_shift
+        lfp = np.zeros((dataset.nsamps // self.downsample_ratio,dataset.nchannels),dtype=np.uint16)
+
+        for i in range(n_wins):
+            start = i * win_shift
+            end = start + win_size
+            # get the data
+            data = dataset.get(start,end)
+            # filter
+            data = bandpass_filter(data, self.lowpass_freq, self.highpass_freq, dataset.sample_rate, order=4, axis=0)
+            # downsample
+            lfp_start = i * lfp_win_shift
+            lfp_end = lfp_start + lfp_win_size
+            lfp[lfp_start:lfp_end,:] += resample(data, lfp_win_size, axis=0)*window[:,np.newaxis]
+        
+        # save
+        lfp.tofile(self.output().path)
         
 class SortSpikes(luigi.Task):
     """Run spike sorting code on a single channel
