@@ -343,11 +343,23 @@ class BaseLocalSymlinker(BaseDownloader):
         logger.info("Symlinking {} to {}".format(file_object, download_to))
         if os.path.exists(download_to):
             os.remove(download_to)
+        try:
+            if not os.path.exists(os.readlink(download_to)):
+                os.unlink(download_to)
+        except:
+            pass
         os.symlink(file_object, download_to)
 
     def download_folder(self, folder_object, download_to):
         target = os.path.join(download_to, os.path.basename(folder_object))
         logger.info("Symlinking {} to {}".format(folder_object, target))
+        try:
+            if not os.path.exists(os.readlink(target)):
+                os.unlink(target)
+        except:
+            pass
+        if os.path.exists(target):
+            os.remove(target)
         os.symlink(folder_object, target)
 
     def locate_rhd_file(self, experiment_name, session_id):

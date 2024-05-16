@@ -38,7 +38,7 @@ class EstimateClusterSTRF(luigi.Task):
     def requires(self):
         return GenerateSTRFRequirements(site_dir=self.site_dir,cluster=self.cluster)
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","data","Cluster_%d"%self.cluster['cluster_id'],"clusterBestSTRFwithCC.pkl"))
+        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","data","Cluster_%d"%self.cluster['cluster_id'],"clusterBestSTRFwithCCI.pkl"))
     def run(self):
         dfStrfLab = pickle.load(open(self.input().path, 'rb'))
 
@@ -70,6 +70,7 @@ class EstimateClusterSTRF(luigi.Task):
         bestStrf = -1
         bestTol = -1
         bestSparseness = -1
+        bestCCoef = -1
 
         for tol in optOptions['tolerances']:
             strfMean, strfsJN, strfsJN_std = calcStrf.calculateSTRF(fstim, stim_respf, stim_resp_JNf, tol=tol)
@@ -84,12 +85,14 @@ class EstimateClusterSTRF(luigi.Task):
                 infoTBins = 0
                 infos = np.zeros(numJNStrfs)
                 infotbins = np.zeros(numJNStrfs)
+                ccoefs = np.zeros(numJNStrfs)
+
                 for p in range(numJNStrfs):
                     smoothedMeanStrfJN = trnDirectFit.df_fast_filter_filter(strfsJN[:, :, p], strfsJN_std[:, :, p], sp)
                     strfToUse = smoothedMeanStrfJN[:, strfRng]
 
                     stim = dfStrfLab.stim.iloc[p].T
-                    rresp = dfStrfLab.psth.iloc[p]
+                    rresp = dfStrfLab.psth.iloc[p] / dfStrfLab.nTrials.iloc[p]
 
                     gindx = np.ones((1,stim.shape[0]))
 
@@ -101,12 +104,16 @@ class EstimateClusterSTRF(luigi.Task):
 
                     infos[p] = np.real(cStruct['info'])
                     infotbins[p] = len(rresp)
+
+                    ccoefs[p] = np.corrcoef(mresp, rresp)[0,1]
                 # TODO not sure why there are some nans probably because no spikes in the window
                 infotbins = infotbins[~np.isnan(infos)]
+                ccoefs = ccoefs[~np.isnan(infos)]
                 infos = infos[~np.isnan(infos)]
                 avgInfo = np.sum(infos*infotbins)/np.sum(infotbins)
+                avgCCoef = np.sum(ccoefs*infotbins)/np.sum(infotbins)
 
-                print(f"Tolerance={tol}, Sparseness={sp}, Avg. Prediction Info={avgInfo}")
+                print(f"Tolerance={tol}, Sparseness={sp}, Avg. Prediction Info={avgInfo}, Avg. CCoef={avgCCoef}")
 
                 # did this sparseness do better?
                 if avgInfo > bestInfoVal:
@@ -114,19 +121,128 @@ class EstimateClusterSTRF(luigi.Task):
                     bestSparseness = sp
                     bestInfoVal = avgInfo
                     bestStrf = smoothedMeanStrfToUse
+                    bestCCoef = avgCCoef
 
         print('Best STRF found at tol=%f, sparseness=%d, info=%f bits\n' % (bestTol, bestSparseness, bestInfoVal))
         trained_model = dict({
             "bestTol": bestTol,
             "bestSparseness": bestSparseness,
             "bestInfoVal": bestInfoVal,
+            'bestCcoef': bestCCoef,
             "bestStrf": bestStrf,
             "avg": resp_avg,
             'avg_fr': avg_firing_rate
         })
         pickle.dump(trained_model,open(self.output().path,'wb'))
         #np.save(self.output().path,bestStrf)
+class SpecificClusterSTRF(luigi.Task):
+    site_dir = SiteParameter()
+    cluster = luigi.DictParameter()
+    tol = luigi.FloatParameter()
+    sparseness = luigi.IntParameter()
+    def requires(self):
+        return GenerateSTRFRequirements(site_dir=self.site_dir,cluster=self.cluster)
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","data","Cluster_%d"%self.cluster['cluster_id'],"clusterSpecificSTRF_t%f_s%d_withntrials.pkl"%(self.tol,self.sparseness)))
+    def run(self):
+        dfStrfLab = pickle.load(open(self.input().path, 'rb'))
 
+        # Create default optimization options structure
+        params, optOptions = trnDirectFit.trnDirectFit()
+        optOptions['display'] = 1
+
+        stim_avg, resp_avg, avg_firing_rate = calcAvg.calculateAverage(dfStrfLab)
+        stim_avg_mo, resp_avg_mo = calcAvg.calculateLeaveOneOutAverages(dfStrfLab=dfStrfLab,apply_resp_smoothing=True)
+
+        twindow=74
+        # =========================================================
+        # Now calculating stimulus AutoCorr.
+        # =========================================================
+        autocorr = calcAutoCorr.calculateAutoCorrelation(dfStrfLab, twindow)
+        crosscorr, crosscorr_JN = calcCrossCorr.calculateCrossCorr(dfStrfLab, twindow)
+        fstim, stim_respf, stim_resp_JNf = calcCrossCorr.fftSmoothCorrelations(autocorr,crosscorr, crosscorr_JN, twindow,nstd=.5)
+        
+        # compute some indices to use later
+        strfLength = 75
+        strfDelays = np.arange(strfLength)
+        modelParams = strfSetup.linInit(stim_avg.shape[0], strfDelays)
+        halfIndx = twindow + 1
+        startIndx = halfIndx + round(np.min(modelParams['delays']))
+        endIndx = halfIndx + round(np.max(modelParams['delays']))
+        strfRng = range(startIndx-1, endIndx)
+
+        bestInfoVal = -1
+        bestStrf = -1
+        bestTol = -1
+        bestSparseness = -1
+        bestCCoef = -1
+
+        tol = self.tol
+        strfMean, strfsJN, strfsJN_std = calcStrf.calculateSTRF(fstim, stim_respf, stim_resp_JNf, tol=tol)
+        strfStdMean = np.mean(strfsJN_std,axis=2)
+        sp = self.sparseness
+        smoothedMeanStrf = trnDirectFit.df_fast_filter_filter(strfMean, strfStdMean, sp)
+        smoothedMeanStrfToUse = smoothedMeanStrf[:,strfRng]
+
+        infoSum = 0
+        numJNStrfs = strfsJN.shape[2]
+        infoTBins = 0
+        infos = np.zeros(numJNStrfs)
+        infotbins = np.zeros(numJNStrfs)
+        ccoefs = np.zeros(numJNStrfs)
+        all_ntrials = np.zeros(numJNStrfs)
+
+        for p in range(numJNStrfs):
+            smoothedMeanStrfJN = trnDirectFit.df_fast_filter_filter(strfsJN[:, :, p], strfsJN_std[:, :, p], sp)
+            strfToUse = smoothedMeanStrfJN[:, strfRng]
+
+            stim = dfStrfLab.stim.iloc[p].T
+            rresp = dfStrfLab.psth.iloc[p] / dfStrfLab.nTrials.iloc[p]
+
+            gindx = np.ones((1,stim.shape[0]))
+
+            mresp = trnDirectFit.conv_strf(stim, modelParams['delays'], strfToUse, gindx)
+            mresp = mresp + dfStrfLab.psth_loo_avg.iloc[p][:mresp.shape[1]].T
+
+            # compute coherence and info across pairs
+            cStruct = trnDirectFit.compute_coherence_mean(mresp, rresp, optOptions['respSampleRate'], optOptions['infoFreqCutoff'], optOptions['infoWindowSize'] )
+
+            infos[p] = np.real(cStruct['info'])
+            infotbins[p] = len(rresp)
+            all_ntrials[p] = dfStrfLab.nTrials.iloc[p]
+            ccoefs[p] = np.corrcoef(mresp, rresp)[0,1]
+        # TODO not sure why there are some nans probably because no spikes in the window
+        infotbins = infotbins[~np.isnan(infos)]
+        ccoefs = ccoefs[~np.isnan(infos)]
+        all_ntrials = all_ntrials[~np.isnan(infos)]
+        infos = infos[~np.isnan(infos)]
+        avgInfo = np.sum(infos*infotbins)/np.sum(infotbins)
+        avgCCoef = np.sum(ccoefs*infotbins)/np.sum(infotbins)
+
+        print(f"Tolerance={tol}, Sparseness={sp}, Avg. Prediction Info={avgInfo}, Avg. CCoef={avgCCoef}")
+
+        bestTol = tol
+        bestSparseness = sp
+        bestInfoVal = avgInfo
+        bestStrf = smoothedMeanStrfToUse
+        bestCCoef = avgCCoef
+
+        print('Best STRF found at tol=%f, sparseness=%d, info=%f bits\n' % (bestTol, bestSparseness, bestInfoVal))
+        trained_model = dict({
+            "bestTol": bestTol,
+            "bestSparseness": bestSparseness,
+            "bestInfoVal": bestInfoVal,
+            'bestCcoef': bestCCoef,
+            "bestStrf": bestStrf,
+            "avg": resp_avg,
+            'avg_fr': avg_firing_rate,
+            'ccoefs': ccoefs,
+            'ntrials': all_ntrials,
+            'infos': infos,
+            'infotbins': infotbins
+        })
+        pickle.dump(trained_model,open(self.output().path,'wb'))
+        #np.save(self.output().path,bestStrf)
 class PlotClusterSTRF(luigi.Task):
     site_dir = SiteParameter()
     cluster = luigi.DictParameter()

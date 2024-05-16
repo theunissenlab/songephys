@@ -1,15 +1,34 @@
 import os
 import datetime
+import time
+import logging
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import luigi
 import soundfile
+import kilosort
+import wavemap
+import pandas as pd
 from neo.io import NixIO, IntanIO, NWBIO
+from spikeinterface.extractors import read_intan
+from spikeinterface.core import ConcatenateSegmentRecording, BinaryRecordingExtractor
+from spikeinterface.preprocessing import highpass_filter, bandpass_filter, resample
 
 from ..format.download import downloaders
 from ..format.io import load_yaml, save_yaml
 from ..format.wav import get_wavfile_data_from_neo,get_raw_data_from_neo
 from .targets import YamlTarget
+from ..preprocess.sound.playback_utils import convert_raw_digital_to_metadata, convert_pyoperant_operant_csvs, _get_stim_dirs, convert_pyoperant_playback_csvs
+from ..preprocess.sound.detect import (
+    update_operant_db,
+    detect_call_and_syllable_dicts,
+    generate_stim_dicts,
+    generate_event_dicts_operant,
+    playback_columns,
+    operant_columns,
+    autodetected_columns,
+) 
 from .pipeline_utils import (
     SessionParameter,
     SiteParameter,
@@ -18,6 +37,9 @@ from .pipeline_utils import (
     parse_filelist,
     session_basename,
 )
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
+
 
 
 class SiteConfig(luigi.Task):
@@ -404,6 +426,40 @@ class DownloadSession(luigi.Task):
             event_files = self.events
         )
 
+# class DownloadKilosortSite(luigi.Task):
+#     site_dir = SiteParameter()
+#     force = luigi.BoolParameter(default=False)
+
+#     def output(self):
+#         # Force this task to always run if requested
+#         return luigi.LocalTarget("dummy")
+    
+#     def requires(self):
+#         return DefineSessions(self.site_dir)
+    
+#     def run(self):
+#         site_config = self.input().data()
+#         if not self.force:
+#             tasks = []
+#         sessions_dir = os.path.join(self.site_dir, "sessions")
+
+#         for session in site_config["sessions"]:
+#             session_dir = os.path.join(os.path.dirname(
+#                 os.path.dirname(self.site_dir)), "sessions", session["id"])
+#             if not os.path.exists(session_dir):
+#                 os.makedirs(session_dir)
+
+#             if self.force:
+#                 try:
+#                     DownloadSession(session_dir, force=self.force).run()
+#                 except Exception as e:
+#                     print("Download session {} had an error {}. But going to try to download all because force=True".format(
+#                         session_dir,
+#                         str(e)))
+#             else:
+#                 tasks.append(DownloadSession(session_dir, force=self.force))
+#         if not self.force:
+#             yield tasks
 
 class DownloadSite(luigi.Task):
     site_dir = SiteParameter()
@@ -418,7 +474,9 @@ class DownloadSite(luigi.Task):
 
     def run(self):
         site_config = self.input().data()
-
+        if not self.force:
+            tasks = []
+    
         for session in site_config["sessions"]:
             session_dir = os.path.join(os.path.dirname(
                 os.path.dirname(self.site_dir)), "sessions", session["id"])
@@ -433,7 +491,9 @@ class DownloadSite(luigi.Task):
                         session_dir,
                         str(e)))
             else:
-                yield DownloadSession(session_dir, force=self.force)
+                tasks.append(DownloadSession(session_dir, force=self.force))
+        if not self.force:
+            yield tasks
 
 
 class GenerateSiteMemmaps(luigi.Task):
@@ -470,6 +530,491 @@ class GenerateSiteMemmaps(luigi.Task):
         site_config['sessions'] = all_sessions
         site_config['bin_arrays_generated'] = True
         save_yaml(self.input()["site_config"].path, site_config)
+
+class GenerateSingleSiteLFP(luigi.Task):
+    site_dir = SiteParameter()
+    lfp_sample_rate = luigi.IntParameter(default=1000)
+    def requires(self):
+        return {
+            "site_config": SiteConfig(self.site_dir), 
+            "project_config": SiteProjectConfig(self.site_dir)
+        }
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "lfp_%s_fs%d.bin"%(os.path.basename(self.site_dir),self.lfp_sample_rate)))
+    def run(self):
+        site_config = self.input()["site_config"].data()
+        sessions_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions")
+        all_sessions = site_config["sessions"]
+        all_intan_io = []
+        # put all reacording extractors in a list
+        for session in all_sessions:
+            # load the intan file
+            download_task = yield DownloadSession(os.path.join(sessions_dir, session["id"]))
+            rhd_file = download_task["rhd"].path
+            rhd = read_intan(rhd_file, stream_name='RHD2000 amplifier channel', check_timestamps=False)
+            all_intan_io.append(rhd)
+        # concatenate the recording extractors in a single one
+        multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
+        # add a band pass filter
+        hp_freq = 1
+        lp_freq = 300
+        multirecording_f = bandpass_filter(multirecording, freq_min=hp_freq, freq_max=lp_freq)
+        # downsample to 1 kHz
+        recording_lfp = resample(multirecording_f, resample_rate=self.lfp_sample_rate)
+        # then save to binary
+        filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
+            recording_lfp, os.path.join(self.site_dir,'raw'), data_name="lfp_%s_fs%d.bin"%(os.path.basename(self.site_dir),self.lfp_sample_rate), dtype=np.int16,
+            chunksize=60000   )
+class GenerateSingleSiteAudioFile(luigi.Task):
+    site_dir = SiteParameter()
+    def requires(self):
+        return {
+            "site_config": SiteConfig(self.site_dir), 
+            "project_config": SiteProjectConfig(self.site_dir)
+        }
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "audio_%s.wav"%os.path.basename(self.site_dir)))
+
+    def run(self):
+        site_config = self.input()["site_config"].data()
+        sessions_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions")
+        all_sessions = site_config["sessions"]
+        all_intan_io = []
+        # put all reacording extractors in a list
+        for session in all_sessions:
+            # load the intan file
+            download_task = yield DownloadSession(os.path.join(sessions_dir, session["id"]))
+            rhd_file = download_task["rhd"].path
+            rhd = read_intan(rhd_file, stream_name='USB board ADC input channel', check_timestamps=False)
+            all_intan_io.append(rhd)
+        # concatenate the recording extractors in a single one
+        multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
+
+        # add a high pass filter
+        multirecording_f = bandpass_filter(multirecording, freq_min=200, freq_max=8000)
+        max_workers = None
+        chunksize = 240000
+        print('='*40)
+        print('Loading recording with SpikeInterface...')
+
+        # Using actual data shape is less fragile than relying on .get_num_channels()
+        N = multirecording_f.get_total_samples()
+        print(f'number of samples: {N}')
+        c = multirecording_f.get_traces(start_frame=0, end_frame=1, segment_index=0).shape[1]
+        print(f'number of channels: {c}')
+        s = multirecording_f.get_num_segments()
+        print(f'numbef of segments: {s}')
+        fs = multirecording_f.get_sampling_frequency()
+        print(f'sampling rate: {fs}')
+        dtype = multirecording_f.get_dtype()
+        print(f'dtype: {dtype}')
+
+        # if N is bigger than 2**32, we need to split the wav files
+        if 2*N*c > 2**32:
+            n_wav = int(np.ceil(2*N*c / 2**32))
+            n_per_file = int(np.ceil(N / n_wav))
+            for i in range(n_wav):
+                start_frame = i * n_per_file
+                end_frame = min((i + 1) * n_per_file, N)
+                if i > 0:
+                    fn = f"audio_{os.path.basename(self.site_dir)}-{i}.wav"
+                else:
+                    fn = f"audio_{os.path.basename(self.site_dir)}.wav"
+                wav_file = os.path.join(self.site_dir, 'raw', fn)
+                #soundfile.write(wav_file, multirecording_f.get_traces(start_frame=start_frame, end_frame=end_frame, segment_index=0), fs)
+
+                # Determine start/end indices for each segment
+                indices = []
+                for k in range(s):
+                    n = end_frame
+                    i = start_frame + k*chunksize
+                    while i < n:
+                        j = i + chunksize if (i + chunksize) < end_frame else end_frame
+                        indices.append((i, j, k,start_frame))
+                        i += chunksize
+
+                # Copy each chunk of data to memmory mapped binary file,
+                # use multithreading to speed it up.
+                def copy_chunk(memmap, i, j, k, sf):
+                    t = multirecording_f.get_traces(start_frame=i, end_frame=j, segment_index=k)
+                    memmap[i-sf:j-sf,:] = t
+                    memmap.flush()
+                    del(t)
+                y = wavemap(wav_file, dtype=dtype, mode='w+', shape=(end_frame-start_frame,c), sample_rate=int(multirecording_f.get_sampling_frequency()))
+                total_chunks = len(indices)
+                print('='*40)
+                print(f'Converting {total_chunks} data chunks '
+                    f'with a chunksize of {chunksize} samples...')
+                with ThreadPoolExecutor(max_workers=max_workers) as exe:
+                    futures = [exe.submit(copy_chunk, y, i, j, k, sf) for i, j, k, sf in indices]
+                    # TODO: every some-amount-of-time, check list of futures
+                    #       for completion
+                    while exe._work_queue.qsize() > 0:
+                        time.sleep(10)
+                        print(f'{total_chunks - exe._work_queue.qsize()} of {total_chunks}'
+                            ' chunks converted...')
+                print(f'Data conversion finished.')
+                print('='*40)
+
+                del(y)  # Close memmap after copying
+        else:
+            # Determine start/end indices for each segment
+            indices = []
+            for k in range(s):
+                n = multirecording_f.get_num_samples(segment_index=k)
+                i = 0 + k*chunksize
+                while i < n:
+                    j = i + chunksize if (i + chunksize) < n else n
+                    indices.append((i, j, k))
+                    i += chunksize
+
+            # Copy each chunk of data to memmory mapped binary file,
+            # use multithreading to speed it up.
+            def copy_chunk(memmap, i, j, k):
+                t = multirecording_f.get_traces(start_frame=i, end_frame=j, segment_index=k)
+                memmap[i:j,:] = t
+                memmap.flush()
+                del(t)
+            y = wavemap(self.output().path, dtype=dtype, mode='w+', shape=(N,c), sample_rate=int(multirecording_f.get_sampling_frequency()))
+            total_chunks = len(indices)
+            print('='*40)
+            print(f'Converting {total_chunks} data chunks '
+                f'with a chunksize of {chunksize} samples...')
+            with ThreadPoolExecutor(max_workers=max_workers) as exe:
+                futures = [exe.submit(copy_chunk, y, i, j, k) for i, j, k in indices]
+                # TODO: every some-amount-of-time, check list of futures
+                #       for completion
+                while exe._work_queue.qsize() > 0:
+                    time.sleep(10)
+                    print(f'{total_chunks - exe._work_queue.qsize()} of {total_chunks}'
+                        ' chunks converted...')
+            print(f'Data conversion finished.')
+            print('='*40)
+
+            del(y)  # Close memmap after copying
+
+class GenerateSingleSiteOperantCSV(luigi.Task):
+    site_dir = SiteParameter()
+    def requires(self):
+        return {
+            "site_config": SiteConfig(self.site_dir),
+            'project_config': SiteProjectConfig(self.site_dir),
+            "dig_memmap": GenerateSingleSiteDigitalMemmap(self.site_dir)
+        }
+
+    def output(self):
+        return {
+            "playbacks": luigi.LocalTarget(os.path.join(self.site_dir, "playback_segments_v2.csv")),
+            "events": luigi.LocalTarget(os.path.join(self.site_dir, "event_segments_v2.csv"))
+        }
+    
+    def run(self):
+        site_config = self.input()["site_config"].data()
+        project_cfg = self.input()["project_config"].data()
+
+        logger.info("Loading digital data from {}".format(self.input()["dig_memmap"].path))
+        #dig_trace = np.fromfile(self.input()["dig_memmap"].path, dtype='uint16')
+        dig_trace = np.memmap(self.input()["dig_memmap"].path, dtype='uint16', mode='r')
+        #dig_trace = multirecording.get_traces().flatten()
+        fs = 30000 #TODO get this from the recording
+        num_chans = int(np.log2(np.max(dig_trace)))
+        traces = dict()
+        # NB: np.unpackbits does this for 8 bit unsigned ints. This works for us as long as we are not using more than 8 channels
+        for i in range(num_chans):
+            dig_data = np.not_equal(np.bitwise_and(dig_trace, (1<<i)),0)
+            # if data is mostly ones then flip it
+            if dig_data.mean() > .5:
+                dig_data = ~dig_data
+            traces[i] = dig_data.astype(np.int8)
+        
+        logger.info("Converting digital data to metadata")
+        # now handle the digital codes on the first channel
+        stimulus_codes = convert_raw_digital_to_metadata(traces[0],fs)
+
+
+        # now handle the digital events TODO put this in site_config
+        event_key = dict({
+            'TTL': 1,
+            'PeckPort':2,
+            'Feeder':3
+        })
+
+        #   Here, if there is an issue with stim codes, we can spoof them. NOT USUAL
+        if len(stimulus_codes) > 0 and np.all([t[1]['trial'] == 0 for t in stimulus_codes]):
+            if 'TTL' in event_key:
+                log_files = [f for f in site_config["filelist"] if f.endswith("events.log")]
+
+                # this is a hack to get the trial numbers from the digital data
+                # we will assume that the first trial starts at the first TTL
+                # first we will get the TTL pulses
+                TTL = np.diff(traces[event_key['TTL']])
+                file_timeoffset = calculate_event_timedelta(np.where(TTL==1)/fs, log_files, 0 )
+                
+                logger.info("Fixing stim codes because they are all 0")
+                #TODO make sure this works
+                stimulus_codes = fix_stimulus_codes(stim_codes=stimulus_codes, 
+                                                    csv_files=csv_files,stim_dirs=stim_dirs,
+                                                    sample_rate=sampling_rate, 
+                                                    session_starttime=session_start,
+                                                    session_offset=file_timeoffset) 
+            else:
+                logger.error("ERROR: No TTL channel found in digital data, and no stim codes found")
+
+        operant_csvs = [f for f in site_config["filelist"] if f.endswith("trialdata.csv")]
+        operant_csvs = [os.path.join(project_cfg['LOCAL_RAW_FILES']['pyoperant_drive'],f) for f in operant_csvs]
+        stim_dirs = _get_stim_dirs(operant_csvs, project_cfg['LOCAL_RAW_FILES']['stimuli_drive'])
+        # Combine the data from the csvs into a single pickled dataframe
+        logger.info("Saving stim database {}".format(self.output()["playbacks"].path))
+        playbacks_db = convert_pyoperant_operant_csvs(
+                stimulus_codes,
+                operant_csvs,
+                stim_dirs,
+                None)
+        
+        playback_dict = update_operant_db(playbacks_db,fs)
+        
+        df = pd.DataFrame(playback_dict, columns=operant_columns)
+        df.to_csv(self.output()['playbacks'].path, index=False)
+
+        # now handle the digital events
+        event_df = dict({
+            'start_time': [],
+            'duration': [],
+            'event_name': []
+        })
+        for event_type in event_key.keys():
+            if event_type != 'TTL':
+                event_ind = event_key[event_type]
+                if event_ind < len(traces):
+                    event_data = np.diff(traces[event_ind])
+                    event_on_times = np.where(event_data == 1)[0]
+                    event_off_times = np.where(event_data == -1)[0]
+                    if len(event_on_times) == 0 or len(event_off_times) == 0:
+                        logger.info("INFO: No event on or off times found for {}".format(event_type))
+                        continue
+                    # get rid of all off times that are before the first start time
+                    if event_off_times[0] < event_on_times[0]:
+                        event_off_times = event_off_times[1:]
+                    # get rid of all on times that are after the last off time
+                    if event_on_times[-1] > event_off_times[-1]:
+                        event_on_times = event_on_times[:-1]
+                    # make sure the lengths are the same
+                    if len(event_on_times) != len(event_off_times):
+                        logger.error("ERROR: Event on and off times are not the same length")
+                        continue
+                    event_df['start_time'].extend(event_on_times/fs)
+                    event_df['duration'].extend((event_off_times - event_on_times)/fs)
+                    event_df['event_name'].extend([event_type]*len(event_on_times))
+        event_df = pd.DataFrame(event_df)
+        event_df.to_csv(self.output()["events"].path, index=False)
+
+class GenerateSingleSitePlaybackCSV(luigi.Task):
+    site_dir = SiteParameter()
+    def requires(self):
+        return {
+            "site_config": SiteConfig(self.site_dir),
+            'project_config': SiteProjectConfig(self.site_dir),
+            "dig_memmap": GenerateSingleSiteDigitalMemmap(self.site_dir)
+        }
+
+    def output(self):
+        return {
+            "playbacks": luigi.LocalTarget(os.path.join(self.site_dir, "playback_segments_v2.csv")),
+        }
+    
+    def run(self):
+        site_config = self.input()["site_config"].data()
+        project_cfg = self.input()["project_config"].data()
+
+        logger.info("Loading digital data from {}".format(self.input()["dig_memmap"].path))
+        #dig_trace = np.fromfile(self.input()["dig_memmap"].path, dtype='uint16')
+        dig_trace = np.memmap(self.input()["dig_memmap"].path, dtype='uint16', mode='r')
+        #dig_trace = multirecording.get_traces().flatten()
+        fs = 30000 #TODO get this from the recording
+        num_chans = int(np.log2(np.max(dig_trace)))
+        traces = dict()
+        # NB: np.unpackbits does this for 8 bit unsigned ints. This works for us as long as we are not using more than 8 channels
+        for i in range(num_chans):
+            dig_data = np.not_equal(np.bitwise_and(dig_trace, (1<<i)),0)
+            # if data is mostly ones then flip it
+            if dig_data.mean() > .5:
+                dig_data = ~dig_data
+            traces[i] = dig_data.astype(np.int8)
+        
+        logger.info("Converting digital data to metadata")
+        # now handle the digital codes on the first channel
+        stimulus_codes = convert_raw_digital_to_metadata(traces[0],fs)
+
+
+        # now handle the digital events TODO put this in site_config
+        event_key = dict({
+            'TTL': 1,
+            'PeckPort':2,
+            'Feeder':3
+        })
+
+        #   Here, if there is an issue with stim codes, we can spoof them. NOT USUAL
+        if len(stimulus_codes) > 0 and np.all([t[1]['trial'] == 0 for t in stimulus_codes]):
+            if 'TTL' in event_key:
+                log_files = [f for f in site_config["filelist"] if f.endswith("events.log")]
+
+                # this is a hack to get the trial numbers from the digital data
+                # we will assume that the first trial starts at the first TTL
+                # first we will get the TTL pulses
+                TTL = np.diff(traces[event_key['TTL']])
+                file_timeoffset = calculate_event_timedelta(np.where(TTL==1)/fs, log_files, 0 )
+                
+                logger.info("Fixing stim codes because they are all 0")
+                #TODO make sure this works
+                stimulus_codes = fix_stimulus_codes(stim_codes=stimulus_codes, 
+                                                    csv_files=csv_files,stim_dirs=stim_dirs,
+                                                    sample_rate=sampling_rate, 
+                                                    session_starttime=session_start,
+                                                    session_offset=file_timeoffset) 
+            else:
+                logger.error("ERROR: No TTL channel found in digital data, and no stim codes found")
+
+        playback_csvs = [f for f in site_config["filelist"] if f.endswith("trialdata.csv")]
+        playback_csvs = [os.path.join(project_cfg['LOCAL_RAW_FILES']['pyoperant_drive'],f) for f in playback_csvs]
+        stim_dirs = _get_stim_dirs(playback_csvs, project_cfg['LOCAL_RAW_FILES']['stimuli_drive'])
+        # Combine the data from the csvs into a single pickled dataframe
+        logger.info("Saving stim database {}".format(self.output()["playbacks"].path))
+        playbacks_db = convert_pyoperant_playback_csvs(
+                stimulus_codes,
+                playback_csvs,
+                stim_dirs,
+                None)
+        
+        playback_dict = update_operant_db(playbacks_db,fs)
+        
+        df = pd.DataFrame(playback_dict, columns=operant_columns)
+        df.to_csv(self.output()['playbacks'].path, index=False)
+
+        # # now handle the digital events
+        # event_df = dict({
+        #     'start_time': [],
+        #     'duration': [],
+        #     'event_name': []
+        # })
+        # for event_type in event_key.keys():
+        #     if event_type != 'TTL':
+        #         event_ind = event_key[event_type]
+        #         if event_ind < len(traces):
+        #             event_data = np.diff(traces[event_ind])
+        #             event_on_times = np.where(event_data == 1)[0]
+        #             event_off_times = np.where(event_data == -1)[0]
+        #             if len(event_on_times) == 0 or len(event_off_times) == 0:
+        #                 logger.info("INFO: No event on or off times found for {}".format(event_type))
+        #                 continue
+        #             # get rid of all off times that are before the first start time
+        #             if event_off_times[0] < event_on_times[0]:
+        #                 event_off_times = event_off_times[1:]
+        #             # get rid of all on times that are after the last off time
+        #             if event_on_times[-1] > event_off_times[-1]:
+        #                 event_on_times = event_on_times[:-1]
+        #             # make sure the lengths are the same
+        #             if len(event_on_times) != len(event_off_times):
+        #                 logger.error("ERROR: Event on and off times are not the same length")
+        #                 continue
+        #             event_df['start_time'].extend(event_on_times/fs)
+        #             event_df['duration'].extend((event_off_times - event_on_times)/fs)
+        #             event_df['event_name'].extend([event_type]*len(event_on_times))
+        # event_df = pd.DataFrame(event_df)
+        # event_df.to_csv(self.output()["events"].path, index=False)
+class GenerateSingleSiteDigitalMemmap(luigi.Task):
+    """
+    Generate numpy binary arrays of digital signals.
+    """
+    site_dir = SiteParameter()
+    def requires(self):
+        return {
+            "site_config": SiteConfig(self.site_dir), 
+            "project_config": SiteProjectConfig(self.site_dir)
+        }
+
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "digital_%s.bin"%os.path.basename(self.site_dir)))
+    
+    def run(self):
+        site_config = self.input()["site_config"].data()
+        project_cfg = self.input()["project_config"].data()
+
+        sessions_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions")
+        all_sessions = site_config["sessions"]
+        all_intan_io = []
+        # put all reacording extractors in a list
+        for session in all_sessions:
+            # load the intan file
+            download_task = yield DownloadSession(os.path.join(sessions_dir, session["id"]))
+            rhd_file = download_task["rhd"].path
+            rhd = read_intan(rhd_file, stream_name='USB board digital input channel', check_timestamps=False)
+            all_intan_io.append(rhd)
+        # concatenate the recording extractors in a single one
+        multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
+
+        # then save to binary
+        filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
+            multirecording, os.path.dirname(self.output().path), data_name=os.path.basename(self.output().path), dtype=np.uint16,
+            chunksize=120000   )
+
+
+        
+
+class GenerateSingleSiteMemmap(luigi.Task):
+    """
+    Generate numpy binary arrays of ephys data.
+    
+    This is used as input to kilosort
+    Generates on .dat file for each session containing all channels of ephys
+    """
+    site_dir = SiteParameter()
+    from_binary = luigi.BoolParameter(default=False)
+
+
+    def requires(self):
+        return {
+            "site_config": SiteConfig(self.site_dir), 
+            "project_config": SiteProjectConfig(self.site_dir)
+        }
+    
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "%s.bin"%os.path.basename(self.site_dir)))
+
+    def run(self):
+        site_config = self.input()["site_config"].data()
+        sessions_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions")
+        all_sessions = site_config["sessions"]
+        all_intan_io = []
+        # put all reacording extractors in a list
+        if not self.from_binary:
+            for session in all_sessions:
+                # load the intan file
+                download_task = yield DownloadSession(os.path.join(sessions_dir, session["id"]))
+                rhd_file = download_task["rhd"].path
+                rhd = read_intan(rhd_file, stream_name='RHD2000 amplifier channel', check_timestamps=False)
+                all_intan_io.append(rhd)
+            # concatenate the recording extractors in a single one
+            multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
+        else: # THIS DOESNT WORK>>>>>
+            bin_files = [session["raw_bin"] for session in all_sessions]
+            # TODO get these from project config
+            # TODO Change this to have a single segment
+            multirecording = BinaryRecordingExtractor(file_paths=bin_files, sampling_frequency=30000, num_channels=64, dtype='uint16')
+
+        # add a high pass filter
+        multirecording_f = highpass_filter(multirecording, freq_min=300)
+
+        # then save to binary
+        filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
+            multirecording_f, os.path.join(self.site_dir,'raw'), data_name='%s.bin'%os.path.basename(self.site_dir), dtype=np.int16,
+            chunksize=60000   )
+
+        if self.from_binary:
+            # delete the binary files
+            for session in all_sessions:
+                os.remove(session["raw_bin"])
+
+        
 
 class Rhd2Nix(luigi.Task):
     """Converts an RHD file to a NIX file, and clean up the RHD file

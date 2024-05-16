@@ -10,8 +10,9 @@ import time
 import luigi
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.signal import hann, check_COLA
 from soundsig.sound import spectrogram
-from soundsig.signal import bandpass_filter
+from soundsig.signal import bandpass_filter, resample
 from suss.core import SpikeDataset
 import suss.io
 
@@ -22,7 +23,7 @@ from ..preprocess.ephys.filter import common_average_filter
 from ..preprocess.ephys.detect import calculate_snippet_dimensions, extract_spikes
 from ..preprocess.ephys.sort import sort, create_hierarchy
 
-from .file_setup import Rhd2Wav, Rhd2Binary, SiteConfig, SessionConfig, SessionProjectConfig, SiteProjectConfig, DefineSessions, GenerateSiteMemmaps, GenerateLFP
+from .file_setup import Rhd2Wav, Rhd2Binary, SiteConfig, SessionConfig, SessionProjectConfig, SiteProjectConfig, DefineSessions,GenerateSingleSiteMemmap, GenerateSiteMemmaps, GenerateLFP
 from .pipeline_utils import SiteParameter, SessionParameter, get_session_sites
 
 
@@ -236,7 +237,7 @@ class MemmapDataset(object): #TODO maybe subclass np.ndarray
     def __init__(self, memmap_fns, offsets, nchannels, sample_rate, dtype=np.uint16, mode="r"):
         self.dtype = dtype
         self.mode = mode
-        self.offsets = np.asarray(offsets)
+        self.offsets = (np.asarray(offsets) * sample_rate).astype(int)
         # load the memmaps
         self.memmaps = []
         self.nchannels = nchannels
@@ -266,32 +267,37 @@ class MemmapDataset(object): #TODO maybe subclass np.ndarray
         end_offset = end - self.offsets[end_idx]
         # get the data
         data = []
-        output = np.zeros((end-start,channels.size),dtype=self.dtype)
+
+        output = np.zeros((end-start,np.arange(self.nchannels)[channels].size),dtype=self.dtype)
         nsamps_read = 0
         for i in range(start_idx, end_idx+1):
             if i == start_idx:
                 start = start_offset
             else:
                 start = 0
+            nsamps_this = self.memmaps[i].shape[0] - start
             if i == end_idx:
                 end = end_offset
+                nsamps_this = end-start
             else:
                 end = None
-            output[nsamps_read:nsamps_read+end-start] = self.memmaps[i][start:end,channels]
-            nsamps_read += end-start
+                
+            output[nsamps_read:nsamps_read+nsamps_this] = self.memmaps[i][start:end,channels]
+            nsamps_read += nsamps_this
         return output
 
 
 class GenerateSiteLFP(luigi.Task):
     site_dir = SiteParameter()
     lowpass_freq = luigi.FloatParameter(default=300.0)
-    highpass_freq = luigi.FloatParameter(default=0.0)
+    highpass_freq = luigi.FloatParameter(default=10.0)
     downsample_ratio = luigi.IntParameter(default=30)
-    win_length_sec = luigi.FloatParameter(default=60)
+    win_length_sec = luigi.FloatParameter(default=60*5)
     def requires(self):
         return {
             "site_config": DefineSessions(self.site_dir),
-            "project_config": SiteProjectConfig(self.site_dir)
+            "project_config": SiteProjectConfig(self.site_dir),
+            'memmaps': GenerateSiteMemmaps(self.site_dir)
         }
     def output(self):
         sorting_dir = os.path.join(self.site_dir, "spikes")
@@ -300,45 +306,68 @@ class GenerateSiteLFP(luigi.Task):
 
         # TODO: this relies on the project config already being created.
         project_cfg = SiteProjectConfig(self.site_dir).output().data()
-        return luigi.LocalTarget(os.path.join(self.site_dir,"siteLFP.bin"))
+        return luigi.LocalTarget(os.path.join(self.site_dir,"siteLFP_%d_%d.npy"%(self.lowpass_freq,self.highpass_freq)))
     
     def run(self):
         site_config = self.input()["site_config"].data()
         session_offsets = [session["t"] for session in site_config["sessions"]]
         sessions_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions")
 
-        memmap_targets = []
-        for session in site_config["sessions"]:
-            bin = yield GenerateSiteMemmaps(os.path.join(sessions_dir, session["id"]))
-            memmap_targets.append(bin)
+        memmap_targets = [session["raw_bin"] for session in site_config["sessions"]]
+        project_cfg = self.input()["project_config"].data()
         
-        dataset = MemmapDataset(memmap_fns, session_offsets, nchannels,sample_rate=30000, dtype=np.uint16, mode="r")
+        dataset = MemmapDataset(memmap_targets, session_offsets, project_cfg['EPHYS']['ELECTRODE_N'],sample_rate=30000, dtype=np.uint16, mode="r")
+        # # create memmap for output
+        # output = np.memmap(self.output().path, dtype=np.uint16, shape=(dataset.nsamps // self.downsample_ratio,dataset.nchannels), mode="w+")
+        # def _parallel_filter(data_slice,dataset,output,window,downsample_ratio,highpass_freq,lowpass_freq):
+        #     data = dataset.get(data_slice.start,data_slice.stop)
+        #     data = bandpass_filter(data, dataset.sample_rate, highpass_freq,  lowpass_freq, filter_order=4)
+        #     len_output = int(data.shape[0]//downsample_ratio)
+        #     lfp_slice = slice(data_slice.start//downsample_ratio,data_slice.stop//downsample_ratio)
+        #     output[lfp_slice] = (resample(data, len_output, axis=0)*window[:len_output,np.newaxis]).astype(np.uint16)
 
         # Make an even window size for the hann window
         win_size = (int(dataset.sample_rate * self.win_length_sec) // 2 )* 2
         lfp_win_size = win_size // self.downsample_ratio
         win_shift = win_size // 2
         lfp_win_shift = lfp_win_size // 2
-        # Hann windows can be overlapped with 50% or 75% overlap
-        window = scipy.signal.hann(win_size, sym=False)
+        # Hann windows can be overlapped with 50% overlap
+        window = hann(lfp_win_size, sym=False)
         # for now we can assert that the window overlaps
-        assert(check_COLA(window,win_size,win_size//2))
+        assert(check_COLA(window,lfp_win_size,lfp_win_shift))
 
         # go through and filter        
         n_wins = dataset.shape[0] // win_shift
-        lfp = np.zeros((dataset.nsamps // self.downsample_ratio,dataset.nchannels),dtype=np.uint16)
+        lfp = np.zeros((dataset.nsamps // self.downsample_ratio,dataset.nchannels),dtype=np.float32)
 
         for i in range(n_wins):
             start = i * win_shift
             end = start + win_size
-            # get the data
-            data = dataset.get(start,end)
-            # filter
-            data = bandpass_filter(data, self.lowpass_freq, self.highpass_freq, dataset.sample_rate, order=4, axis=0)
+            if end > dataset.nsamps:
+                data = dataset.get(start,dataset.nsamps)
+            else:
+                data = dataset.get(start,end)
+            # convert to 0-1 float32
+            data = ((data + np.iinfo(data.dtype).min) / (np.iinfo(data.dtype).max - np.iinfo(data.dtype).min)).astype(np.float32)
+
             # downsample
+            this_win_size = data.shape[0] // self.downsample_ratio
+            this_win = window[:this_win_size].copy()
+            if i == 0:
+                # if this is the first window dont window the first half
+                this_win[:win_shift] = 1
+            if i == n_wins-1:
+                # if this is the last window dont window the last half
+                this_win[-win_shift:] = 1
+
+            ds_data = resample(data, this_win_size, axis=0)
+            # filter
+            ds_data = bandpass_filter(ds_data.T, dataset.sample_rate // self.downsample_ratio, self.highpass_freq,  self.lowpass_freq, filter_order=4).T
+
             lfp_start = i * lfp_win_shift
-            lfp_end = lfp_start + lfp_win_size
-            lfp[lfp_start:lfp_end,:] += resample(data, lfp_win_size, axis=0)*window[:,np.newaxis]
+            lfp_end = lfp_start + this_win_size
+        
+            lfp[lfp_start:lfp_end,:] += (ds_data*this_win[:,np.newaxis])
         
         # save
         lfp.tofile(self.output().path)
@@ -420,6 +449,24 @@ class PrepareSorting(luigi.Task):
         project_cfg = SiteProjectConfig(self.site_dir).output().data()        
         return np.all([ManualSorting(site_dir=self.site_dir, electrode_idx=elec).complete() for elec in range(project_cfg["EPHYS"]["ELECTRODE_N"])])
 
+# class KiloSortSiteSetup(luigi.Task):
+#     site_dir = SiteParameter()
+#     def requires(self):
+#         return {
+#             "site_config": SiteConfig(self.site_dir),
+#             "project_config": SiteProjectConfig(self.site_dir)
+#         }
+#     def output(self):
+#         return luigi.LocalTarget(os.path.join(self.site_dir,'kilosort_output','params.py'))
+#     def run(self):
+#         site_config = self.input()["site_config"].data()
+#         project_config = self.input()['project_config'].data()
+
+#         csv_files=[f for f in site_config["filelist"]
+#                        if f.endswith(".csv")]
+#         rhd_files=[f for f in site_config["filelist"]
+#                     if f.endswith(".rhd")]
+#         # link the rhd files to the session folder
 
 class KiloSortSorting(luigi.Task):
     site_dir = SiteParameter()
@@ -427,7 +474,8 @@ class KiloSortSorting(luigi.Task):
         return {
             "site_config": DefineSessions(self.site_dir),
             "project_config": SiteProjectConfig(self.site_dir),
-            "bin_arrays": GenerateSiteMemmaps(self.site_dir)
+            #"bin_arrays": GenerateSiteMemmaps(self.site_dir)
+            "full_bin_array": GenerateSingleSiteMemmap(self.site_dir)
         }
 
     def output(self):
@@ -435,33 +483,88 @@ class KiloSortSorting(luigi.Task):
 
 
     def run(self):
-        from pykilosort.io.probes import cambridge_neurotech_assy_236_h10, cambridge_neurotech_assy_236_P1
+        from pykilosort.io.probes import cambridge_neurotech_assy_236_h10, cambridge_neurotech_assy_236_P1, microprobes_16ch
         from pykilosort import run as kilosort_run
         from pathlib import Path
 
         probes = dict({
             "P1": cambridge_neurotech_assy_236_P1, # 4 shank
-            "H10": cambridge_neurotech_assy_236_h10 # 2 shank 
+            "H10": cambridge_neurotech_assy_236_h10, # 2 shank 
+            "M16": microprobes_16ch # microprobes with 16 wires
         })
         site_config = self.input()["site_config"].data()
         project_config = self.input()['project_config'].data()
 
         chan_names = [x[1] for x in site_config['bin_to_original_channels']['ephys.wav']]
-        # offsets of each session
-        session_offsets = [session["t"] for session in site_config["sessions"]]
-        # paths to npy files from base folder
-        session_npys = [session['raw_bin'] for session in site_config['sessions']]
-        sorted_npy_paths = [Path(x) for _,x in sorted(zip(session_offsets,session_npys))]
-        print(sorted_npy_paths)
+        # # offsets of each session
+        # session_offsets = [session["t"] for session in site_config["sessions"]]
+        # # paths to npy files from base folder
+        # session_npys = [session['raw_bin'] for session in site_config['sessions']]
+        # sorted_npy_paths = [Path(x) for _,x in sorted(zip(session_offsets,session_npys))]
+        bin_file = Path(self.input()['full_bin_array'].path)
         # can specify some channels are bad, should remove them from channel_names
         bad_chans = site_config.get('bad_channels',dict()).get('ephys.wav',dict()).get('RHD2000 amplifier channel',[])
         chan_names = np.array(chan_names)[~np.in1d(chan_names,bad_chans)]
         out_dir = os.path.join(self.site_dir,'kilosort_output')
         probe_fun = probes[project_config["EPHYS"].get('PROBETYPE','H10')]
-        kilosort_run(sorted_npy_paths, dir_path=self.site_dir, output_dir=out_dir,
+        kilosort_run(bin_file, dir_path=self.site_dir, output_dir=out_dir,
                      probe = probe_fun(chan_names = chan_names),
-                     n_channels=len(chan_names),data_dtype='uint16')
+                     n_channels=len(chan_names),data_dtype='int16')
+class KiloSort4Sorting(luigi.Task):
+    site_dir = SiteParameter()
+    def requires(self):
+        return {
+            "site_config": DefineSessions(self.site_dir),
+            "project_config": SiteProjectConfig(self.site_dir),
+            "full_bin_array": GenerateSingleSiteMemmap(self.site_dir,from_bin=False)
+        }
 
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir,'ks4_final','params.py'))
+
+    def run(self):
+        import kilosort
+        from kilosort import run_kilosort, DEFAULT_SETTINGS
+        from pathlib import Path
+
+        site_config = self.input()["site_config"].data()
+        project_config = self.input()['project_config'].data()
+
+        probes = dict({
+            "P1": 'cambridge_neurotech_assy_236_P1.prb', # 4 shank
+            "H10": 'cambridge_neurotech_assy_236_h10.prb', # 2 shank
+            "M16": 'microprobes_16ch.prb' # microprobes with 16 wires
+        })
+        prb = kilosort.io.load_probe(probes[project_config["EPHYS"].get('PROBETYPE','H10')])
+        import os
+        os.environ['PYTORCH_CUDA_ALLOC_CONF']="expandable_segments:True"
+
+        # bad_chans = np.asarray([0,14])
+        # inds = prb['chanMap'][np.where(~np.in1d(prb['chanMap'], bad_chans))[0]]
+        # print(bad_chans)
+        # prb_new = prb.copy()
+        # prb_new['chanMap'] = prb['chanMap'][inds]
+        # prb_new['xc'] = prb['xc'][inds]
+        # prb_new['yc'] = prb['yc'][inds]
+        # prb_new['kcoords'] = prb['kcoords'][inds]
+        # prb_new['n_chan'] = prb['n_chan'] - len(bad_chans)
+        # plt.scatter(prb_new['xc'],prb_new['yc'],label=prb_new['chanMap'],c=prb_new['chanMap'])
+
+        settings = kilosort.DEFAULT_SETTINGS.copy()
+        settings['n_chan_bin'] = 64
+        settings['nearest_templates'] = 64
+        settings['nearest_channels'] = 10
+
+        settings['nblocks'] = 1
+        # Batch size should be larger
+        settings['batch_size'] = 30000*4 # 4s of data
+        # Reduce Th_universal by 1 or 2 at a time to detect more units
+        settings['Th_universal'] = 8
+        # Reduce Th_learned if I see neurons coming in and out
+        settings['Th_learned'] = 8
+        ks_output_dir =  os.path.dirname(self.output().path)
+        bin_file = Path(self.input()['full_bin_array'].path)
+        kilosort.run_kilosort(settings=settings, probe=prb, filename=bin_file, data_dtype='int16', results_dir=ks_output_dir)
 
 class ManualSorting(luigi.Task):
     site_dir = SiteParameter()
@@ -510,6 +613,14 @@ class PreprocessSite(luigi.WrapperTask):
             PrepareSorting(self.site_dir)
         ]
 
+class PreprocessCommunicationSite( luigi.WrapperTask):
+    site_dir = SiteParameter()
+
+    def requires(self):
+        return [
+            DefineSessions(self.site_dir),
+            KiloSortSorting(self.site_dir)
+        ]
 class PreprocessOperantSite( luigi.WrapperTask ):
     """Preprocess ephys data for entire site
     This will run additional tasks <TODO INSERT TASK NAMES>

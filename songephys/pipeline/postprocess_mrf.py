@@ -18,13 +18,13 @@ from scipy.io import wavfile
 from strfpy import preprocSound
 
 from .postprocess_strf import GenerateSTRFRequirements
-from .postprocess_operant import SiteProjectConfig,GenStimInfoDB, GenPlaybackSpikesDB
+from .postprocess_operant import SiteProjectConfig,GenStimInfoDB, GenPlaybackSpikesDB, AnalysisTask
 from .pipeline_utils import SiteParameter, BaseTask
-def _get_mrf_data_folder(site_dir,cluster):
-    return os.path.join(site_dir,"analysis","data","Cluster_%d"%cluster['cluster_id'],"MRF_Figs_500")
+def _get_mrf_data_folder(analysis_dir,cluster):
+    return os.path.join(analysis_dir,"data","Cluster_%d"%cluster['cluster_id'],"MRF_Figs_500")
 
-def _get_mrf_figure_folder(site_dir,cluster):
-    return os.path.join(site_dir,"analysis","figures","clusters_%s"%cluster['group'],"Cluster_%d"%cluster['cluster_id'],"MRF_Figs_500")
+def _get_mrf_figure_folder(analysis_dir,cluster):
+    return os.path.join(analysis_dir,"figures","clusters_%s"%cluster['group'],"Cluster_%d"%cluster['cluster_id'],"MRF_Figs_500")
     
 
 class DataFrameColumn(luigi.Target): # TODO but not before lab meeting...
@@ -112,18 +112,17 @@ def _generate_MPS(data,sr,mps_sr=1000):
     wf = myBioSound.wf[indwf]
     return mps, wt, wf
 
-class GenSegmentMPSDB(BaseTask):
+class GenSegmentMPSDB(AnalysisTask):
     """Generate a database of segments for each stim from the segment database generated in GenerateSegmentationDB"""
-    site_dir = SiteParameter()
     padding_ms = luigi.IntParameter(default=25)
 
     def requires(self):
         return {
-            "project_config": SiteProjectConfig(self.site_dir),
-            "playback_info": GenStimInfoDB(self.site_dir)
+            "project_config": SiteProjectConfig(site_dir=self.site_dir),
+            "playback_info": GenStimInfoDB(site_dir=self.site_dir)
         }
     def output(self):# SCHEMA TAG
-        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","raw","dfSongMPSSegments_fromdf_pad%d.pkl"%(self.padding_ms)))
+        return luigi.LocalTarget(os.path.join(self.get_analysis_dir(),"raw","dfSongMPSSegments_fromdf_pad%d.pkl"%(self.padding_ms)))
     
     def run(self):
         # load the project config to get stim_drive location
@@ -137,6 +136,8 @@ class GenSegmentMPSDB(BaseTask):
         extend_segments = False
         # Go through all emitters
         for bird in np.unique(playbacks_and_timings.bird_name):
+            if bird == 'HPiHPi4748': # BAD BIRD
+                continue
             bird_df = playbacks_and_timings[(playbacks_and_timings.bird_name == bird)]
             # all unique stim files for each emitter
             for song in np.unique(bird_df.name):
@@ -165,10 +166,10 @@ class GenSegmentMPSDB(BaseTask):
                         # else:
                         if extend_segments and iseg>0:
                             segments[-1][1] = seg[0]
-                            segments.append(seg)                
+                        segments.append(seg)                
                             
 
-                        segments.append([tStart+segment[0], tStart+segment[1]])
+                        #segments.append([tStart+segment[0], tStart+segment[1]])
 
                 for segment in segments:
                     # if segments are too short dont include them
@@ -203,19 +204,18 @@ class GenSegmentMPSDB(BaseTask):
         df_song_segments.to_pickle(self.output().path)
 
 
-class GenSegmentMPSDB_manual(BaseTask):
+class GenSegmentMPSDB_manual(AnalysisTask):
     """ Generates database of segments for each stim"""
-    site_dir = SiteParameter()
     padding_ms = luigi.IntParameter(default=25)
 
     def requires(self):
         return {
-            "project_config": SiteProjectConfig(self.site_dir),
-            "playback_info": GenStimInfoDB(self.site_dir)
+            "project_config": SiteProjectConfig(site_dir=self.site_dir),
+            "playback_info": GenStimInfoDB(site_dir=self.site_dir)
         }
     
     def output(self):# SCHEMA TAG
-        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","raw","dfSongMPSSegments_sc-b_pad%d.pkl"%(self.padding_ms)))
+        return luigi.LocalTarget(os.path.join(self.get_analysis_dir(),"raw","dfSongMPSSegments_sc-b_pad%d.pkl"%(self.padding_ms)))
     
     def run(self):
         # load the project config to get stim_drive location
@@ -261,16 +261,15 @@ class GenSegmentMPSDB_manual(BaseTask):
         self.output().makedirs()
         df_song_segments.to_pickle(self.output().path)
 
-class PlotSegments(BaseTask):
+class PlotSegments(AnalysisTask):
     """ Generates database of segments for each stim"""
-    site_dir = SiteParameter()
     padding_ms = luigi.IntParameter(default=25)
     extension = luigi.Parameter(default="png")
     def requires(self):
         return {
             "segments": GenSegmentMPSDB(site_dir=self.site_dir,padding_ms=self.padding_ms),
-            "project_config": SiteProjectConfig(self.site_dir),
-            "playback_info": GenStimInfoDB(self.site_dir)
+            "project_config": SiteProjectConfig(site_dir=self.site_dir),
+            "playback_info": GenStimInfoDB(site_dir=self.site_dir)
         }
     def output(self):
         if not self.input()["playback_info"].path:
@@ -279,7 +278,7 @@ class PlotSegments(BaseTask):
         num_stims = len(pb_df.name.unique())
         outputs = []
         for i in range(num_stims//10):
-            outputs.append(luigi.LocalTarget(os.path.join(self.site_dir,"analysis","figures","Segments","Segments_%d.%s"%(i,self.extension))))
+            outputs.append(luigi.LocalTarget(os.path.join(self.get_analysis_dir(),"figures","Segments","Segments_%d.%s"%(i,self.extension))))
         return outputs
     def run(self):
         # load the segments database
@@ -343,8 +342,7 @@ class PlotSegments(BaseTask):
                 segments = []
             nstim += 1
 
-class GenSegmentSpikeDB(BaseTask):
-    site_dir = SiteParameter()
+class GenSegmentSpikeDB(AnalysisTask):
     cluster = luigi.DictParameter()
     padding_ms = luigi.IntParameter(default=25)
     kWidth_ms = luigi.IntParameter(default=3)
@@ -354,7 +352,7 @@ class GenSegmentSpikeDB(BaseTask):
             "segments": GenSegmentMPSDB(site_dir=self.site_dir,padding_ms=self.padding_ms)
         }
     def output(self):
-        return luigi.LocalTarget(os.path.join(_get_mrf_data_folder(self.site_dir,self.cluster),"dfPreprocSegmentResponsePairs.pkl"))
+        return luigi.LocalTarget(os.path.join(_get_mrf_data_folder(self.get_analysis_dir(),self.cluster),"dfPreprocSegmentResponsePairs.pkl"))
     def run(self):
         playbacks_df = pandas.read_pickle(self.input()['trials'].path)
         segments_df = pandas.read_pickle(self.input()['segments'].path)
@@ -428,16 +426,15 @@ class GenSegmentSpikeDB(BaseTask):
         print("Saving to %s"%self.output().path)
         segments_df.to_pickle(self.output().path)
 
-class GenerateMRF(BaseTask): # In progress
-    site_dir = SiteParameter()
+class GenerateMRF(AnalysisTask): # In progress
     cluster = luigi.DictParameter()
     def requires(self):
         return GenSegmentSpikeDB(site_dir=self.site_dir,cluster=self.cluster)
     def output(self):
         return {
-            "response": luigi.LocalTarget(os.path.join(_get_mrf_data_folder(self.site_dir,self.cluster),'respMPSPC.pkl')),
-            "pred_response": luigi.LocalTarget(os.path.join(_get_mrf_data_folder(self.site_dir,self.cluster),'respMPSPCpred.npy')),
-            "mrf_struct": luigi.LocalTarget(os.path.join(_get_mrf_data_folder(self.site_dir,self.cluster),'stimMRF.pkl'))
+            "response": luigi.LocalTarget(os.path.join(_get_mrf_data_folder(self.get_analysis_dir(),self.cluster),'respMPSPC.pkl')),
+            "pred_response": luigi.LocalTarget(os.path.join(_get_mrf_data_folder(self.get_analysis_dir(),self.cluster),'respMPSPCpred.npy')),
+            "mrf_struct": luigi.LocalTarget(os.path.join(_get_mrf_data_folder(self.get_analysis_dir(),self.cluster),'stimMRF.pkl'))
         }
     def run(self):
         # Mean Response
@@ -468,7 +465,7 @@ class GenerateMRF(BaseTask): # In progress
         pickle.dump(out_resp_dict,open(self.output()["response"].path,'wb'))
         
         # Perform cross-validated ridge regression for all PCs
-        Alphas = (1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13)   # Ridge hyperparameter coeffiecients(1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 
+        Alphas = (  1e7, 1e8, 1e9, 1e10, 1e11, 1e12, 1e13)   # Ridge hyperparameter coeffiecients(1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8,
         nPC = respPC.shape[1]
 
 
@@ -497,8 +494,7 @@ class GenerateMRF(BaseTask): # In progress
         
 
 
-class PlotPCMRFs(BaseTask): # good
-    site_dir = SiteParameter()
+class PlotPCMRFs(AnalysisTask): # good
     cluster = luigi.DictParameter()
     extension= luigi.Parameter(default="png")
     nPCs = luigi.IntParameter(default=10)
@@ -506,7 +502,7 @@ class PlotPCMRFs(BaseTask): # good
         return GenerateMRF(site_dir=self.site_dir,cluster=self.cluster)
     def output(self):
         for i in range(self.nPCs):
-            yield luigi.LocalTarget(os.path.join(_get_mrf_figure_folder(self.site_dir,self.cluster),"PC_MRFs","PC%d_MRF.%s"%(i,self.extension)))
+            yield luigi.LocalTarget(os.path.join(_get_mrf_figure_folder(self.get_analysis_dir(),self.cluster),"PC_MRFs","PC%d_MRF.%s"%(i,self.extension)))
     def run(self):
         MRFStruct = pickle.load(open(self.input()["mrf_struct"].path,'rb'))
         MRF = MRFStruct["MRF"]
@@ -545,15 +541,14 @@ class PlotPCMRFs(BaseTask): # good
             print(out_target.path)
             plt.savefig(out_target.path)
 
-class PlotMRFPCs(BaseTask): # good
-    site_dir = SiteParameter()
+class PlotMRFPCs(AnalysisTask): # good
     cluster = luigi.DictParameter()
     nPCs = luigi.IntParameter(default=10)
     extension = luigi.Parameter(default="png")
     def requires(self):
         return GenerateMRF(site_dir=self.site_dir,cluster=self.cluster)
     def output(self):
-        return luigi.LocalTarget(os.path.join(_get_mrf_figure_folder(self.site_dir,self.cluster),"RespPCs.%s"%self.extension))
+        return luigi.LocalTarget(os.path.join(_get_mrf_figure_folder(self.get_analysis_dir(),self.cluster),"RespPCs.%s"%self.extension))
     def run(self):
         dictResp = pickle.load(open(self.input()["response"].path,'rb'))
         pcResp = dictResp["pcaResp"]
@@ -577,14 +572,13 @@ class PlotMRFPCs(BaseTask): # good
         print("Saving figure to %s"%self.output().path)
         plt.savefig(self.output().path)
 
-class PlotAverageMPS(BaseTask):  #BUG: not working
-    site_dir = SiteParameter()
+class PlotAverageMPS(AnalysisTask):  #BUG: not working
     cluster = luigi.DictParameter()
     extension = luigi.Parameter(default="png")
     def requires(self):
         return GenerateMRFSegments(site_dir=self.site_dir,cluster=self.cluster)
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","figures","clusters_%s"%self.cluster['group'],"Cluster_%d"%self.cluster['cluster_id'],"MRF","AverageMPS.%s"%self.extension))
+        return luigi.LocalTarget(os.path.join(self.get_analysis_dir(),"figures","clusters_%s"%self.cluster['group'],"Cluster_%d"%self.cluster['cluster_id'],"MRF","AverageMPS.%s"%self.extension))
     def run(self):
         stimDict = pickle.load(open(self.input()["stimuli"].path,'rb'))
         stimMPS = stimDict["stimMPS"]
@@ -615,8 +609,7 @@ class PlotAverageMPS(BaseTask):  #BUG: not working
         plt.savefig(self.output().path)
 
 from strfpy import trnDirectFit
-class PlotMRFPredictedResponses(BaseTask):
-    site_dir = SiteParameter()
+class PlotMRFPredictedResponses(AnalysisTask):
     cluster = luigi.DictParameter()
     stim_number = luigi.IntParameter(default=-1) # -1 will do all stims
     nPC = luigi.IntParameter(default=10)
@@ -628,19 +621,19 @@ class PlotMRFPredictedResponses(BaseTask):
             "trials": GenPlaybackSpikesDB(site_dir=self.site_dir,cluster=self.cluster)
         }
     def output(self):
-        if not self.input()["trials"].path:
-            raise Exception("No pb_df found, Run GenerateSTRFRequirements")
+        if not self.input()["trials"].exists():
+            return luigi.LocalTarget('dummy')
         pb_df = pandas.read_pickle(self.input()["trials"].path)
         num_stims = len(pb_df.Rendition_Name.unique())
         outputs = []
         if self.stim_number < 0:
             for i in range(num_stims//10):
-                outputs.append(luigi.LocalTarget(os.path.join(_get_mrf_figure_folder(self.site_dir,self.cluster),"PredictedResponses","Preview_%d.%s"%(i,self.extension))))
+                outputs.append(luigi.LocalTarget(os.path.join(_get_mrf_figure_folder(self.get_analysis_dir(),self.cluster),"PredictedResponses","Preview_%d.%s"%(i,self.extension))))
             # append one output for the statistics
-            outputs.append(luigi.LocalTarget(os.path.join(_get_mrf_data_folder(self.site_dir,self.cluster),"PredictedResponse_Info.pkl")))
+            outputs.append(luigi.LocalTarget(os.path.join(_get_mrf_data_folder(self.get_analysis_dir(),self.cluster),"PredictedResponse_Info.pkl")))
             return outputs
         else:
-            return luigi.LocalTarget(os.path.join(_get_mrf_figure_folder(self.site_dir,self.cluster),"PredictedResponses","PredResp_%d.%s"%(self.stim_number,self.extension)))
+            return luigi.LocalTarget(os.path.join(_get_mrf_figure_folder(self.get_analysis_dir(),self.cluster),"PredictedResponses","PredResp_%d.%s"%(self.stim_number,self.extension)))
     def run(self):
         pb_df = pandas.read_pickle(self.input()["trials"].path)
 
@@ -673,6 +666,7 @@ class PlotMRFPredictedResponses(BaseTask):
             stim_names = []
             start_stops = []
             corr_coefs = []
+            samp_sizes = []
             info_bits = []
             all_resps = []
             all_preds = []
@@ -686,6 +680,7 @@ class PlotMRFPredictedResponses(BaseTask):
                 spike_times = stim_df.Spike_Times - stim_df.Start
                 peck_times = stim_df.Peck.values.astype(float)
                 concatenated_spike_times = np.concatenate(np.asarray(spike_times))
+                ntrials = len(spike_times)
                 peck_times[peck_times == 0.0] = np.nan
                 weights = np.array([1/(len(peck_times) - sum(peck_times < x)) for x in concatenated_spike_times])
                 x_d = np.linspace(0,6,6001)#1ms bins
@@ -708,6 +703,8 @@ class PlotMRFPredictedResponses(BaseTask):
                 respPrediction = np.zeros_like(resp)
 
                 stim_seg_df = seg_df[seg_df.Name == stim_name]
+                if len(stim_seg_df) == 0 or stim_seg_df.Bird.iloc[0] == 'HPiHPi4748': # BAD BIRD
+                    continue
                 samp_start_stop = []        
                 for iseg,seg_row in stim_seg_df.iterrows():
                     # Start the prediction with the mean PC
@@ -741,6 +738,7 @@ class PlotMRFPredictedResponses(BaseTask):
                 all_preds.extend(respPrediction)
                 all_resps.extend(resp)
                 corr_coefs.append(np.corrcoef(respPrediction,resp)[0,1])
+                samp_sizes.append(ntrials)
                 if stim_ix % 10 == 10 - 1 or stim_ix == nstims-1:
                     # Plot the spectrogram and the prediction
                     f, arr_ax = plt.subplots(len(pred_resps), 1, sharex=True, dpi=100, figsize = (5,8))
@@ -771,11 +769,13 @@ class PlotMRFPredictedResponses(BaseTask):
                 stim_ix += 1
             # Save the correlation coefficients
             corr_coefs = np.array(corr_coefs)
+            samp_sizes = np.array(samp_sizes)
             info_bits = np.log2(1+corr_coefs**2)
             jninfo = trnDirectFit.compute_coherence_mean(np.array(all_preds).T, np.array(all_resps), 1000,100,.25)
             print("Saving CC to %s"%output_targets[-1].path)
             pickle.dump(dict({
                 "corr_coefs": corr_coefs,
+                "sample_sizes": samp_sizes,
                 "info_bits": info_bits,
                 "jninfo": jninfo
             }),open(output_targets[-1].path,'wb'))
@@ -871,11 +871,9 @@ class PlotMRFPredictedResponses(BaseTask):
 class RunMRFTasks(luigi.WrapperTask):
     site_dir = SiteParameter()
     cluster = luigi.DictParameter()
-    def output(self):
-        # TODO I could put a list here of jobs ran
-        return luigi.LocalTarget("dummy")
-    def run(self):
-        yield PlotPCMRFs(site_dir=self.site_dir,cluster=self.cluster)
-        yield PlotMRFPCs(site_dir=self.site_dir,cluster=self.cluster)
-        yield PlotMRFPredictedResponses(site_dir=self.site_dir,cluster=self.cluster,stim_number=1)
-        yield PlotMRFPredictedResponses(site_dir=self.site_dir,cluster=self.cluster)
+    force = luigi.BoolParameter(default=False)
+    def requires(self):
+        yield PlotPCMRFs(site_dir=self.site_dir,cluster=self.cluster, force=self.force)
+        yield PlotMRFPCs(site_dir=self.site_dir,cluster=self.cluster, force=self.force)
+        yield PlotMRFPredictedResponses(site_dir=self.site_dir,cluster=self.cluster,stim_number=1, force=self.force)
+        yield PlotMRFPredictedResponses(site_dir=self.site_dir,cluster=self.cluster, force=self.force)

@@ -3,6 +3,7 @@ import logging
 import os
 from collections import defaultdict
 import datetime
+import json
 
 import luigi
 import numpy as np
@@ -11,6 +12,8 @@ import quantities as pq
 import soundfile as sf
 from neo.io import IntanIO
 from scipy.fft import rfft
+from soundsep.config.defaults import DEFAULTS
+import yaml
 
 from ..utils import get_session_starttime
 from ..format.io import load_yaml
@@ -24,7 +27,8 @@ from ..preprocess.sound.playback_utils import (
     create_digital_events_df,
     calculate_event_timedelta,
     fix_stimulus_codes,
-    create_gaussian_window
+    create_gaussian_window,
+    _get_stim_dirs
 )
 from ..preprocess.sound.playback_alignment import (
     compute_realigned_trial_times,
@@ -40,7 +44,7 @@ from ..preprocess.sound.detect import (
 )
 from ..preprocess.sound.stimuli import merge_segments
 
-from .file_setup import Rhd2Binary, SiteConfig, SessionConfig, DownloadSession, GenerateSiteMemmaps
+from .file_setup import Rhd2Binary, SiteConfig, SessionConfig, DownloadSession, GenerateSiteMemmaps, GenerateSingleSiteAudioFile, GenerateSingleSiteOperantCSV
 from .pipeline_utils import SiteParameter, SessionParameter
 
 
@@ -48,44 +52,6 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
-def _get_stim_dirs(csv_files, stimuli_directory):
-    """Locates the specific stimulus directories found in the csv files
-
-    Locates one stimulus directory per csv (even if there might be multiple
-    stimulus directories used in the csv)
-
-    Returns one stimulus directory per csv_file
-    """
-    stim_dirs = []
-    possible_stim_dirs = [
-        os.path.basename(f)
-        for f in glob.glob(os.path.join(stimuli_directory, "*"))]
-
-    for csv_file in csv_files:
-        logger.info("Looking for stim dir for {}".format(csv_file))
-        stimulus_names = pd.read_csv(csv_file)["stimulus_name"]
-        if not len(stimulus_names):
-            continue
-
-        stim_dir_used = None
-        for stim_dir in possible_stim_dirs:
-            if any([(stim_dir in x) for x in stimulus_names]):
-                logger.info("Matched {}".format(stim_dir))
-                # stim_dir_used = os.path.join(stimuli_directory, stim_dir)
-                # We are just checking it exists the stim_dir is added in locate_stimulus_directory in playback_utils.py
-                stim_dir_used = stimuli_directory
-                break
-
-        if stim_dir_used is None:
-            print('Looking for stimulus names', stimulus_names)
-            print('Not found in', stimuli_directory)
-            print('Which has the following files', possible_stim_dirs)
-            raise Exception(
-                "Couldn't find the stim dir for {}".format(csv_file))
-
-        stim_dirs.append(stim_dir_used)
-
-    return stim_dirs
 
 
 class CreateMicrophoneAlignedCodes(luigi.Task):
@@ -266,8 +232,6 @@ class PlaybacksCSV(luigi.Task):
         )
 
     def run(self):
-        
-
         try:
             playbacks_db = pd.read_pickle(self.input()["playback_metadata"].path)
         except:
@@ -633,8 +597,9 @@ class MergePlaybacksCSV(luigi.Task):
         config_task = SiteConfig(self.site_dir, required_keys=["sessions"])
 
         yield config_task
-
+        
         site_config = config_task.output().data()
+
 
         for session in site_config["sessions"]:
             session_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions", session["id"])
@@ -678,7 +643,7 @@ class MergeOperantCSV(luigi.Task):
         for session in site_config["sessions"]:
             session_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions", session["id"])
             yield OperantCSV(session_dir=session_dir)
-            yield CreateSoundsepFiles(session_dir=session_dir)
+            #yield CreateSoundsepFiles(session_dir=session_dir)
 
     def output(self):
         return {
@@ -695,6 +660,7 @@ class MergeOperantCSV(luigi.Task):
         # vocal_period_data = [np.load(s.path, allow_pickle=True)[()] for s in self.input()]
         vocal_period_data = [pd.read_csv(s.path) for s in playback_csvs]
 
+        # add the session offset to each playback
         for vocal_periods, offset in zip(vocal_period_data, session_offsets):
             vocal_periods["start_time"] += offset
 
@@ -746,6 +712,7 @@ class MergeLiveCalls(luigi.Task):
             for session in self.session_info["sessions"]
         ]
         # vocal_period_data = [list(np.load(s.path, allow_pickle=True)[()]) for s in self.input()]
+        
         vocal_period_data = [pd.read_csv(s.path) for s in self.input()]
 
         for vocal_periods, offset in zip(vocal_period_data, block_offsets):
@@ -779,6 +746,107 @@ class CreateAutodetectedPeriods(luigi.Task):
 
         df = pd.DataFrame(list(periods))
         df.to_pickle(self.output().path)
+class CreateSoundsepProject(luigi.Task):
+    """Generates one soundsep project for this site, linking the audio files into a common audio dir
+    """
+
+    site_dir = SiteParameter()
+
+    def requires(self):
+        return {
+            "wav_file": GenerateSingleSiteAudioFile(self.site_dir),
+            "site_config": SiteConfig(self.site_dir, required_keys=["sessions"]),
+        }
+    def output(self):
+        # TODO get SR through site config or something for full audio name
+        return {
+            "soundsep_project": luigi.LocalTarget(os.path.join(self.site_dir,"op_soundsep")),
+        }
+    
+    def run(self):
+        site_config = self.input()["site_config"].data()
+
+        # make the soundsep folder and the audio folder
+        soundsep_folder = self.output()["soundsep_project"].path
+        os.makedirs(soundsep_folder, exist_ok=True)
+        os.makedirs(os.path.join(soundsep_folder, "audio"), exist_ok=True)
+        os.makedirs(os.path.join(soundsep_folder, "_appdata", "save"), exist_ok=True)
+        
+        # link the audio file for the site
+        audio_dir = os.path.dirname(self.input()["wav_file"].path)
+        # link all audio files in the wav file directory
+        audio_files = glob.glob(os.path.join(audio_dir, "audio_*.wav"))
+        for audio_file in audio_files:
+            handle = os.path.basename(audio_file)
+            num = handle.split(os.path.basename(self.site_dir))[-1].split('.wav')[0]
+            if num.startswith('-'):
+                num = int(num[1:])
+            else:
+                num = 0
+
+            audio_link_name = os.path.join(soundsep_folder, "audio", "site_audio_%d.wav"%num)
+            if os.path.exists(audio_link_name):
+                print("Unlinking %s"%audio_link_name)
+                os.unlink(audio_link_name)
+            os.symlink(os.path.realpath(audio_file), audio_link_name)
+        # audio_link_name = os.path.join(soundsep_folder, "audio", "site_audio.wav")
+        # os.symlink(os.path.realpath(audio_file), audio_link_name)#os.path.join(self.site_dir, "soundsep", "audio", os.path.basename(audio_file).replace('__','_')))
+
+        # now create the config
+        with open(os.path.join(soundsep_folder, "soundsep.yaml"), "w") as f:
+            config = {}
+            config["audio_directory"] = os.path.realpath(os.path.join(soundsep_folder, "audio"))
+            config["filename_pattern"] = "site_audio_{block}.wav"
+            
+            config = {**DEFAULTS, **config}
+            yaml.dump(config, f)
+
+        # now create the segments.csv file
+        if 'operant' in self.site_dir or 'playback' in self.site_dir:
+            merged_csv = GenerateSingleSiteOperantCSV(site_dir=self.site_dir)
+        else:
+            merged_csv = MergeLiveCalls(site_dir=self.site_dir)
+        yield merged_csv
+
+        # load the db from the merged csv
+        db = pd.read_csv(merged_csv.output()['playbacks'].path)
+        def _get_tags(playback_row):
+            tags = []
+            tags.append(playback_row['condition_name'])
+            tags.append(playback_row['name'].split('_')[4])
+            return tags
+        all_tags = db.apply(_get_tags, axis=1)
+        unique_tags = set(sum(all_tags, []))
+        # segments for soundsep requires a start and stop index
+        fs = AudioFile(audio_file).sampling_rate
+        seg_dict = {
+            "SourceName": "Playback",
+            "SourceChannel": 0,
+            "StartIndex": (db["start_time"] * fs).astype(int),
+            "StopIndex": ((db["start_time"] + db["duration"]) * fs).astype(int),
+            #"SegmentID": db["trial"],
+            "Tags": [json.dumps(tag) for tag in all_tags]
+        }
+        pd.DataFrame(seg_dict).to_csv(os.path.join(soundsep_folder,"_appdata/save", "segments.csv"), index=False)
+
+        # now write tags.csv
+        pd.DataFrame({"TagName":list(unique_tags)}).to_csv(os.path.join(soundsep_folder,"_appdata/save", "tags.csv"), index=False)
+
+        source_csv = pd.DataFrame(
+            {
+                "SourceName": ["Playback", "Microphone"],
+                "SourceChannel": [0,1],
+                "SourceIndex": [0,1],
+            }
+        ).to_csv(os.path.join(
+            soundsep_folder,
+            "_appdata",
+            "sources.csv"
+        ))
+
+
+
+
 
 
 class CreateSoundsepFiles(luigi.Task):

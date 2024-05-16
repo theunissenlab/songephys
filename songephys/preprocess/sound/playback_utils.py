@@ -3,12 +3,17 @@
 import datetime
 import os
 import re
+import logging
 
+import glob
 import numpy as np
 import pandas as pd
 import scipy.io.wavfile
 import wavio
 from pathlib import PureWindowsPath
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 def _parse_julie_filename_metadata(fname: str) -> dict:
     """Er
@@ -200,7 +205,10 @@ def read_pyoperant_playback_csv(path: str, stim_loc: str) -> pd.DataFrame:
 
 def save_pyoperant_db(df: pd.DataFrame, dest_path: str) -> None:
     """Pickle dataframe"""
-    df.to_pickle(dest_path)
+    if dest_path.endswith(".csv"):
+        df.to_csv(dest_path)
+    else:
+        df.to_pickle(dest_path)
 
 
 def group_digital_code_trials(digital_codes: list) -> list:
@@ -215,18 +223,21 @@ def group_digital_code_trials(digital_codes: list) -> list:
     of the nth pyoperant session
     """
     result = []
+    code_groups = []
     last_trial = np.inf
     for code in digital_codes:
         trial = code[1]["trial"]
         if trial < last_trial:
             result.append([])
+            code_groups.append([])
         result[-1].append(trial)
+        code_groups[-1].append(code)
         last_trial = trial
 
-    return [np.array(r) for r in result]
+    return [np.array(r) for r in result], code_groups
 
 
-def convert_pyoperant_playback_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, dest_path):
+def convert_pyoperant_playback_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, dest_path=None):
     """Convert one or more pyoperant csvs to a pickled dataframe
 
     1. Combine csvs by time column, and reindex column
@@ -237,7 +248,7 @@ def convert_pyoperant_playback_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, d
     stim_dirs (list of str): list of paths to directories containing
         the new wavs for each pyoperant csv
     """
-    trial_set = group_digital_code_trials(stimulus_codes)
+    trial_set, code_groups = group_digital_code_trials(stimulus_codes)
 
     pyoperant_dataframes = [
         read_pyoperant_playback_csv(filename, stim_dir)
@@ -254,15 +265,35 @@ def convert_pyoperant_playback_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, d
 
     pyoperant_lengths = [len(df) for df in pyoperant_dataframes]
     digital_lengths = [len(trials) for trials in trial_set]
+    code_inds = np.arange(len(stimulus_codes))
 
     if not all([a == b for a, b in zip(pyoperant_lengths, digital_lengths)]):
+        # if just the last one is off by one, fix it
+        # if any of them are off by one its probably because the pyoperant was interrupted before it actually wrote to the csv
+        # 
+        for i in range(len(pyoperant_lengths)):
+            if pyoperant_lengths[i] == digital_lengths[i] - 1:
+                trial_set[i] = trial_set[i][:-1]
+                code_groups[i] = code_groups[i][:-1]
+                digital_lengths[i] = len(trial_set[i])
+        
         raise Exception("Wrong number of trials detected in pyoperants and digital signal: {} and {}".format(pyoperant_lengths, digital_lengths))
 
+
+    stim_codes = []
+    for arr in code_groups:
+        stim_codes += arr
+    start_times = [sc[0] for sc in stim_codes]
+
     new_df = pd.concat(pyoperant_dataframes)
+    new_df['stim_code_time'] = start_times
     new_df = new_df.sort_values("time")
     new_df.index = np.arange(len(new_df))
 
-    save_pyoperant_db(new_df, dest_path)
+    if dest_path is None:
+        return new_df
+    else:
+        save_pyoperant_db(new_df, dest_path)
 
 
 ## Operant task 
@@ -329,7 +360,7 @@ def read_pyoperant_operant_csv(path, stim_loc):
     df = pd.read_csv(path)
     return _transform_pyoperant_operant_csv(df, stim_loc=stim_loc)
 
-def convert_pyoperant_operant_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, dest_path):
+def convert_pyoperant_operant_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, dest_path=None):
     """Convert one or more pyoperant csvs to a pickled dataframe
 
     1. Combine csvs by time column, and reindex column
@@ -341,7 +372,7 @@ def convert_pyoperant_operant_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, de
         the new wavs for each pyoperant csv
     """
     
-    trial_set = group_digital_code_trials(stimulus_codes)
+    trial_set, code_groups = group_digital_code_trials(stimulus_codes)
 
     pyoperant_dataframes = [
         read_pyoperant_operant_csv(filename, stim_dir)
@@ -351,7 +382,10 @@ def convert_pyoperant_operant_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, de
     if len(stimulus_codes) == 0:
         # No stim codes were found in this 
         df_empty = pd.DataFrame().reindex_like(pyoperant_dataframes[0]).dropna()
-        save_pyoperant_db(df_empty, dest_path)
+        if dest_path is None:
+            return df_empty
+        else:
+            save_pyoperant_db(df_empty, dest_path)
         return
 
     if not (len(pyoperant_dataframes) == len(trial_set)):
@@ -365,7 +399,7 @@ def convert_pyoperant_operant_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, de
 
     pyoperant_lengths = [len(df) for df in pyoperant_dataframes]
     digital_lengths = [len(trials) for trials in trial_set]
-
+    code_inds = np.arange(len(stimulus_codes))
     if not all([a == b for a, b in zip(pyoperant_lengths, digital_lengths)]):
         # if just the last one is off by one, fix it
         # if any of them are off by one its probably because the pyoperant was interrupted before it actually wrote to the csv
@@ -373,17 +407,27 @@ def convert_pyoperant_operant_csvs(stimulus_codes, pyoperant_csvs, stim_dirs, de
         for i in range(len(pyoperant_lengths)):
             if pyoperant_lengths[i] == digital_lengths[i] - 1:
                 trial_set[i] = trial_set[i][:-1]
+                code_groups[i] = code_groups[i][:-1]
                 digital_lengths[i] = len(trial_set[i])
 
         if not all([a == b for a, b in zip(pyoperant_lengths, digital_lengths)]):
             raise Exception("Wrong number of trials detected in pyoperants and digital signal: {} and {}".format(pyoperant_lengths, digital_lengths))
 
+    stim_codes = []
+    for arr in code_groups:
+        stim_codes += arr
+    start_times = [sc[0] for sc in stim_codes]
     # TODO We may want to use the stim code time as the column here instead of the pyop time
     new_df = pd.concat(pyoperant_dataframes)
+    new_df['stim_code_time'] = start_times
     new_df = new_df.sort_values("time")
     new_df.index = np.arange(len(new_df))
 
-    save_pyoperant_db(new_df, dest_path)
+    
+    if dest_path is None:
+        return new_df
+    else:
+        save_pyoperant_db(new_df, dest_path)
 
 def create_digital_events_df( digital_epochs, dest_path ):
     # time, duration, name
@@ -457,6 +501,45 @@ def fix_stimulus_codes(stim_codes, csv_files, stim_dirs, sample_rate, session_st
             stim_codes[t][1]['trial'] = final_trial
 
     return stim_codes
+
+def _get_stim_dirs(csv_files, stimuli_directory):
+    """Locates the specific stimulus directories found in the csv files
+
+    Locates one stimulus directory per csv (even if there might be multiple
+    stimulus directories used in the csv)
+
+    Returns one stimulus directory per csv_file
+    """
+    stim_dirs = []
+    possible_stim_dirs = [
+        os.path.basename(f)
+        for f in glob.glob(os.path.join(stimuli_directory, "*"))]
+
+    for csv_file in csv_files:
+        logger.info("Looking for stim dir for {}".format(csv_file))
+        stimulus_names = pd.read_csv(csv_file)["stimulus_name"]
+        if not len(stimulus_names):
+            continue
+
+        stim_dir_used = None
+        for stim_dir in possible_stim_dirs:
+            if any([(stim_dir in x) for x in stimulus_names]):
+                logger.info("Matched {}".format(stim_dir))
+                # stim_dir_used = os.path.join(stimuli_directory, stim_dir)
+                # We are just checking it exists the stim_dir is added in locate_stimulus_directory in playback_utils.py
+                stim_dir_used = stimuli_directory
+                break
+
+        if stim_dir_used is None:
+            print('Looking for stimulus names', stimulus_names)
+            print('Not found in', stimuli_directory)
+            print('Which has the following files', possible_stim_dirs)
+            raise Exception(
+                "Couldn't find the stim dir for {}".format(csv_file))
+
+        stim_dirs.append(stim_dir_used)
+
+    return stim_dirs
 
 def calculate_event_timedelta(ttl_times, event_logs, session_starttime, ttl_pulse_width=10.0):
     # there is an offset between the timedeltas calculated from sampletime + file starttime
@@ -541,6 +624,45 @@ def create_gaussian_window(half_window: int, nstd: float):
         / (std * np.sqrt(2 * np.pi))
     )
 
+def convert_raw_digital_to_metadata(digital_signal, sample_rate, code_length=384, bits_per_char=8):
+    """Detect periods of digital codes and decode stimulus metadata
+
+    Copied from zeebeez because of a problem sometimes where the digital code starts
+    with "on" state instead of "off" state
+    """
+    on_times = np.where(digital_signal)[0]
+    if len(on_times) == 0:
+        return list()
+    # There is a certain bug where the pulses start in the on state
+    # and the first pulse is missed.
+    gaps = np.hstack([np.inf, np.diff(on_times)])
+    starts = on_times[gaps > code_length]
+    # If starts[0] is 0, then we probably have that bug.
+    # Instead, start on the first time that we see a "off"
+    if starts[0] == 0:
+        starts[0] = np.argmax(np.diff(on_times) > 1.0)
+    # take the 384 samples after each on time
+    codes = list()
+    for ii, start in enumerate(starts):
+        metadata = dict()
+        signal = digital_signal[start + 1:start + 1 + code_length].astype(np.int8)
+        code = binary_converter(signal, bits_per_char)
+        metadata["code"] = code
+        metadata["object"] = code[:4]
+        metadata["action"] = code[4:8]
+        try:
+            metadata["repetition"] = int(code[8:12])
+        except ValueError:
+            metadata["repetition"] = 0
+        try:
+            metadata["trial"] = int(code[12:16])
+        except ValueError:
+            metadata["trial"] = 0
+        metadata["md5"] = code[16:]
+        codes.append((start, metadata))
+
+    return codes
+
 def convert_digital_to_metadata(digital_signal, sample_rate, code_length=384, bits_per_char=8):
     """Detect periods of digital codes and decode stimulus metadata
 
@@ -573,13 +695,10 @@ def convert_digital_to_metadata(digital_signal, sample_rate, code_length=384, bi
         try:
             metadata["repetition"] = int(code[8:12])
         except ValueError:
-            #print("Repetition is not an integer! Setting to 0.")
-            #raise Exception
             metadata["repetition"] = 0
         try:
             metadata["trial"] = int(code[12:16])
         except ValueError:
-            #print("Trial is not an integer! Setting to 0.")
             metadata["trial"] = 0
         metadata["md5"] = code[16:]
         codes.append((start, metadata))

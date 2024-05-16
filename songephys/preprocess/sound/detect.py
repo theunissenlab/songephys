@@ -438,6 +438,21 @@ def threshold_events(
 
     return np.array([(i, j) for i, j in fused_intervals if ((j - i) / sampling_rate) >= min_size])
 
+def update_operant_db(operant_db, sample_rate):
+    """Update the operant database with the correct columns"""
+    operant_db["start_time"] = operant_db["stim_code_time"].apply(lambda x: x / sample_rate)
+    operant_db["name"] = operant_db["stimulus_name"].apply(lambda x: x.split('/')[-1])
+    operant_db["sound_type"] = "playback"
+    operant_db['description'] = ""
+    if "callid" in operant_db.columns:
+        operant_db['callid'] = operant_db['callid'].apply(lambda x: x if x else "UV")
+    else:
+        operant_db['callid'] = "UV"
+    operant_db['vocalizer'] = operant_db.apply(lambda x: get_vocalizer_relation(x), axis=1)
+    operant_db['playback_file'] = operant_db['stimulus_name']
+    operant_db['stim_id'] = operant_db.index
+    
+    return operant_db
 
 def generate_stim_dicts(digital_codes, sample_rate, playbacks_db):
     """Generate segment data from digital signal data and sound (stim) database
