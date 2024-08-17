@@ -72,7 +72,7 @@ class FastIntanRecordingExtractor(NeoBaseRecordingExtractor):
     NeoRawIOClass = "IntanRawIO"
     name = "intan"
 
-    def __init__(self, file_path, stream_id=None, stream_name=None, all_annotations=False, use_names_as_ids=False, ignore_integrity_checks=False):
+    def __init__(self, file_path, stream_id=None, stream_name=None, all_annotations=False, use_names_as_ids=False, ignore_integrity_checks=True):
         neo_kwargs = self.map_to_neo_kwargs(file_path)
         NeoBaseRecordingExtractor.__init__(
             self,
@@ -604,7 +604,7 @@ class GenerateSingleSiteLFP(luigi.Task):
         # iterate through rhd files and load the digital events
         for rhd_file in sorted_rhds:
             rhd_file = os.path.join(rhd_dir, rhd_file)
-            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='RHD2000 amplifier channel', ignore_integrity_checks=False)
+            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='RHD2000 amplifier channel', ignore_integrity_checks=True)
             all_intan_io.append(rhd)
 
         # concatenate the recording extractors in a single one
@@ -642,7 +642,7 @@ class GenerateSingleSiteAudioFile(luigi.Task):
         # iterate through rhd files and load the digital events
         for rhd_file in sorted_rhds:
             rhd_file = os.path.join(rhd_dir, rhd_file)
-            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='USB board ADC input channel', ignore_integrity_checks=False)
+            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='USB board ADC input channel', ignore_integrity_checks=True)
             all_intan_io.append(rhd)
 
         # concatenate the recording extractors in a single one
@@ -1007,7 +1007,7 @@ class GenerateSingleSiteDigitalMemmap(luigi.Task):
         # iterate through rhd files and load the digital events
         for rhd_file in sorted_rhds:
             rhd_file = os.path.join(rhd_dir, rhd_file)
-            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='USB board digital input channel', ignore_integrity_checks=False)
+            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='USB board digital input channel', ignore_integrity_checks=True)
             all_intan_io.append(rhd)
         
         # concatenate the recording extractors in a single one
@@ -1046,7 +1046,7 @@ class GenerateSingleSiteAuxMemmap(luigi.Task):
         # iterate through rhd files and load the digital events
         for rhd_file in sorted_rhds:
             rhd_file = os.path.join(rhd_dir, rhd_file)
-            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='USB board ADC input channel', ignore_integrity_checks=False)
+            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='USB board ADC input channel', ignore_integrity_checks=True)
             all_intan_io.append(rhd)
         
         # concatenate the recording extractors in a single one
@@ -1090,7 +1090,7 @@ class GenerateSingleSiteMemmap(luigi.Task):
         # iterate through rhd files and load the digital events
         for rhd_file in sorted_rhds:
             rhd_file = os.path.join(rhd_dir, rhd_file)
-            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='RHD2000 amplifier channel', ignore_integrity_checks=False)
+            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='RHD2000 amplifier channel', ignore_integrity_checks=True)
             all_intan_io.append(rhd)
 
         # concatenate the recording extractors in a single one
