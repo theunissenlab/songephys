@@ -989,6 +989,7 @@ class GenerateSingleSiteDigitalMemmap(luigi.Task):
     def run(self):
         site_config = self.input()["site_config"].data()
         project_cfg = self.input()["project_config"].data()
+        rhd_dir = project_cfg['LOCAL_RAW_FILES']['rhd_drive']
 
         # get rhd files in order
         rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
@@ -997,6 +998,7 @@ class GenerateSingleSiteDigitalMemmap(luigi.Task):
         all_intan_io = []
         # iterate through rhd files and load the digital events
         for rhd_file in sorted_rhds:
+            rhd_file = os.path.join(rhd_dir, rhd_file)
             rhd = FastIntanRecordingExtractor(rhd_file, stream_name='USB board digital input channel', ignore_integrity_checks=False)
             all_intan_io.append(rhd)
         
@@ -1026,6 +1028,7 @@ class GenerateSingleSiteAuxMemmap(luigi.Task):
     def run(self):
         site_config = self.input()["site_config"].data()
         project_cfg = self.input()["project_config"].data()
+        rhd_dir = project_cfg['LOCAL_RAW_FILES']['rhd_drive']
 
         # get rhd files in order
         rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
@@ -1034,6 +1037,7 @@ class GenerateSingleSiteAuxMemmap(luigi.Task):
         all_intan_io = []
         # iterate through rhd files and load the digital events
         for rhd_file in sorted_rhds:
+            rhd_file = os.path.join(rhd_dir, rhd_file)
             rhd = FastIntanRecordingExtractor(rhd_file, stream_name='USB board ADC input channel', ignore_integrity_checks=False)
             all_intan_io.append(rhd)
         
@@ -1067,6 +1071,8 @@ class GenerateSingleSiteMemmap(luigi.Task):
 
     def run(self):
         site_config = self.input()["site_config"].data()
+        project_cfg = self.input()["project_config"].data()
+        rhd_dir = project_cfg['LOCAL_RAW_FILES']['rhd_drive']
 
         # get rhd files in order
         rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
@@ -1075,6 +1081,7 @@ class GenerateSingleSiteMemmap(luigi.Task):
         all_intan_io = []
         # iterate through rhd files and load the digital events
         for rhd_file in sorted_rhds:
+            rhd_file = os.path.join(rhd_dir, rhd_file)
             rhd = FastIntanRecordingExtractor(rhd_file, stream_name='RHD2000 amplifier channel', ignore_integrity_checks=False)
             all_intan_io.append(rhd)
 
