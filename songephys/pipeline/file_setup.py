@@ -1143,6 +1143,7 @@ class GenerateSingleSiteFiles(luigi.WrapperTask):
             GenerateSingleSiteAuxMemmap(self.site_dir),
             GenerateSingleSiteLFP(self.site_dir),
             GenerateSingleSiteAudioFile(self.site_dir),
+            CheckSiteRHDs(self.site_dir)
             #GenerateSingleSiteOperantCSV(self.site_dir),
             #GenerateSingleSitePlaybackCSV(self.site_dir),
         ]

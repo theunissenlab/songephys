@@ -373,6 +373,15 @@ def download_site(site_dir):
     luigi.build([DownloadSite(site_dir=site_dir)], local_scheduler=True)
 
 
+@click.command("gen-singlesite-files")
+@click.argument("site_dir", type=click.Path(exists=True))
+def download_site(site_dir):
+    import luigi
+    from songephys.pipeline.file_setup import GenerateSingleSiteFiles
+    luigi.build([GenerateSingleSiteFiles(site_dir=site_dir)], local_scheduler=True)
+
+
+
 @click.command(help="Run unittests")
 @click.option("-d", "--dir", "_dir", type=str, default="tests/")
 @click.option("-v", "--verbose", type=int, default=1)
