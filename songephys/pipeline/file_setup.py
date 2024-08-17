@@ -11,6 +11,7 @@ import kilosort
 import wavemap
 import pandas as pd
 from neo.io import NixIO, IntanIO, NWBIO
+from neo.rawio import IntanRawIO
 from spikeinterface.extractors import read_intan
 from spikeinterface.core import ConcatenateSegmentRecording, BinaryRecordingExtractor
 from spikeinterface.preprocessing import highpass_filter, bandpass_filter, resample
@@ -90,7 +91,6 @@ class FastIntanRecordingExtractor(NeoBaseRecordingExtractor):
     def map_to_neo_kwargs(cls, file_path):
         neo_kwargs = {"filename": str(file_path)}
         return neo_kwargs
-
 
 class SiteConfig(luigi.Task):
     """Verify config file exists and specific keys exist
@@ -581,6 +581,33 @@ class GenerateSiteMemmaps(luigi.Task):
         site_config['bin_arrays_generated'] = True
         save_yaml(self.input()["site_config"].path, site_config)
 
+class CheckSiteRHDs(luigi.Task):
+    """ Check if all RHD files have continuous timestamps"""
+    site_dir = SiteParameter()
+    def requires(self):
+        return {
+            "site_config": SiteConfig(self.site_dir), 
+            "project_config": SiteProjectConfig(self.site_dir)
+        }
+    def output(self):
+        return YamlTarget(os.path.join(self.site_dir, "site_config.yaml"), "rhd_timestamps_continuous")
+    def run(self):
+        site_config = self.input()["site_config"].data()
+        project_cfg = self.input()["project_config"].data()
+        rhd_dir = project_cfg['LOCAL_RAW_FILES']['rhd_drive']
+        rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
+        sorted_rhds = get_sorted_rhd_files(rhd_files)
+        continuous_timestamps = True
+        for rhd_file in sorted_rhds:
+            print("Testing file: ", rhd_file)
+            rhd_file = os.path.join(rhd_dir, rhd_file)
+            rhd = IntanRawIO(rhd_file,ignore_integrity_checks=False)
+            rhd._parse_header()
+            rhd._assert_timestamp_continuity() # This will raise an error if timestamps are not continuous
+            continuous_timestamps = continuous_timestamps and (rhd.discontinuous_timestamps == False)
+        site_config['rhd_timestamps_continuous'] = continuous_timestamps
+        save_yaml(self.output().path, site_config)
+
 class GenerateSingleSiteLFP(luigi.Task):
     site_dir = SiteParameter()
     lfp_sample_rate = luigi.IntParameter(default=1000)
@@ -641,6 +668,7 @@ class GenerateSingleSiteAudioFile(luigi.Task):
         all_intan_io = []
         # iterate through rhd files and load the digital events
         for rhd_file in sorted_rhds:
+            print(rhd_file)
             rhd_file = os.path.join(rhd_dir, rhd_file)
             rhd = FastIntanRecordingExtractor(rhd_file, stream_name='USB board ADC input channel', ignore_integrity_checks=True)
             all_intan_io.append(rhd)
