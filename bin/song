@@ -296,6 +296,8 @@ def create_site(site_dir):
                     }
                 }
             )
+        config_data['digital_channel_names'] = electrode_config['Digital']
+        config_data['analog_channel_names'] = electrode_config['Analog']
     else:
         options = list(enumerate(_configs))
 
@@ -466,7 +468,7 @@ def parse_settings_file(settings_path):
                 # This is the ephys signals from port A
                 for chan in child:
                     if chan.attrib['Enabled'] == 'True':
-                        name = chan.attrib['NativeChannelName']
+                        name = chan.attrib['CustomChannelName']
                         if 'AUX' in name:
                             enabled_channels['AUX'].append(name)
                         else:
@@ -476,13 +478,13 @@ def parse_settings_file(settings_path):
                 # This is the Analog input signals from intan
                 for chan in child:
                     if chan.attrib['Enabled'] == 'True':
-                        enabled_channels['Analog'].append(chan.attrib['NativeChannelName'])
+                        enabled_channels['Analog'].append(chan.attrib['CustomChannelName'])
                 continue
             elif child.attrib['Prefix'] == 'DIGITAL-IN':
                 # This is the Digital input signals from intan
                 for chan in child:
                     if chan.attrib['Enabled'] == 'True':
-                        enabled_channels['Digital'].append(chan.attrib['NativeChannelName'])
+                        enabled_channels['Digital'].append(chan.attrib['CustomChannelName'])
                 continue
             elif child.attrib['Prefix'] == 'DIGITAL-OUT':
                 # This is the Digital output signals from intan

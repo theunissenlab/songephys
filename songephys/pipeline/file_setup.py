@@ -40,6 +40,56 @@ from .pipeline_utils import (
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+def get_sorted_rhd_files(rhd_files):
+    """Sort the rhd files in the order they were recorded"""
+    # sort the rhd files by the timestamp in the filename
+    rhd_files = sorted(rhd_files, key=lambda x: int(x.split("_")[-1].split(".")[0]))
+    return rhd_files
+
+from pathlib import Path
+from spikeinterface.extractors.neoextractors.neobaseextractor import NeoBaseRecordingExtractor
+
+# Modification of the IntanRecordingExtractor class to support fast reading of intan files
+class FastIntanRecordingExtractor(NeoBaseRecordingExtractor):
+    """
+    Class for reading data from a intan board. Supports rhd and rhs format.
+
+    Based on :py:class:`neo.rawio.IntanRawIO`
+
+    Parameters
+    ----------
+    file_path: str
+        The file path to load the recordings from.
+    stream_id: str, default: None
+        If there are several streams, specify the stream id you want to load.
+    stream_name: str, default: None
+        If there are several streams, specify the stream name you want to load.
+    all_annotations: bool, default: False
+        Load exhaustively all annotations from neo.
+    """
+
+    mode = "file"
+    NeoRawIOClass = "IntanRawIO"
+    name = "intan"
+
+    def __init__(self, file_path, stream_id=None, stream_name=None, all_annotations=False, use_names_as_ids=False, check_timestamps=False):
+        neo_kwargs = self.map_to_neo_kwargs(file_path)
+        NeoBaseRecordingExtractor.__init__(
+            self,
+            stream_id=stream_id,
+            stream_name=stream_name,
+            all_annotations=all_annotations,
+            use_names_as_ids=use_names_as_ids,
+            check_timestamps=check_timestamps,
+            **neo_kwargs,
+        )
+
+        self._kwargs.update(dict(file_path=str(Path(file_path).absolute())))
+
+    @classmethod
+    def map_to_neo_kwargs(cls, file_path):
+        neo_kwargs = {"filename": str(file_path)}
+        return neo_kwargs
 
 
 class SiteConfig(luigi.Task):
@@ -333,7 +383,7 @@ class DefineSessions(luigi.Task):
         downloader = downloaders[site_config['download_type']](cfg = project_config)
 
         session_dicts = associate_pyoperant_csvs_to_rhds(
-            csv_files=[f for f in site_config["filelist"]
+            csv_files=[os.path.basename(f) for f in site_config["filelist"]
                        if f.endswith(".csv")],
             rhd_files=[f for f in site_config["filelist"]
                        if f.endswith(".rhd")],
@@ -389,7 +439,7 @@ class DownloadSession(luigi.Task):
         self.session_name = session_basename(self.session_dir)
         output_directory = os.path.join(self.session_dir, "raw")
         self.site_dirs, self.pyoperants, self.events = get_session_sites(self.session_dir)
-
+        print(self.pyoperants)
         return {
             "rhd": luigi.LocalTarget(os.path.join(
                 output_directory, "{}.rhd".format(self.session_name)
@@ -675,6 +725,7 @@ class GenerateSingleSiteAudioFile(luigi.Task):
                 memmap[i:j,:] = t
                 memmap.flush()
                 del(t)
+            self.output().makedirs()
             y = wavemap(self.output().path, dtype=dtype, mode='w+', shape=(N,c), sample_rate=int(multirecording_f.get_sampling_frequency()))
             total_chunks = len(indices)
             print('='*40)
@@ -939,16 +990,16 @@ class GenerateSingleSiteDigitalMemmap(luigi.Task):
         site_config = self.input()["site_config"].data()
         project_cfg = self.input()["project_config"].data()
 
-        sessions_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions")
-        all_sessions = site_config["sessions"]
+        # get rhd files in order
+        rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
+        sorted_rhds = get_sorted_rhd_files(rhd_files)
+
         all_intan_io = []
-        # put all reacording extractors in a list
-        for session in all_sessions:
-            # load the intan file
-            download_task = yield DownloadSession(os.path.join(sessions_dir, session["id"]))
-            rhd_file = download_task["rhd"].path
-            rhd = read_intan(rhd_file, stream_name='USB board digital input channel', check_timestamps=False)
+        # iterate through rhd files and load the digital events
+        for rhd_file in sorted_rhds:
+            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='USB board digital input channel', check_timestamps=False)
             all_intan_io.append(rhd)
+        
         # concatenate the recording extractors in a single one
         multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
 
@@ -957,6 +1008,42 @@ class GenerateSingleSiteDigitalMemmap(luigi.Task):
             multirecording, os.path.dirname(self.output().path), data_name=os.path.basename(self.output().path), dtype=np.uint16,
             chunksize=120000   )
 
+class GenerateSingleSiteAuxMemmap(luigi.Task):
+    """
+    Generate numpy binary arrays of digital signals.
+    """
+    site_dir = SiteParameter()
+    sample_rate = luigi.IntParameter(default=7500)
+    def requires(self):
+        return {
+            "site_config": SiteConfig(self.site_dir), 
+            "project_config": SiteProjectConfig(self.site_dir)
+        }
+
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "aux_%s.bin"%os.path.basename(self.site_dir)))
+    
+    def run(self):
+        site_config = self.input()["site_config"].data()
+        project_cfg = self.input()["project_config"].data()
+
+        # get rhd files in order
+        rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
+        sorted_rhds = get_sorted_rhd_files(rhd_files)
+
+        all_intan_io = []
+        # iterate through rhd files and load the digital events
+        for rhd_file in sorted_rhds:
+            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='USB board ADC input channel', check_timestamps=False)
+            all_intan_io.append(rhd)
+        
+        # concatenate the recording extractors in a single one
+        multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
+        # TODO could add a filter and downsample here
+        # then save to binary
+        filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
+            multirecording, os.path.dirname(self.output().path), data_name=os.path.basename(self.output().path), dtype=np.uint16,
+            chunksize=120000   )
 
         
 
@@ -968,8 +1055,6 @@ class GenerateSingleSiteMemmap(luigi.Task):
     Generates on .dat file for each session containing all channels of ephys
     """
     site_dir = SiteParameter()
-    from_binary = luigi.BoolParameter(default=False)
-
 
     def requires(self):
         return {
@@ -982,24 +1067,19 @@ class GenerateSingleSiteMemmap(luigi.Task):
 
     def run(self):
         site_config = self.input()["site_config"].data()
-        sessions_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions")
-        all_sessions = site_config["sessions"]
+
+        # get rhd files in order
+        rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
+        sorted_rhds = get_sorted_rhd_files(rhd_files)
+
         all_intan_io = []
-        # put all reacording extractors in a list
-        if not self.from_binary:
-            for session in all_sessions:
-                # load the intan file
-                download_task = yield DownloadSession(os.path.join(sessions_dir, session["id"]))
-                rhd_file = download_task["rhd"].path
-                rhd = read_intan(rhd_file, stream_name='RHD2000 amplifier channel', check_timestamps=False)
-                all_intan_io.append(rhd)
-            # concatenate the recording extractors in a single one
-            multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
-        else: # THIS DOESNT WORK>>>>>
-            bin_files = [session["raw_bin"] for session in all_sessions]
-            # TODO get these from project config
-            # TODO Change this to have a single segment
-            multirecording = BinaryRecordingExtractor(file_paths=bin_files, sampling_frequency=30000, num_channels=64, dtype='uint16')
+        # iterate through rhd files and load the digital events
+        for rhd_file in sorted_rhds:
+            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='RHD2000 amplifier channel', check_timestamps=False)
+            all_intan_io.append(rhd)
+
+        # concatenate the recording extractors in a single one
+        multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
 
         # add a high pass filter
         multirecording_f = highpass_filter(multirecording, freq_min=300)
@@ -1007,14 +1087,23 @@ class GenerateSingleSiteMemmap(luigi.Task):
         # then save to binary
         filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
             multirecording_f, os.path.join(self.site_dir,'raw'), data_name='%s.bin'%os.path.basename(self.site_dir), dtype=np.int16,
-            chunksize=60000   )
+            chunksize=60000   )       
 
-        if self.from_binary:
-            # delete the binary files
-            for session in all_sessions:
-                os.remove(session["raw_bin"])
+class GenerateSingleSiteFiles(luigi.WrapperTask):
+    """Generate all the files for a single site"""
+    site_dir = SiteParameter()
 
-        
+    def requires(self):
+        return [
+            GenerateSingleSiteMemmap(self.site_dir),
+            GenerateSingleSiteDigitalMemmap(self.site_dir),
+            GenerateSingleSiteAuxMemmap(self.site_dir),
+            GenerateSingleSiteLFP(self.site_dir),
+            GenerateSingleSiteAudioFile(self.site_dir),
+            #GenerateSingleSiteOperantCSV(self.site_dir),
+            #GenerateSingleSitePlaybackCSV(self.site_dir),
+        ]
+     
 
 class Rhd2Nix(luigi.Task):
     """Converts an RHD file to a NIX file, and clean up the RHD file
@@ -1643,3 +1732,4 @@ class Site2Wav(luigi.Task):
                                 ), "sessions", session["id"]
             )
             yield Nix2Wav(session_dir=session_dir)
+

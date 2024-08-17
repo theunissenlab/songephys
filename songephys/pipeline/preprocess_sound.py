@@ -804,45 +804,87 @@ class CreateSoundsepProject(luigi.Task):
         # now create the segments.csv file
         if 'operant' in self.site_dir or 'playback' in self.site_dir:
             merged_csv = GenerateSingleSiteOperantCSV(site_dir=self.site_dir)
-        else:
-            merged_csv = MergeLiveCalls(site_dir=self.site_dir)
-        yield merged_csv
+            yield merged_csv
+        
 
-        # load the db from the merged csv
-        db = pd.read_csv(merged_csv.output()['playbacks'].path)
-        def _get_tags(playback_row):
-            tags = []
-            tags.append(playback_row['condition_name'])
-            tags.append(playback_row['name'].split('_')[4])
-            return tags
-        all_tags = db.apply(_get_tags, axis=1)
-        unique_tags = set(sum(all_tags, []))
-        # segments for soundsep requires a start and stop index
-        fs = AudioFile(audio_file).sampling_rate
-        seg_dict = {
-            "SourceName": "Playback",
-            "SourceChannel": 0,
-            "StartIndex": (db["start_time"] * fs).astype(int),
-            "StopIndex": ((db["start_time"] + db["duration"]) * fs).astype(int),
-            #"SegmentID": db["trial"],
-            "Tags": [json.dumps(tag) for tag in all_tags]
-        }
-        pd.DataFrame(seg_dict).to_csv(os.path.join(soundsep_folder,"_appdata/save", "segments.csv"), index=False)
-
-        # now write tags.csv
-        pd.DataFrame({"TagName":list(unique_tags)}).to_csv(os.path.join(soundsep_folder,"_appdata/save", "tags.csv"), index=False)
-
-        source_csv = pd.DataFrame(
-            {
-                "SourceName": ["Playback", "Microphone"],
-                "SourceChannel": [0,1],
-                "SourceIndex": [0,1],
+            # load the db from the merged csv
+            db = pd.read_csv(merged_csv.output()['playbacks'].path)
+            def _get_tags(playback_row):
+                tags = []
+                tags.append(playback_row['condition_name'])
+                tags.append(playback_row['name'].split('_')[4])
+                return tags
+            all_tags = db.apply(_get_tags, axis=1)
+            unique_tags = set(sum(all_tags, []))
+            # segments for soundsep requires a start and stop index
+            fs = AudioFile(audio_file).sampling_rate
+            seg_dict = {
+                "SourceName": "Playback",
+                "SourceChannel": 0,
+                "StartIndex": (db["start_time"] * fs).astype(int),
+                "StopIndex": ((db["start_time"] + db["duration"]) * fs).astype(int),
+                #"SegmentID": db["trial"],
+                "Tags": [json.dumps(tag) for tag in all_tags]
             }
-        ).to_csv(os.path.join(
-            soundsep_folder,
-            "_appdata",
-            "sources.csv"
-        ))
+            pd.DataFrame(seg_dict).to_csv(os.path.join(soundsep_folder,"_appdata/save", "segments.csv"), index=False)
+            # now write tags.csv
+            pd.DataFrame({"TagName":list(unique_tags)}).to_csv(os.path.join(soundsep_folder,"_appdata/save", "tags.csv"), index=False)
+
+            source_csv = pd.DataFrame(
+                {
+                    "SourceName": ["Playback", "Microphone"],
+                    "SourceChannel": [0,1],
+                    "SourceIndex": [0,1],
+                }
+            ).to_csv(os.path.join(
+                soundsep_folder,
+                "_appdata",
+                "sources.csv"
+            ))
+        else:
+            # communication, we look for the jsons from WhisperSeg
+            # we will need to load the jsons and convert them to segments
+            for audio_file in audio_files:
+                # TODO figure out this
+                dfs = []
+                unique_tags = []
+                for chan in range(2):
+                    js = audio_file.replace('.wav','_chan%d.json'%chan)
+                    if not os.path.exists(js):
+                        continue
+                    with open(js,'r') as f:
+                        data = json.load(f)
+                    # now we need to convert the data to segments
+                    fs = AudioFile(audio_file).sampling_rate
+                    unique_tags = unique_tags + list(set(data['cluster']))
+                
+                    seg_dict = {
+                        "SourceName": "Microphone %d"%chan,
+                        "SourceChannel": chan,
+                        "StartIndex": np.array(data['onset'])*fs,
+                        "StopIndex": np.array(data['offset'])*fs,
+                        "Tags": [json.dumps([tag]) for tag in data['cluster']]
+                    }
+                    dfs.append(pd.DataFrame(seg_dict))
+                concat_df = pd.concat(dfs)
+                concat_df.to_csv(os.path.join(soundsep_folder,"_appdata/save", "segments.csv"), index=False)
+                unique_tags = set(unique_tags)
+                # now write tags.csv
+                pd.DataFrame({"TagName":list(unique_tags)}).to_csv(os.path.join(soundsep_folder,"_appdata/save", "tags.csv"), index=False)
+
+                source_csv = pd.DataFrame(
+                    {
+                        "SourceName": ["Microphone 0", "Microphone 1"],
+                        "SourceChannel": [0,1],
+                        "SourceIndex": [0,1],
+                    }
+                ).to_csv(os.path.join(
+                    soundsep_folder,
+                    "_appdata",
+                    "sources.csv"
+                ))
+
+        
 
 
 

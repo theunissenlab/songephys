@@ -516,7 +516,7 @@ class KiloSort4Sorting(luigi.Task):
         return {
             "site_config": DefineSessions(self.site_dir),
             "project_config": SiteProjectConfig(self.site_dir),
-            "full_bin_array": GenerateSingleSiteMemmap(self.site_dir,from_bin=False)
+            "full_bin_array": GenerateSingleSiteMemmap(self.site_dir)
         }
 
     def output(self):
@@ -532,11 +532,11 @@ class KiloSort4Sorting(luigi.Task):
 
         probes = dict({
             "P1": 'cambridge_neurotech_assy_236_P1.prb', # 4 shank
-            "H10": 'cambridge_neurotech_assy_236_h10.prb', # 2 shank
+            "H10": 'cambridge_H10.prb', # 2 shank
             "M16": 'microprobes_16ch.prb' # microprobes with 16 wires
         })
-        prb = kilosort.io.load_probe(probes[project_config["EPHYS"].get('PROBETYPE','H10')])
         import os
+        prb = kilosort.io.load_probe(os.path.join(kilosort.PROBE_DIR,probes[project_config["EPHYS"].get('PROBETYPE','H10')]))
         os.environ['PYTORCH_CUDA_ALLOC_CONF']="expandable_segments:True"
 
         # bad_chans = np.asarray([0,14])

@@ -10,17 +10,19 @@ from scipy.io import wavfile
 
 from strfpy import findDatasets, preprocSound, strfSetup, trnDirectFit, plotTfrep,calcAvg,calcAutoCorr,calcCrossCorr, calcStrf
 
-from .postprocess_operant import SiteProjectConfig,GenStimInfoDB,GenPlaybackSpikesDB
+from .postprocess_operant import SiteProjectConfig,GenStimInfoDB,GenPlaybackSpikesDB, AnalysisTask
 from .pipeline_utils import SiteParameter
 
+class STRFAnalysisTask(AnalysisTask):
+    """Base class for MPS analysis tasks"""
+    strf_dir = luigi.Parameter(default="STRF")
 
-class GenerateSTRFRequirements(luigi.Task):
-    site_dir = SiteParameter()
+class GenerateSTRFRequirements(STRFAnalysisTask):
     cluster = luigi.DictParameter()
     def requires(self):
-        return GenPlaybackSpikesDB(site_dir=self.site_dir,cluster=self.cluster)
+        return GenPlaybackSpikesDB(site_dir=self.site_dir,cluster=self.cluster,analysis_dir=self.analysis_dir,ksversion=self.ksversion)
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","data","Cluster_%d"%self.cluster['cluster_id'],"dfPreprocessedSTRFStimResponsePairs.pkl"))
+        return luigi.LocalTarget(os.path.join(self.get_analysis_dir(),"data",self.strf_dir,"Cluster_%d"%self.cluster['cluster_id'],"dfPreprocessedSTRFStimResponsePairs.pkl"))
     def run(self):
         playbacks_df = pandas.read_pickle(self.input().path)
         preprocOptions = {}
@@ -29,16 +31,16 @@ class GenerateSTRFRequirements(luigi.Task):
         
         # Convert srData into a format that strflab understands
         dfStrfLab = strfSetup.srdata2strflab(srData)
+        self.output().makedirs()
         dfStrfLab.to_pickle(self.output().path)
 
 
-class EstimateClusterSTRF(luigi.Task):
-    site_dir = SiteParameter()
+class EstimateClusterSTRF(STRFAnalysisTask):
     cluster = luigi.DictParameter()
     def requires(self):
-        return GenerateSTRFRequirements(site_dir=self.site_dir,cluster=self.cluster)
+        return GenerateSTRFRequirements(site_dir=self.site_dir,cluster=self.cluster,analysis_dir=self.analysis_dir,ksversion=self.ksversion,strf_dir=self.strf_dir)
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","data","Cluster_%d"%self.cluster['cluster_id'],"clusterBestSTRFwithCCI.pkl"))
+        return luigi.LocalTarget(os.path.join(self.get_analysis_dir(),"data",self.strf_dir,"Cluster_%d"%self.cluster['cluster_id'],"clusterBestSTRFwithCCI.pkl"))
     def run(self):
         dfStrfLab = pickle.load(open(self.input().path, 'rb'))
 
@@ -133,17 +135,17 @@ class EstimateClusterSTRF(luigi.Task):
             "avg": resp_avg,
             'avg_fr': avg_firing_rate
         })
+        self.output().makedirs()
         pickle.dump(trained_model,open(self.output().path,'wb'))
         #np.save(self.output().path,bestStrf)
-class SpecificClusterSTRF(luigi.Task):
-    site_dir = SiteParameter()
+class SpecificClusterSTRF(STRFAnalysisTask):
     cluster = luigi.DictParameter()
     tol = luigi.FloatParameter()
     sparseness = luigi.IntParameter()
     def requires(self):
-        return GenerateSTRFRequirements(site_dir=self.site_dir,cluster=self.cluster)
+        return GenerateSTRFRequirements(site_dir=self.site_dir,cluster=self.cluster,analysis_dir=self.analysis_dir,ksversion=self.ksversion,strf_dir=self.strf_dir)
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","data","Cluster_%d"%self.cluster['cluster_id'],"clusterSpecificSTRF_t%f_s%d_withntrials.pkl"%(self.tol,self.sparseness)))
+        return luigi.LocalTarget(os.path.join(self.get_analysis_dir(),"data",self.strf_dir,"Cluster_%d"%self.cluster['cluster_id'],"clusterSpecificSTRF_t%f_s%d_withntrials.pkl"%(self.tol,self.sparseness)))
     def run(self):
         dfStrfLab = pickle.load(open(self.input().path, 'rb'))
 
@@ -241,18 +243,18 @@ class SpecificClusterSTRF(luigi.Task):
             'infos': infos,
             'infotbins': infotbins
         })
+        self.output.makedirs()
         pickle.dump(trained_model,open(self.output().path,'wb'))
         #np.save(self.output().path,bestStrf)
-class PlotClusterSTRF(luigi.Task):
-    site_dir = SiteParameter()
+class PlotClusterSTRF(STRFAnalysisTask):
     cluster = luigi.DictParameter()
     def requires(self):
         return {
-        "dfStrflab": GenerateSTRFRequirements(site_dir=self.site_dir,cluster=self.cluster),
-        "bestSTRF": EstimateClusterSTRF(site_dir=self.site_dir,cluster=self.cluster)
+        "dfStrflab": GenerateSTRFRequirements(site_dir=self.site_dir,cluster=self.cluster,analysis_dir=self.analysis_dir,ksversion=self.ksversion,strf_dir=self.strf_dir),
+        "bestSTRF": EstimateClusterSTRF(site_dir=self.site_dir,cluster=self.cluster,analysis_dir=self.analysis_dir,ksversion=self.ksversion,strf_dir=self.strf_dir)
         }
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir,"analysis","figures","clusters_%s"%self.cluster['group'],"Cluster_%d"%self.cluster['cluster_id'],"clusterBestSTRF.png"))
+        return luigi.LocalTarget(os.path.join(self.get_analysis_dir(),"figures","clusters_%s"%self.cluster['group'],"Cluster_%d"%self.cluster['cluster_id'],self.strf_dir,"clusterBestSTRF.png"))
     def run(self):
         bestStrf = np.load(self.input()["bestSTRF"].path)
         dfStrfLab = pickle.load(open(self.input()["dfStrflab"].path, 'rb'))
@@ -276,6 +278,7 @@ class PlotClusterSTRF(luigi.Task):
         plt.xlabel('Delay (ms)')
         plt.ylabel('Frequency (kHz)')
         plt.title('Best STRF')
+        self.output().makedirs()
         plt.savefig(self.output().path)
 
 
