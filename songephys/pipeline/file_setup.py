@@ -593,16 +593,20 @@ class GenerateSingleSiteLFP(luigi.Task):
         return luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "lfp_%s_fs%d.bin"%(os.path.basename(self.site_dir),self.lfp_sample_rate)))
     def run(self):
         site_config = self.input()["site_config"].data()
-        sessions_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions")
-        all_sessions = site_config["sessions"]
+        project_cfg = self.input()["project_config"].data()
+        rhd_dir = project_cfg['LOCAL_RAW_FILES']['rhd_drive']
+
+        # get rhd files in order
+        rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
+        sorted_rhds = get_sorted_rhd_files(rhd_files)
+
         all_intan_io = []
-        # put all reacording extractors in a list
-        for session in all_sessions:
-            # load the intan file
-            download_task = yield DownloadSession(os.path.join(sessions_dir, session["id"]))
-            rhd_file = download_task["rhd"].path
-            rhd = read_intan(rhd_file, stream_name='RHD2000 amplifier channel', ignore_integrity_checks=False)
+        # iterate through rhd files and load the digital events
+        for rhd_file in sorted_rhds:
+            rhd_file = os.path.join(rhd_dir, rhd_file)
+            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='RHD2000 amplifier channel', ignore_integrity_checks=False)
             all_intan_io.append(rhd)
+
         # concatenate the recording extractors in a single one
         multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
         # add a band pass filter
@@ -627,16 +631,20 @@ class GenerateSingleSiteAudioFile(luigi.Task):
 
     def run(self):
         site_config = self.input()["site_config"].data()
-        sessions_dir = os.path.join(os.path.dirname(os.path.dirname(self.site_dir)), "sessions")
-        all_sessions = site_config["sessions"]
+        project_cfg = self.input()["project_config"].data()
+        rhd_dir = project_cfg['LOCAL_RAW_FILES']['rhd_drive']
+
+        # get rhd files in order
+        rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
+        sorted_rhds = get_sorted_rhd_files(rhd_files)
+
         all_intan_io = []
-        # put all reacording extractors in a list
-        for session in all_sessions:
-            # load the intan file
-            download_task = yield DownloadSession(os.path.join(sessions_dir, session["id"]))
-            rhd_file = download_task["rhd"].path
-            rhd = read_intan(rhd_file, stream_name='USB board ADC input channel', ignore_integrity_checks=False)
+        # iterate through rhd files and load the digital events
+        for rhd_file in sorted_rhds:
+            rhd_file = os.path.join(rhd_dir, rhd_file)
+            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='USB board ADC input channel', ignore_integrity_checks=False)
             all_intan_io.append(rhd)
+
         # concatenate the recording extractors in a single one
         multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
 
