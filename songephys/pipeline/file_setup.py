@@ -42,6 +42,16 @@ from .pipeline_utils import (
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
+def get_recording_info(recording):
+    # now save info
+    info = dict()
+    info['num_channels'] = int(recording.get_traces(start_frame=0, end_frame=1, segment_index=0).shape[1])
+    info['num_samples'] = int(recording.get_total_samples())
+    info['num_segments'] = int(recording.get_num_segments())
+    info['sampling_rate'] = int(recording.get_sampling_frequency())
+    info['dtype'] = int(recording.get_dtype())
+    return info
+
 def get_sorted_rhd_files(rhd_files):
     """Sort the rhd files in the order they were recorded"""
     # sort the rhd files by the timestamp in the filename
@@ -648,12 +658,7 @@ class GenerateSingleSiteLFP(luigi.Task):
         recording_lfp = resample(multirecording_f, resample_rate=self.lfp_sample_rate)
 
         # now save info
-        info = dict()
-        info['num_channels'] = recording_lfp.get_traces(start_frame=0, end_frame=1, segment_index=0).shape[1]
-        info['num_samples'] = recording_lfp.get_total_samples()
-        info['num_segments'] = recording_lfp.get_num_segments()
-        info['sampling_rate'] = recording_lfp.get_sampling_frequency()
-        info['dtype'] = recording_lfp.get_dtype()
+        info = get_recording_info(recording_lfp)
         with open(self.output()['info'].path, 'w') as f:
             json.dump(info, f)
 
@@ -699,12 +704,7 @@ class GenerateSingleSiteAudioFile(luigi.Task):
         multirecording_f = bandpass_filter(multirecording, freq_min=200, freq_max=8000)
 
         # now save info
-        info = dict()
-        info['num_channels'] = multirecording_f.get_traces(start_frame=0, end_frame=1, segment_index=0).shape[1]
-        info['num_samples'] = multirecording_f.get_total_samples()
-        info['num_segments'] = multirecording_f.get_num_segments()
-        info['sampling_rate'] = multirecording_f.get_sampling_frequency()
-        info['dtype'] = multirecording_f.get_dtype()
+        info = get_recording_info(multirecording_f)
         with open(self.output()['info'].path, 'w') as f:
             json.dump(info, f)
 
@@ -1079,12 +1079,7 @@ class GenerateSingleSiteDigitalMemmap(luigi.Task):
         multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
 
         # now save info
-        info = dict()
-        info['num_channels'] = multirecording.get_traces(start_frame=0, end_frame=1, segment_index=0).shape[1]
-        info['num_samples'] = multirecording.get_total_samples()
-        info['num_segments'] = multirecording.get_num_segments()
-        info['sampling_rate'] = multirecording.get_sampling_frequency()
-        info['dtype'] = multirecording.get_dtype()
+        info = get_recording_info(multirecording)
         with open(self.output()['info'].path, 'w') as f:
             json.dump(info, f)
         # then save to binary if the file does not exist
@@ -1130,12 +1125,7 @@ class GenerateSingleSiteADCMemmap(luigi.Task):
         multirecording_f = bandpass_filter(multirecording, freq_min=200, freq_max=8000)
 
         # now save info
-        info = dict()
-        info['num_channels'] = multirecording_f.get_traces(start_frame=0, end_frame=1, segment_index=0).shape[1]
-        info['num_samples'] = multirecording_f.get_total_samples()
-        info['num_segments'] = multirecording_f.get_num_segments()
-        info['sampling_rate'] = multirecording_f.get_sampling_frequency()
-        info['dtype'] = multirecording_f.get_dtype()
+        info = get_recording_info(multirecording_f)
         with open(self.output()['info'].path, 'w') as f:
             json.dump(info, f)
 
@@ -1185,12 +1175,7 @@ class GenerateSingleSiteAuxMemmap(luigi.Task):
         # TODO could add a filter and downsample here
         # then save to binary
         # now save info
-        info = dict()
-        info['num_channels'] = multirecording.get_traces(start_frame=0, end_frame=1, segment_index=0).shape[1]
-        info['num_samples'] = multirecording.get_total_samples()
-        info['num_segments'] = multirecording.get_num_segments()
-        info['sampling_rate'] = multirecording.get_sampling_frequency()
-        info['dtype'] = multirecording.get_dtype()
+        info = get_recording_info(multirecording)
         with open(self.output()['info'].path, 'w') as f:
             json.dump(info, f)
         # then save to binary if the file does not exist
@@ -1245,12 +1230,7 @@ class GenerateSingleSiteMemmap(luigi.Task):
         multirecording_f = highpass_filter(multirecording, freq_min=300)
 
         # now save info
-        info = dict()
-        info['num_channels'] = multirecording_f.get_traces(start_frame=0, end_frame=1, segment_index=0).shape[1]
-        info['num_samples'] = multirecording_f.get_total_samples()
-        info['num_segments'] = multirecording_f.get_num_segments()
-        info['sampling_rate'] = multirecording_f.get_sampling_frequency()
-        info['dtype'] = multirecording_f.get_dtype()
+        info = get_recording_info(multirecording_f)
         with open(self.output()['info'].path, 'w') as f:
             json.dump(info, f)
         # then save to binary if the file does not exist
