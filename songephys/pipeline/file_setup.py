@@ -49,7 +49,7 @@ def get_recording_info(recording):
     info['num_samples'] = int(recording.get_total_samples())
     info['num_segments'] = int(recording.get_num_segments())
     info['sampling_rate'] = int(recording.get_sampling_frequency())
-    info['dtype'] = recording.get_dtype()
+    info['dtype'] = str(recording.get_dtype()) # Not sure this is the best way to serialize a dtype object
     return info
 
 def get_sorted_rhd_files(rhd_files):
