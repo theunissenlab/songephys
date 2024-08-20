@@ -514,7 +514,7 @@ class KiloSort4Sorting(luigi.Task):
     site_dir = SiteParameter()
     def requires(self):
         return {
-            "site_config": DefineSessions(self.site_dir),
+            "site_config": SiteConfig(self.site_dir),
             "project_config": SiteProjectConfig(self.site_dir),
             "full_bin_array": GenerateSingleSiteMemmap(self.site_dir)
         }
@@ -537,7 +537,7 @@ class KiloSort4Sorting(luigi.Task):
         })
         import os
         prb = kilosort.io.load_probe(os.path.join(kilosort.PROBE_DIR,probes[project_config["EPHYS"].get('PROBETYPE','H10')]))
-        os.environ['PYTORCH_CUDA_ALLOC_CONF']="expandable_segments:True"
+        #os.environ['PYTORCH_CUDA_ALLOC_CONF']="expandable_segments:True"
 
         # bad_chans = np.asarray([0,14])
         # inds = prb['chanMap'][np.where(~np.in1d(prb['chanMap'], bad_chans))[0]]

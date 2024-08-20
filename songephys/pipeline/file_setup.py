@@ -617,7 +617,10 @@ class GenerateSingleSiteLFP(luigi.Task):
             "project_config": SiteProjectConfig(self.site_dir)
         }
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "lfp_%s_fs%d.bin"%(os.path.basename(self.site_dir),self.lfp_sample_rate)))
+        return {
+            'bin': luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "lfp_%s_fs%d.bin"%(os.path.basename(self.site_dir),self.lfp_sample_rate))),
+            'info': luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "lfp_%s_info.json"%os.path.basename(self.site_dir)))
+        }
     def run(self):
         site_config = self.input()["site_config"].data()
         project_cfg = self.input()["project_config"].data()
@@ -642,10 +645,22 @@ class GenerateSingleSiteLFP(luigi.Task):
         multirecording_f = bandpass_filter(multirecording, freq_min=hp_freq, freq_max=lp_freq)
         # downsample to 1 kHz
         recording_lfp = resample(multirecording_f, resample_rate=self.lfp_sample_rate)
-        # then save to binary
-        filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
-            recording_lfp, os.path.join(self.site_dir,'raw'), data_name="lfp_%s_fs%d.bin"%(os.path.basename(self.site_dir),self.lfp_sample_rate), dtype=np.int16,
-            chunksize=60000   )
+
+        # now save info
+        info = dict()
+        info['num_channels'] = recording_lfp.get_traces(start_frame=0, end_frame=1, segment_index=0).shape[1]
+        info['num_samples'] = recording_lfp.get_total_samples()
+        info['num_segments'] = recording_lfp.get_num_segments()
+        info['sampling_rate'] = recording_lfp.get_sampling_frequency()
+        info['dtype'] = recording_lfp.get_dtype()
+        with open(self.output()['info'].path, 'w') as f:
+            json.dump(info, f)
+
+        # then save to binary if it doesnt exist
+        if not self.output()['bin'].exists():
+            filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
+                recording_lfp, os.path.dirname(self.output()['bin'].path), data_name=os.path.basename(self.output()['bin'].path,self.lfp_sample_rate), dtype=np.int16,
+                chunksize=60000   )
 class GenerateSingleSiteAudioFile(luigi.Task):
     site_dir = SiteParameter()
     def requires(self):
@@ -654,7 +669,10 @@ class GenerateSingleSiteAudioFile(luigi.Task):
             "project_config": SiteProjectConfig(self.site_dir)
         }
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "audio_%s.wav"%os.path.basename(self.site_dir)))
+        return {
+            'bin': luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "audio_%s.wav"%os.path.basename(self.site_dir))),
+            'info':luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "audio_%s_info.json"%os.path.basename(self.site_dir)))
+        }
 
     def run(self):
         site_config = self.input()["site_config"].data()
@@ -678,61 +696,110 @@ class GenerateSingleSiteAudioFile(luigi.Task):
 
         # add a high pass filter
         multirecording_f = bandpass_filter(multirecording, freq_min=200, freq_max=8000)
-        max_workers = None
-        chunksize = 240000
-        print('='*40)
-        print('Loading recording with SpikeInterface...')
 
-        # Using actual data shape is less fragile than relying on .get_num_channels()
-        N = multirecording_f.get_total_samples()
-        print(f'number of samples: {N}')
-        c = multirecording_f.get_traces(start_frame=0, end_frame=1, segment_index=0).shape[1]
-        print(f'number of channels: {c}')
-        s = multirecording_f.get_num_segments()
-        print(f'numbef of segments: {s}')
-        fs = multirecording_f.get_sampling_frequency()
-        print(f'sampling rate: {fs}')
-        dtype = multirecording_f.get_dtype()
-        print(f'dtype: {dtype}')
+        # now save info
+        info = dict()
+        info['num_channels'] = multirecording_f.get_traces(start_frame=0, end_frame=1, segment_index=0).shape[1]
+        info['num_samples'] = multirecording_f.get_total_samples()
+        info['num_segments'] = multirecording_f.get_num_segments()
+        info['sampling_rate'] = multirecording_f.get_sampling_frequency()
+        info['dtype'] = multirecording_f.get_dtype()
+        with open(self.output()['info'].path, 'w') as f:
+            json.dump(info, f)
 
-        # if N is bigger than 2**32, we need to split the wav files
-        if 2*N*c > 2**32:
-            n_wav = int(np.ceil(2*N*c / 2**32))
-            n_per_file = int(np.ceil(N / n_wav))
-            for i in range(n_wav):
-                start_frame = i * n_per_file
-                end_frame = min((i + 1) * n_per_file, N)
-                if i > 0:
-                    fn = f"audio_{os.path.basename(self.site_dir)}-{i}.wav"
-                else:
-                    fn = f"audio_{os.path.basename(self.site_dir)}.wav"
-                wav_file = os.path.join(self.site_dir, 'raw', fn)
-                #soundfile.write(wav_file, multirecording_f.get_traces(start_frame=start_frame, end_frame=end_frame, segment_index=0), fs)
+        # save to wav file if it doesnt exist
+        if not os.path.exists(self.output()['bin'].path):
+            max_workers = None
+            chunksize = 240000
+            print('='*40)
+            print('Loading recording with SpikeInterface...')
 
+            # Using actual data shape is less fragile than relying on .get_num_channels()
+            N = multirecording_f.get_total_samples()
+            print(f'number of samples: {N}')
+            c = multirecording_f.get_traces(start_frame=0, end_frame=1, segment_index=0).shape[1]
+            print(f'number of channels: {c}')
+            s = multirecording_f.get_num_segments()
+            print(f'numbef of segments: {s}')
+            fs = multirecording_f.get_sampling_frequency()
+            print(f'sampling rate: {fs}')
+            dtype = multirecording_f.get_dtype()
+            print(f'dtype: {dtype}')
+
+            # if N is bigger than 2**32, we need to split the wav files
+            if 2*N*c > 2**32:
+                n_wav = int(np.ceil(2*N*c / 2**32))
+                n_per_file = int(np.ceil(N / n_wav))
+                for i in range(n_wav):
+                    start_frame = i * n_per_file
+                    end_frame = min((i + 1) * n_per_file, N)
+                    if i > 0:
+                        fn = f"audio_{os.path.basename(self.site_dir)}-{i}.wav"
+                    else:
+                        fn = f"audio_{os.path.basename(self.site_dir)}.wav"
+                    wav_file = os.path.join(self.site_dir, 'raw', fn)
+                    #soundfile.write(wav_file, multirecording_f.get_traces(start_frame=start_frame, end_frame=end_frame, segment_index=0), fs)
+
+                    # Determine start/end indices for each segment
+                    indices = []
+                    for k in range(s):
+                        n = end_frame
+                        i = start_frame + k*chunksize
+                        while i < n:
+                            j = i + chunksize if (i + chunksize) < end_frame else end_frame
+                            indices.append((i, j, k,start_frame))
+                            i += chunksize
+
+                    # Copy each chunk of data to memmory mapped binary file,
+                    # use multithreading to speed it up.
+                    def copy_chunk(memmap, i, j, k, sf):
+                        t = multirecording_f.get_traces(start_frame=i, end_frame=j, segment_index=k)
+                        memmap[i-sf:j-sf,:] = t
+                        memmap.flush()
+                        del(t)
+                    y = wavemap(wav_file, dtype=dtype, mode='w+', shape=(end_frame-start_frame,c), sample_rate=int(multirecording_f.get_sampling_frequency()))
+                    total_chunks = len(indices)
+                    print('='*40)
+                    print(f'Converting {total_chunks} data chunks '
+                        f'with a chunksize of {chunksize} samples...')
+                    with ThreadPoolExecutor(max_workers=max_workers) as exe:
+                        futures = [exe.submit(copy_chunk, y, i, j, k, sf) for i, j, k, sf in indices]
+                        # TODO: every some-amount-of-time, check list of futures
+                        #       for completion
+                        while exe._work_queue.qsize() > 0:
+                            time.sleep(10)
+                            print(f'{total_chunks - exe._work_queue.qsize()} of {total_chunks}'
+                                ' chunks converted...')
+                    print(f'Data conversion finished.')
+                    print('='*40)
+
+                    del(y)  # Close memmap after copying
+            else:
                 # Determine start/end indices for each segment
                 indices = []
                 for k in range(s):
-                    n = end_frame
-                    i = start_frame + k*chunksize
+                    n = multirecording_f.get_num_samples(segment_index=k)
+                    i = 0 + k*chunksize
                     while i < n:
-                        j = i + chunksize if (i + chunksize) < end_frame else end_frame
-                        indices.append((i, j, k,start_frame))
+                        j = i + chunksize if (i + chunksize) < n else n
+                        indices.append((i, j, k))
                         i += chunksize
 
                 # Copy each chunk of data to memmory mapped binary file,
                 # use multithreading to speed it up.
-                def copy_chunk(memmap, i, j, k, sf):
+                def copy_chunk(memmap, i, j, k):
                     t = multirecording_f.get_traces(start_frame=i, end_frame=j, segment_index=k)
-                    memmap[i-sf:j-sf,:] = t
+                    memmap[i:j,:] = t
                     memmap.flush()
                     del(t)
-                y = wavemap(wav_file, dtype=dtype, mode='w+', shape=(end_frame-start_frame,c), sample_rate=int(multirecording_f.get_sampling_frequency()))
+                self.output()['bin'].makedirs()
+                y = wavemap(self.output()['bin'].path, dtype=dtype, mode='w+', shape=(N,c), sample_rate=int(multirecording_f.get_sampling_frequency()))
                 total_chunks = len(indices)
                 print('='*40)
                 print(f'Converting {total_chunks} data chunks '
                     f'with a chunksize of {chunksize} samples...')
                 with ThreadPoolExecutor(max_workers=max_workers) as exe:
-                    futures = [exe.submit(copy_chunk, y, i, j, k, sf) for i, j, k, sf in indices]
+                    futures = [exe.submit(copy_chunk, y, i, j, k) for i, j, k in indices]
                     # TODO: every some-amount-of-time, check list of futures
                     #       for completion
                     while exe._work_queue.qsize() > 0:
@@ -743,42 +810,8 @@ class GenerateSingleSiteAudioFile(luigi.Task):
                 print('='*40)
 
                 del(y)  # Close memmap after copying
-        else:
-            # Determine start/end indices for each segment
-            indices = []
-            for k in range(s):
-                n = multirecording_f.get_num_samples(segment_index=k)
-                i = 0 + k*chunksize
-                while i < n:
-                    j = i + chunksize if (i + chunksize) < n else n
-                    indices.append((i, j, k))
-                    i += chunksize
 
-            # Copy each chunk of data to memmory mapped binary file,
-            # use multithreading to speed it up.
-            def copy_chunk(memmap, i, j, k):
-                t = multirecording_f.get_traces(start_frame=i, end_frame=j, segment_index=k)
-                memmap[i:j,:] = t
-                memmap.flush()
-                del(t)
-            self.output().makedirs()
-            y = wavemap(self.output().path, dtype=dtype, mode='w+', shape=(N,c), sample_rate=int(multirecording_f.get_sampling_frequency()))
-            total_chunks = len(indices)
-            print('='*40)
-            print(f'Converting {total_chunks} data chunks '
-                f'with a chunksize of {chunksize} samples...')
-            with ThreadPoolExecutor(max_workers=max_workers) as exe:
-                futures = [exe.submit(copy_chunk, y, i, j, k) for i, j, k in indices]
-                # TODO: every some-amount-of-time, check list of futures
-                #       for completion
-                while exe._work_queue.qsize() > 0:
-                    time.sleep(10)
-                    print(f'{total_chunks - exe._work_queue.qsize()} of {total_chunks}'
-                        ' chunks converted...')
-            print(f'Data conversion finished.')
-            print('='*40)
 
-            del(y)  # Close memmap after copying
 
 class GenerateSingleSiteOperantCSV(luigi.Task):
     site_dir = SiteParameter()
@@ -1020,7 +1053,10 @@ class GenerateSingleSiteDigitalMemmap(luigi.Task):
         }
 
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "digital_%s.bin"%os.path.basename(self.site_dir)))
+        return {
+            'bin': luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "digital_%s.bin"%os.path.basename(self.site_dir))),
+            'info':luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "digital_%s_info.json"%os.path.basename(self.site_dir)))
+        }
     
     def run(self):
         site_config = self.input()["site_config"].data()
@@ -1041,10 +1077,72 @@ class GenerateSingleSiteDigitalMemmap(luigi.Task):
         # concatenate the recording extractors in a single one
         multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
 
-        # then save to binary
-        filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
-            multirecording, os.path.dirname(self.output().path), data_name=os.path.basename(self.output().path), dtype=np.uint16,
-            chunksize=120000   )
+        # now save info
+        info = dict()
+        info['num_channels'] = multirecording.get_traces(start_frame=0, end_frame=1, segment_index=0).shape[1]
+        info['num_samples'] = multirecording.get_total_samples()
+        info['num_segments'] = multirecording.get_num_segments()
+        info['sampling_rate'] = multirecording.get_sampling_frequency()
+        info['dtype'] = multirecording.get_dtype()
+        with open(self.output()['info'].path, 'w') as f:
+            json.dump(info, f)
+        # then save to binary if the file does not exist
+        if not self.output()['bin'].exists():
+            filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
+                multirecording, os.path.dirname(self.output()['bin'].path), data_name=os.path.basename(self.output()['bin'].path), dtype=np.uint16,
+                chunksize=120000   )
+
+class GenerateSingleSiteADCMemmap(luigi.Task):
+    site_dir = SiteParameter()
+    def requires(self):
+        return {
+            "site_config": SiteConfig(self.site_dir), 
+            "project_config": SiteProjectConfig(self.site_dir)
+        }
+    def output(self):
+        return {
+            'bin': luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "audio_%s.wav"%os.path.basename(self.site_dir))),
+            'info':luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "audio_%s_info.json"%os.path.basename(self.site_dir)))
+        }
+
+    def run(self):
+        site_config = self.input()["site_config"].data()
+        project_cfg = self.input()["project_config"].data()
+        rhd_dir = project_cfg['LOCAL_RAW_FILES']['rhd_drive']
+
+        # get rhd files in order
+        rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
+        sorted_rhds = get_sorted_rhd_files(rhd_files)
+
+        all_intan_io = []
+        # iterate through rhd files and load the digital events
+        for rhd_file in sorted_rhds:
+            print(rhd_file)
+            rhd_file = os.path.join(rhd_dir, rhd_file)
+            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='USB board ADC input channel', ignore_integrity_checks=True)
+            all_intan_io.append(rhd)
+
+        # concatenate the recording extractors in a single one
+        multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
+
+        # add a high pass filter
+        multirecording_f = bandpass_filter(multirecording, freq_min=200, freq_max=8000)
+
+        # now save info
+        info = dict()
+        info['num_channels'] = multirecording_f.get_traces(start_frame=0, end_frame=1, segment_index=0).shape[1]
+        info['num_samples'] = multirecording_f.get_total_samples()
+        info['num_segments'] = multirecording_f.get_num_segments()
+        info['sampling_rate'] = multirecording_f.get_sampling_frequency()
+        info['dtype'] = multirecording_f.get_dtype()
+        with open(self.output()['info'].path, 'w') as f:
+            json.dump(info, f)
+
+        # save to wav file if it doesnt exist
+        if not os.path.exists(self.output()['bin'].path):
+            filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
+                multirecording, os.path.dirname(self.output()['bin'].path), data_name=os.path.basename(self.output()['bin'].path), dtype=np.uint16,
+                chunksize=120000   )
 
 class GenerateSingleSiteAuxMemmap(luigi.Task):
     """
@@ -1059,7 +1157,11 @@ class GenerateSingleSiteAuxMemmap(luigi.Task):
         }
 
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "aux_%s.bin"%os.path.basename(self.site_dir)))
+        return {
+            'bin': luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "aux_%s.bin"%os.path.basename(self.site_dir))),
+            'info':luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "aux_%s_info.json"%os.path.basename(self.site_dir)))
+        }
+
     
     def run(self):
         site_config = self.input()["site_config"].data()
@@ -1081,9 +1183,20 @@ class GenerateSingleSiteAuxMemmap(luigi.Task):
         multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
         # TODO could add a filter and downsample here
         # then save to binary
-        filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
-            multirecording, os.path.dirname(self.output().path), data_name=os.path.basename(self.output().path), dtype=np.uint16,
-            chunksize=120000   )
+        # now save info
+        info = dict()
+        info['num_channels'] = multirecording.get_traces(start_frame=0, end_frame=1, segment_index=0).shape[1]
+        info['num_samples'] = multirecording.get_total_samples()
+        info['num_segments'] = multirecording.get_num_segments()
+        info['sampling_rate'] = multirecording.get_sampling_frequency()
+        info['dtype'] = multirecording.get_dtype()
+        with open(self.output()['info'].path, 'w') as f:
+            json.dump(info, f)
+        # then save to binary if the file does not exist
+        if not self.output()['bin'].exists():
+            filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
+                multirecording, os.path.dirname(self.output()['bin'].path), data_name=os.path.basename(self.output()['bin'].path), dtype=np.uint16,
+                chunksize=120000   )
 
         
 
@@ -1103,7 +1216,10 @@ class GenerateSingleSiteMemmap(luigi.Task):
         }
     
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "%s.bin"%os.path.basename(self.site_dir)))
+        return {
+            'bin':luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "%s.bin"%os.path.basename(self.site_dir))),
+            'info':luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "%s_info.json"%os.path.basename(self.site_dir)))
+        }
 
     def run(self):
         site_config = self.input()["site_config"].data()
@@ -1127,10 +1243,20 @@ class GenerateSingleSiteMemmap(luigi.Task):
         # add a high pass filter
         multirecording_f = highpass_filter(multirecording, freq_min=300)
 
-        # then save to binary
-        filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
-            multirecording_f, os.path.join(self.site_dir,'raw'), data_name='%s.bin'%os.path.basename(self.site_dir), dtype=np.int16,
-            chunksize=60000   )       
+        # now save info
+        info = dict()
+        info['num_channels'] = multirecording_f.get_traces(start_frame=0, end_frame=1, segment_index=0).shape[1]
+        info['num_samples'] = multirecording_f.get_total_samples()
+        info['num_segments'] = multirecording_f.get_num_segments()
+        info['sampling_rate'] = multirecording_f.get_sampling_frequency()
+        info['dtype'] = multirecording_f.get_dtype()
+        with open(self.output()['info'].path, 'w') as f:
+            json.dump(info, f)
+        # then save to binary if the file does not exist
+        if not self.output()['bin'].exists():
+            filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
+                multirecording_f, os.path.dirname(self.output()['bin'].path), data_name=os.path.basename(self.output()['bin'].path), dtype=np.int16,
+                chunksize=60000   )       
 
 class GenerateSingleSiteFiles(luigi.WrapperTask):
     """Generate all the files for a single site"""
