@@ -12,7 +12,8 @@ from pynwb import NWBHDF5IO, NWBFile
 from pynwb.base import TimeSeries
 from pynwb.behavior import BehavioralTimeSeries
 from pynwb.ecephys import LFP, ElectricalSeries
-from pykilosort.io.probes import cambridge_neurotech_assy_236_h10, cambridge_neurotech_assy_236_P1, microprobes_16ch
+import kilosort
+
 #from neo.rawio.intanrawio import read_rhd_signal_groups
 from ndx_events import TtlsTable, TtlTypesTable, EventsTable, EventTypesTable, Task
 
@@ -26,13 +27,7 @@ from .pipeline_utils import (
 
 from .file_setup import GenerateSingleSiteMemmap, GenerateSingleSiteDigitalMemmap, GenerateSingleSiteADCMemmap, GenerateSingleSiteLFP, GenerateSingleSiteAuxMemmap, GenerateSingleSiteAudioFile
 
-def get_probe_file(probe_name):
-    probes = dict({
-            "P1": cambridge_neurotech_assy_236_P1, # 4 shank
-            "H10": cambridge_neurotech_assy_236_h10, # 2 shank 
-            "M16": microprobes_16ch # microprobes with 16 wires
-    })
-    return probes[probe_name]
+
 
 class NWBTarget(luigi.Target):
     def __init__(self, nwbfile, *target_names):
@@ -71,8 +66,12 @@ class CreateSiteNWB(luigi.Task):
 
         # first load the probe file
         # handle the probe file
-        probe_name = project_config["EPHYS"].get('PROBETYPE','H10')
-        prb = kilosort.io.load_probe(get_probe_file(probe_name))
+        probes = dict({
+            "P1": 'cambridge_neurotech_assy_236_P1.prb', # 4 shank
+            "H10": 'cambridge_H10.prb', # 2 shank
+            "M16": 'microprobes_16ch.prb' # microprobes with 16 wires
+        })
+        prb = kilosort.io.load_probe(os.path.join(kilosort.PROBE_DIR,probes[project_config["EPHYS"].get('PROBETYPE','H10')]))
 
         # first make the device
         device = nwbfile.create_device(name=probe_name, manufacturer='Cambridge Neurotech')
