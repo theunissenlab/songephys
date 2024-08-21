@@ -78,7 +78,8 @@ class CreateSiteNWB(luigi.Task):
             "H10": 'cambridge_H10.prb', # 2 shank
             "M16": 'microprobes_16ch.prb' # microprobes with 16 wires
         })
-        prb = kilosort.io.load_probe(os.path.join(kilosort.PROBE_DIR,probes[project_config["EPHYS"].get('PROBETYPE','H10')]))
+        probe_name = probes[project_config["EPHYS"].get('PROBETYPE','H10')]
+        prb = kilosort.io.load_probe(os.path.join(kilosort.PROBE_DIR,probe_name))
 
         # first make the device
         device = nwbfile.create_device(name=probe_name, manufacturer='Cambridge Neurotech')
