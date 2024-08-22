@@ -42,11 +42,13 @@ class NWBTarget(luigi.Target):
         self.path = nwbfile
         self.target_names = target_names
     def exists(self):
+        if not os.path.exists(self.path):
+            return False
         io = NWBHDF5IO(self.path, 'r')
         nwbfile = io.read()
-        children = nwbfile.all_children()
+        children = [x.name for x in nwbfile.all_children()]
         io.close()
-        return all([x.name in self.target_names for x in children])
+        return all([x in children for x in self.target_names])
 
 class CreateSiteNWB(luigi.Task):
     site_dir = SiteParameter()
@@ -127,7 +129,7 @@ class NWBAddDigitalEvents(luigi.Task):
         }
 
     def output(self):
-        return NWBTarget(self.input()['site_nwb'].path, 'audcode_events', 'ttl_events', 'ttl_types')
+        return NWBTarget(self.input()['site_nwb'].path, 'audcode_events', 'ttl_events', 'event_types')
     
     def run(self):
         site_config = self.input()['site_config'].data()
@@ -167,7 +169,7 @@ class NWBAddDigitalEvents(luigi.Task):
             event_type_description="House light on signal"
         )
         # now make the ttls table
-        ttls_table = EventsTable(name='event_types',description="Metadata about TTL events", target_tables={"event_type": ttl_types_table})
+        ttls_table = EventsTable(name='ttl_events',description="Metadata about TTL events", target_tables={"event_type": ttl_types_table})
         
         audcode_table = EventsTable(name="audcode_events", description="Precise time and metadata about stimuli played", target_tables={"event_type": ttl_types_table})
         audcode_table.add_column(name="code", description='stimuli code')
@@ -329,7 +331,7 @@ class AddLFPNWB(luigi.Task):
             nwb_io.write(nwbfile)
 class AddMotionNWB(luigi.Task):
     site_dir = SiteParameter()
-    sample_rate = luigi.IntParameter(default=1000)
+    sample_rate = luigi.IntParameter(default=7500)
     def requires(self):
         return {
             'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
@@ -348,21 +350,26 @@ class AddMotionNWB(luigi.Task):
 
         # take the motion data, and calculate a downsampled proxy for total motion
         # this is the sqrt of the sum of the squares of the motion data
-        ratio = motion_info['sampling_rate']/self.sample_rate
-        rectified_motion = np.zeros(int(motion_data.shape[0]//ratio))
-        chunk_size = 20000
-        tqdm.tqdm.write("Calculating motion energy")
-        for i in tqdm.tqdm(range(0, rectified_motion.shape[0], chunk_size)):
-            if i+chunk_size > rectified_motion.shape[0]:
-                chunk_size = rectified_motion.shape[0] - i
-            if i*ratio + chunk_size*ratio > motion_data.shape[0]:
-                chunk_size = int((motion_data.shape[0] - i*ratio)//ratio)
-            chunk = np.sqrt(np.sum(motion_data[int(i*ratio):int((i+chunk_size)*ratio)]**2, axis=1))
+        if self.sample_rate != motion_info['sampling_rate']:
+            # TODO: I dont think this needs to be in chunks
+            ratio = motion_info['sampling_rate']/self.sample_rate
+            rectified_motion = np.zeros(int(motion_data.shape[0]//ratio))
+            chunk_size = 20000
+            tqdm.tqdm.write("Calculating motion energy")
+            for i in tqdm.tqdm(range(0, rectified_motion.shape[0], chunk_size)):
+                if i+chunk_size > rectified_motion.shape[0]:
+                    chunk_size = rectified_motion.shape[0] - i
+                if i*ratio + chunk_size*ratio > motion_data.shape[0]:
+                    chunk_size = int((motion_data.shape[0] - i*ratio)//ratio)
+                chunk = np.sqrt(np.sum(motion_data[int(i*ratio):int((i+chunk_size)*ratio)]**2, axis=1))
 
-            # NB: This is not correct, but its less computationaly expensive than the correct way
-            # interpolation, and I dont care abou tthe sub-ms accuracy of this signal. PLease dont do this for spiking data
-            inds = (np.round(np.arange(i,i+chunk_size)*ratio) - np.round(i*ratio)).astype(int) 
-            rectified_motion[i:i+chunk_size] = chunk[inds]
+                # NB: This is not correct, but its less computationaly expensive than the correct way
+                # interpolation, and I dont care abou tthe sub-ms accuracy of this signal. PLease dont do this for spiking data
+                inds = (np.round(np.arange(i,i+chunk_size)*ratio) - np.round(i*ratio)).astype(int) 
+                rectified_motion[i:i+chunk_size] = chunk[inds]
+        else:
+            rectified_motion = np.sqrt(np.sum(motion_data.astype(np.float32)**2, axis=1))
+
 
         motion_ts = TimeSeries(
             name="motion",

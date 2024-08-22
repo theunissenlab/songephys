@@ -667,7 +667,7 @@ class GenerateSingleSiteLFP(luigi.Task):
         # then save to binary if it doesnt exist
         if not self.output()['bin'].exists():
             filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
-                recording_lfp, os.path.dirname(self.output()['bin'].path), data_name=os.path.basename(self.output()['bin'].path,self.lfp_sample_rate), dtype=np.int16,
+                recording_lfp, os.path.dirname(self.output()['bin'].path), data_name=os.path.basename(self.output()['bin'].path), dtype=np.int16,
                 chunksize=60000   )
 class GenerateSingleSiteAudioFile(luigi.Task):
     site_dir = SiteParameter()
