@@ -659,6 +659,8 @@ class GenerateSingleSiteLFP(luigi.Task):
 
         # now save info
         info = get_recording_info(recording_lfp)
+
+        self.output()['info'].makedirs()
         with open(self.output()['info'].path, 'w') as f:
             json.dump(info, f)
 
@@ -705,6 +707,8 @@ class GenerateSingleSiteAudioFile(luigi.Task):
 
         # now save info
         info = get_recording_info(multirecording_f)
+
+        self.output()['info'].makedirs()
         with open(self.output()['info'].path, 'w') as f:
             json.dump(info, f)
 
@@ -1080,6 +1084,8 @@ class GenerateSingleSiteDigitalMemmap(luigi.Task):
 
         # now save info
         info = get_recording_info(multirecording)
+
+        self.output()['info'].makedirs()
         with open(self.output()['info'].path, 'w') as f:
             json.dump(info, f)
         # then save to binary if the file does not exist
@@ -1126,6 +1132,8 @@ class GenerateSingleSiteADCMemmap(luigi.Task):
 
         # now save info
         info = get_recording_info(multirecording_f)
+
+        self.output()['info'].makedirs()
         with open(self.output()['info'].path, 'w') as f:
             json.dump(info, f)
 
@@ -1167,7 +1175,7 @@ class GenerateSingleSiteAuxMemmap(luigi.Task):
         # iterate through rhd files and load the digital events
         for rhd_file in sorted_rhds:
             rhd_file = os.path.join(rhd_dir, rhd_file)
-            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='USB board ADC input channel', ignore_integrity_checks=True)
+            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='RHD2000 auxiliary input channel', ignore_integrity_checks=True)
             all_intan_io.append(rhd)
         
         # concatenate the recording extractors in a single one
@@ -1176,6 +1184,8 @@ class GenerateSingleSiteAuxMemmap(luigi.Task):
         # then save to binary
         # now save info
         info = get_recording_info(multirecording)
+
+        self.output()['info'].makedirs()
         with open(self.output()['info'].path, 'w') as f:
             json.dump(info, f)
         # then save to binary if the file does not exist
@@ -1231,6 +1241,8 @@ class GenerateSingleSiteMemmap(luigi.Task):
 
         # now save info
         info = get_recording_info(multirecording_f)
+
+        self.output()['info'].makedirs()
         with open(self.output()['info'].path, 'w') as f:
             json.dump(info, f)
         # then save to binary if the file does not exist
