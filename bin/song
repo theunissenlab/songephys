@@ -358,6 +358,10 @@ def create_site(site_dir):
     response = response.strip()
     config_data['depth_mm'] = float(response)
 
+    response = input("What is the medial-lateral position of this recording? (in mm)")
+    response = response.strip()
+    config_data['ml_mm'] = float(response)
+
     click.echo("Okay. Saving {}".format(config_path))
 
     save_yaml(config_path, config_data)

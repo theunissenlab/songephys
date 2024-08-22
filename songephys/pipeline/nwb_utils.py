@@ -9,6 +9,7 @@ import tqdm
 from dateutil.tz import tzlocal
 
 from pynwb import NWBHDF5IO, NWBFile
+from pynwb.file import LabMetaData
 from pynwb.base import TimeSeries
 from pynwb.behavior import BehavioralTimeSeries
 from pynwb.ecephys import LFP, ElectricalSeries
@@ -38,10 +39,13 @@ from .file_setup import (
 
 class NWBTarget(luigi.Target):
     def __init__(self, nwbfile, *target_names):
-        self.nwbfile = nwbfile
+        self.path = nwbfile
         self.target_names = target_names
     def exists(self):
-        children = self.nwbfile.all_children()
+        io = NWBHDF5IO(self.path, 'r')
+        nwbfile = io.read()
+        children = nwbfile.all_children()
+        io.close()
         return all([x.name in self.target_names for x in children])
 
 class CreateSiteNWB(luigi.Task):
@@ -85,12 +89,13 @@ class CreateSiteNWB(luigi.Task):
         device = nwbfile.create_device(name=probe_name, manufacturer='Cambridge Neurotech')
 
         # then make the electrode group for the probe
-        ml = site_config.get('mediolateral_mm',.3) # mm, same for all probes TODO: Make this part of site_config optionally
+        ml = site_config.get('ml_mm',.3) # mm, same for all probes TODO: Make this part of site_config optionally
         depth = site_config['depth_mm']
         electrode_group = nwbfile.create_electrode_group(
                 name=probe_name,
                 description="%s probe in %s"%(probe_name,"NCM"),#TODO site_config['brain_area']),
-                device=device
+                device=device,
+                location="NCM", # TODO put this in site_config
             )
 
         # Add electrodes to the electrode group
@@ -129,16 +134,14 @@ class NWBAddDigitalEvents(luigi.Task):
         project_config = self.input()['project_config'].data()
         file_list = site_config["filelist"]
 
-        nwbfile = NWBHDF5IO(self.input()['site_nwb'].path, 'r').read()
-
         # get the name of the digital channels
-        if ['digital_channel_names'] in site_config:
+        if 'digital_channel_names' in site_config:
             digital_channel_names = site_config['digital_channel_names']
         else:
             digital_channel_names = ['AUDCODE', 'TTL', 'BUTTON', 'FEEDER', 'SEED', 'HOUSE']
 
         # make the ttl types table
-        ttl_types_table = EventTypesTable(name="ttl_types", description="Metadata about TTL types")
+        ttl_types_table = EventTypesTable(name="event_types", description="Metadata about TTL types")
         ttl_types_table.add_row(
             event_name="AUDCODE",
             event_type_description="Auditory stimulus code"
@@ -164,7 +167,7 @@ class NWBAddDigitalEvents(luigi.Task):
             event_type_description="House light on signal"
         )
         # now make the ttls table
-        ttls_table = EventsTable(name='ttl_events',description="Metadata about TTL events", target_tables={"event_type": ttl_types_table})
+        ttls_table = EventsTable(name='event_types',description="Metadata about TTL events", target_tables={"event_type": ttl_types_table})
         
         audcode_table = EventsTable(name="audcode_events", description="Precise time and metadata about stimuli played", target_tables={"event_type": ttl_types_table})
         audcode_table.add_column(name="code", description='stimuli code')
@@ -175,7 +178,7 @@ class NWBAddDigitalEvents(luigi.Task):
         audcode_table.add_column(name="md5", description='md5 hash of the stimulus file')
         
         # now load the digital memmap and fill in the ttl table and events table
-        digital_memmap_info = json.load(open(self.input()['site_digital_memmap']['info'],'r'))
+        digital_memmap_info = json.load(open(self.input()['site_digital_memmap']['info'].path, 'r'))
         fs = digital_memmap_info['sampling_rate']
 
         if digital_memmap_info['num_channels'] == 1:
@@ -194,7 +197,7 @@ class NWBAddDigitalEvents(luigi.Task):
                     for stim in stimulus_codes:
                         t, metadata = stim
                         audcode_table.add_row(
-                            time=t/fs,
+                            timestamp=t/fs,
                             event_type=0,
                             code=metadata['code'],
                             object=metadata['object'],
@@ -211,9 +214,13 @@ class NWBAddDigitalEvents(luigi.Task):
                     # now find the rising and falling edges
                     rising = np.where(np.diff(dig_data) == 1)[0]
                     falling = np.where(np.diff(dig_data) == -1)[0]
-                    if len(rising) != len(falling):
+                    if len(rising) != len(falling) and len(rising) > 0:
                         # it has to be off by one. we can figure out how to fix it with a few tests
                         # if the first rising is after the first falling then we need to remove the first falling
+                        if len(falling) == 0:
+                            assert(len(rising) == 1)
+                            falling = [len(dig_data)]
+                            break
                         if rising[0] > falling[0]:
                             falling = falling[1:]
                             assert(len(rising) == len(falling))
@@ -223,7 +230,7 @@ class NWBAddDigitalEvents(luigi.Task):
                             assert(len(rising) == len(falling))              
                     for r, f in zip(rising, falling):
                         ttls_table.add_row(
-                            time=r/fs,
+                            timestamp=r/fs,
                             event_type=i,
                             duration=(f-r)/fs
                         )
@@ -235,11 +242,11 @@ class NWBAddDigitalEvents(luigi.Task):
             # now we can just iterate over the channels
             for i, chan in enumerate(digital_channel_names):
                 if i == 0: # audcode chan
-                    stimulus_codes = convert_raw_digital_to_metadata(digital_memmap[:,i],fs)
+                    stimulus_codes = convert_raw_digital_to_metadata(digital_memmap[:,i].astype(np.int8),fs)
                     for stim in stimulus_codes:
                         t, metadata = stim
                         audcode_table.add_row(
-                            time=t/fs,
+                            timestamp=t/fs,
                             event_type=0,
                             code=metadata['code'],
                             object=metadata['object'],
@@ -251,33 +258,41 @@ class NWBAddDigitalEvents(luigi.Task):
                 else:
                     # Otherwise add it to our ttls table
                     # if data is mostly ones then flip it
+                    dig_data = digital_memmap[:,i].astype(np.int8)
                     if digital_memmap[:,i].mean() > .5:
-                        dig_data = ~digital_memmap[:,i]
+                        dig_data = ~dig_data
                     # now find the rising and falling edges
                     rising = np.where(np.diff(dig_data) == 1)[0]
                     falling = np.where(np.diff(dig_data) == -1)[0]
-                    if len(rising) != len(falling):
+                    if len(rising) != len(falling) and len(rising) > 0:
                         # it has to be off by one. we can figure out how to fix it with a few tests
                         # if the first rising is after the first falling then we need to remove the first falling
-                        if rising[0] > falling[0]:
-                            falling = falling[1:]
-                            assert(len(rising) == len(falling))
-                        # if the last falling is before the last rising then we need to add a falling at the end that is the total duration
-                        if rising[-1] < falling[-1]:
-                            falling = np.append(falling, len(dig_data))
-                            assert(len(rising) == len(falling))              
+                        if len(falling) == 0:
+                            assert(len(rising) == 1)
+                            falling = [len(dig_data)]
+                        else:
+                            if rising[0] > falling[0]:
+                                falling = falling[1:]
+                                assert(len(rising) == len(falling))
+                            # if the last falling is before the last rising then we need to add a falling at the end that is the total duration
+                            if rising[-1] < falling[-1]:
+                                falling = np.append(falling, len(dig_data))
+                                assert(len(rising) == len(falling))              
                     for r, f in zip(rising, falling):
                         ttls_table.add_row(
-                            time=r/fs,
+                            timestamp=r/fs,
                             event_type=i-1,
                             duration=(f-r)/fs
                         )
-        # add the tables to the nwbfile
-        nwbfile.add_child(ttl_types_table)
-        nwbfile.add_acquisition(ttls_table)
-        nwbfile.add_acquisition(audcode_table)
-        with NWBHDF5IO(self.output().path, 'w') as io:
-            io.write(nwbfile)
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
+            nwbfile = nwb_io.read()
+            # add the tables to the nwbfile
+            task = Task()
+            task.event_types = ttl_types_table
+            nwbfile.add_lab_meta_data(task)
+            nwbfile.add_acquisition(ttls_table)
+            nwbfile.add_acquisition(audcode_table)
+            nwb_io.write(nwbfile)
 
 class AddLFPNWB(luigi.Task):
     site_dir = SiteParameter()
@@ -291,22 +306,27 @@ class AddLFPNWB(luigi.Task):
         return NWBTarget(self.input()['site_nwb'].path, 'LFP')
     
     def run(self):
-        nwbfile = NWBHDF5IO(self.input()['site_nwb'].path, 'r').read()
 
         # load the LFP data
-        lfp_info = json.load(open(self.input()['lfp']['info'],'r'))
+        lfp_info = json.load(open(self.input()['lfp']['info'].path,'r'))
         lfp_shape = (lfp_info['num_samples'], lfp_info['num_channels'])
         lfp_data = np.memmap(self.input()['lfp']['bin'].path,shape=lfp_shape, dtype=lfp_info['dtype'], mode='r')
-        lfp_ts = ElectricalSeries(
-            name='LFP',
-            data=lfp_data,
-            electrodes=nwbfile.electrodes,
-            rate=lfp_info['sampling_rate'],
-            description='LFP data from the site'
-        )
-        nwbfile.add_acquisition(lfp_ts)
-        with NWBHDF5IO(self.output().path, 'w') as io:
-            io.write(nwbfile)
+        
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
+            nwbfile = nwb_io.read()
+            electrode_region = nwbfile.create_electrode_table_region(
+                region=list(range(lfp_shape[1])),
+                description="all electrodes",
+            )
+            lfp_ts = ElectricalSeries(
+                name='LFP',
+                data=lfp_data,
+                electrodes=electrode_region,
+                rate=float(lfp_info['sampling_rate']),
+                description='LFP data from the site'
+            )
+            nwbfile.add_acquisition(lfp_ts)
+            nwb_io.write(nwbfile)
 class AddMotionNWB(luigi.Task):
     site_dir = SiteParameter()
     sample_rate = luigi.IntParameter(default=1000)
@@ -317,28 +337,27 @@ class AddMotionNWB(luigi.Task):
         }
 
     def output(self):
-        return NWBTarget(self.input()['site_nwb'].path, 'motion')
+        return NWBTarget(self.input()['site_nwb'].path, 'Motion Time Series')
     
     def run(self):
-        nwbfile = NWBHDF5IO(self.input()['site_nwb'].path, 'r').read()
 
         # load the motion data
-        motion_info = json.load(open(self.input()['motion']['info'],'r'))
+        motion_info = json.load(open(self.input()['motion']['info'].path,'r'))
         motion_shape = (motion_info['num_samples'], motion_info['num_channels'])
         motion_data = np.memmap(self.input()['motion']['bin'].path,shape=motion_shape, dtype=motion_info['dtype'], mode='r')
 
         # take the motion data, and calculate a downsampled proxy for total motion
         # this is the sqrt of the sum of the squares of the motion data
         ratio = motion_info['sampling_rate']/self.sample_rate
-        rectified_motion = np.zeros(motion_data.shape[0]//ratio)
+        rectified_motion = np.zeros(int(motion_data.shape[0]//ratio))
         chunk_size = 20000
         tqdm.tqdm.write("Calculating motion energy")
         for i in tqdm.tqdm(range(0, rectified_motion.shape[0], chunk_size)):
             if i+chunk_size > rectified_motion.shape[0]:
                 chunk_size = rectified_motion.shape[0] - i
             if i*ratio + chunk_size*ratio > motion_data.shape[0]:
-                chunk_size = (motion_data.shape[0] - i*ratio)//ratio
-            chunk = np.sqrt(np.sum(motion_data[i*ratio:(i+chunk_size)*ratio]**2, axis=1))
+                chunk_size = int((motion_data.shape[0] - i*ratio)//ratio)
+            chunk = np.sqrt(np.sum(motion_data[int(i*ratio):int((i+chunk_size)*ratio)]**2, axis=1))
 
             # NB: This is not correct, but its less computationaly expensive than the correct way
             # interpolation, and I dont care abou tthe sub-ms accuracy of this signal. PLease dont do this for spiking data
@@ -348,24 +367,23 @@ class AddMotionNWB(luigi.Task):
         motion_ts = TimeSeries(
             name="motion",
             data=rectified_motion,
-            rate=self.sample_rate,
+            rate=float(self.sample_rate),
             description="Motion energy calculated from the motion data",
             unit="v?",
         )
 
         behavioral_time_series = BehavioralTimeSeries(
             time_series=motion_ts,
-            name="BehavioralTimeSeries",
+            name="Motion Time Series",
         )
-        if 'behavior' not in nwbfile.processing:
-            nwbfile.create_processing_module(
-                name="behavior", description="Processed behavioral data"
-            )
-
-        nwbfile.processing['behavior'].add(behavioral_time_series)
-
-        with NWBHDF5IO(self.output().path, 'w') as io:
-            io.write(nwbfile)
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
+            nwbfile = nwb_io.read()
+            if 'behavior' not in nwbfile.processing:
+                nwbfile.create_processing_module(
+                    name="behavior", description="Processed behavioral data"
+                )
+            nwbfile.processing['behavior'].add(behavioral_time_series)
+            nwb_io.write(nwbfile)
 
 class AddAudioNWB(luigi.Task):
     site_dir = SiteParameter()
@@ -379,22 +397,22 @@ class AddAudioNWB(luigi.Task):
         return NWBTarget(self.input()['site_nwb'].path, 'audio')
     
     def run(self):
-        nwbfile = NWBHDF5IO(self.input()['site_nwb'].path, 'r').read()
 
         # load the audio data
-        audio_info = json.load(open(self.input()['audio']['info'],'r'))
+        audio_info = json.load(open(self.input()['audio']['info'].path,'r'))
         audio_shape = (audio_info['num_samples'], audio_info['num_channels'])
         audio_data = np.memmap(self.input()['audio']['bin'].path,shape=audio_shape, dtype=audio_info['dtype'], mode='r')
         audio_ts = TimeSeries(
             name='audio',
             data=audio_data,
-            rate=audio_info['sampling_rate'],
+            rate=float(audio_info['sampling_rate']),
             description='Audio data from the site',
             unit='mV'
         )
-        nwbfile.add_acquisition(audio_ts)
-        with NWBHDF5IO(self.output().path, 'w') as io:
-            io.write(nwbfile)
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
+            nwbfile = nwb_io.read()
+            nwbfile.add_acquisition(audio_ts)
+            nwb_io.write(nwbfile)
 
 class GenerateAcquisitionNWB(luigi.WrapperTask):
     site_dir = SiteParameter()
