@@ -1236,8 +1236,8 @@ class GenerateSingleSiteMemmap(luigi.Task):
         # concatenate the recording extractors in a single one
         multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
 
-        # add a high pass filter
-        multirecording_f = highpass_filter(multirecording, freq_min=300)
+        # lets try a bandpass instead of highpass
+        multirecording_f = bandpass_filter(multirecording, freq_min=300, freq_max=8000)
 
         # now save info
         info = get_recording_info(multirecording_f)
