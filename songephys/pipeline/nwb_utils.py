@@ -3,6 +3,7 @@ from uuid import uuid4
 import os
 import json
 
+import pandas as pd
 import luigi
 import numpy as np
 import tqdm
@@ -11,6 +12,7 @@ from dateutil.tz import tzlocal
 from pynwb import NWBHDF5IO, NWBFile
 from pynwb.file import LabMetaData
 from pynwb.base import TimeSeries
+from pynwb.epoch import TimeIntervals
 from pynwb.behavior import BehavioralTimeSeries
 from pynwb.ecephys import LFP, ElectricalSeries
 import kilosort
@@ -36,6 +38,86 @@ from .file_setup import (
     GenerateSingleSiteAudioFile
 )
 
+def get_rhd_start_from_fn(rhd_file):
+    # start is from the filename
+    date_string = rhd_file.split('__')[-1].split('.rhd')[0]
+    start_time = datetime.datetime.strptime(date_string, "%y%m%d_%H%M%S")
+    return start_time
+
+def get_pyop_start_from_fn(trialdata_csv):
+    date_string = trialdata_csv.split('_')[-2]
+    start_time = datetime.datetime.strptime(date_string, "%Y%m%d%H%M%S")
+    return start_time
+def get_pyop_start_end(trialdata_csv):
+    start_time = get_pyop_start_from_fn(trialdata_csv)
+    df = pd.read_csv(trialdata_csv)
+    if len(df) == 0:
+        return None
+    end_time = datetime.datetime.fromisoformat(df['time'].iloc[-1])
+    return start_time, end_time
+
+def pyoperant_type(trialdata):
+    if type(trialdata) == str:
+        trialdata = pd.read_csv(trialdata)
+    if 'response' in trialdata.columns:
+        return 'operant'
+    else:
+        return 'playback'
+    
+class Experiment(object):
+    def __init__(self, file):
+        pass
+class PyoperantExperiment(Experiment):
+    # TODO could add file start and end time based on logs, also could load yaml file for config info
+    def __init__(self, filename):
+        self.filename = filename
+        self.uid = os.path.basename(filename).split('_trialdata.csv')[0]
+        self.data = pd.read_csv(filename)
+    
+    @property
+    def ntrials(self):
+        return len(self.data)
+    
+    @property
+    def experiment_type(self):
+        return pyoperant_type(self.data)
+    
+    @property
+    def experiment_start_time(self):
+        date_string = self.filename.split('_')[-2]
+        start_time = datetime.datetime.strptime(date_string, "%Y%m%d%H%M%S")
+        return start_time
+    
+    @property
+    def experiment_end_time(self):
+        # TODO get this from the eventslog, but for now we will return end of the last trial
+        return self.trial_end_time(self.ntrials)
+    
+    def get_trial(self, trial_num):
+        if trial_num > self.ntrials:
+            raise ValueError("Trial number exceeds number of trials")
+        return self.data[self.data.index == trial_num]
+
+    def trial_start_time(self, trial_num):
+        return datetime.datetime.fromisoformat(self.get_trial(trial_num).time)
+    
+    def trial_duration(self, trial_num):
+        trial = self.get_trial(trial_num)
+        if self.experiment_type == 'operant':
+            if trial.response:
+                rt = datetime.datetime.strptime(trial.rt, "%H:%M:%S.%f")
+                rtd = datetime.timedelta(hours=rt.hour, minutes=rt.minute, seconds=rt.second, microseconds=rt.microsecond)
+                return rtd
+            else:
+                return datetime.timedelta(seconds=trial.max_wait)
+        else:
+            # TODO read stimui and add this to length for playbacks
+            return datetime.timedleta(seconds=2)
+
+    def trial_end_time(self, trial_num):
+        return self.trial_start_time(trial_num) + self.trial_duration(trial_num)
+        
+    
 
 class NWBTarget(luigi.Target):
     def __init__(self, nwbfile, *target_names):
@@ -64,12 +146,19 @@ class CreateSiteNWB(luigi.Task):
     def run(self):
         site_config = self.input()['site_config'].data()
         project_config = self.input()['project_config'].data()
+        
+        # get the recording start time from the rhd files
+        rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
+        if len(rhd_files) == 0:
+            raise ValueError("No rhd files found in filelist")
+        start_times = [get_rhd_start_from_fn(x) for x in rhd_files]
+        start_time = min(start_times)
 
         # first init the NWB file
         nwbfile = NWBFile(
             session_description=project_config['EXPERIMENT_NAME'],
             identifier=str(uuid4()), # random uuid
-            session_start_time=datetime.now(tzlocal()), # TODO: Get time from the rhd file
+            session_start_time=start_time, # TODO: Get time from the rhd file
             experimenter=[
                 "Thomas, Logan",
             ],
@@ -118,7 +207,7 @@ class CreateSiteNWB(luigi.Task):
         with NWBHDF5IO(self.output().path, 'w') as io:
             io.write(nwbfile)
         
-class NWBAddDigitalEvents(luigi.Task):
+class AddDigitalEventsNWB(luigi.Task):
     site_dir = SiteParameter()
     def requires(self):
         return {
@@ -421,13 +510,121 @@ class AddAudioNWB(luigi.Task):
             nwbfile.add_acquisition(audio_ts)
             nwb_io.write(nwbfile)
 
+
+class AddPyoperantTrials(luigi.Task):
+    site_dir = SiteParameter()
+    def requires(self):
+        return {
+            'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
+            'project_config': SiteProjectConfig(site_dir=self.site_dir),
+            'digital_events': AddDigitalEventsNWB(site_dir=self.site_dir)
+        }
+    def output(self):
+        return NWBTarget(self.input()['site_nwb'].path, 'operant_trials')
+    def run(self):
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
+            nwbfile = nwb_io.read()
+            audcode_events = nwbfile.acquisition['audcode_events'].to_dataframe()
+            session_start = nwbfile.session_start_time
+            audcode_events['datetime'] = [session_start + datetime.timedelta(seconds=x) for x in audcode_events['timestamp']]
+        # find contiguous blocks of audcode trials
+        trial_blocks = np.split(audcode_events,np.where(np.diff(audcode_events.trial) != 1)[0]+1)
+        trial_block_starts = [x.timestamp.iloc[0] for x in trial_blocks]
+        trial_block_ends = [x.timestamp.iloc[-1] for x in trial_blocks]
+
+        # now we need to match each of these blocks with the corresponding csv files
+        # first we need to find the csv files
+        site_config = json.load(open(os.path.join(self.site_dir, 'site_config.json'),'r'))
+        project_config = json.load(open(os.path.join(self.site_dir, 'project_config.json'),'r'))
+        pyoperant_csvs = [f for f in site_config['filelist'] if f.endswith('trialdata.csv')]
+        pyoperant_experiments = [PyoperantExperiment(x) for x in pyoperant_csvs]
+
+        # create the different timeintervales we will keep track of
+        pyoperant_experiments = TimeIntervals(
+            name="pyoperant_experiments",
+            description="Top level intervales for operant experiments",
+        )
+        pyoperant_experiments.add_column(name="experiment_type", description="Type of experiment (operant or playback)")
+        pyoperant_experiments.add_column(name="uid", description="Unique Identifier for experiment (base of filename)")
+
+        op_trial_intervals = TimeIntervals(
+            name="operant_trials",
+            description="Intervals for individual operant trials"
+        )
+        op_trial_intervals.add_column(name="trial_num", description="Trial number")
+        op_trial_intervals.add_column(name="experiment_uid", description="Unique Identifier for experiment (base of filename)")
+        op_trial_intervals.add_column(name="stimuli", description="Stimuli presented")
+        op_trial_intervals.add_column(name="response", description="Response made")
+        op_trial_intervals.add_column(name="correct", description="Correct response")
+
+        pb_trial_intervals = TimeIntervals(
+            name="playback_trials",
+            description="Intervals for individual playback trials"
+        )
+        pb_trial_intervals.add_column(name="trial_num", description="Trial number")
+        pb_trial_intervals.add_column(name="experiment_uid", description="Unique Identifier for experiment (base of filename)")
+        pb_trial_intervals.add_column(name="stimuli", description="Stimuli presented")
+
+        # now we need to match the trial blocks with the operant experiments
+        for exp in pyoperant_experiments:
+            if exp.ntrials > 0:
+                # add the top level interval
+                pyoperant_experiments.add_interval(
+                    start_time=exp.experiment_start_time,
+                    end_time=exp.experiment_end_time,
+                    experiment_type=exp.experiment_type,
+                    uid=exp.uid
+                )
+
+                # now find the trialblock that corresponds to this experiment
+                first_trial_time = exp.trial_start_time(1)
+                last_trial_time = exp.trial_end_time(exp.ntrials)
+                # find the trial block that starts at the closest time to the first trial and ends at the closest time to the last trial
+                trial_block_ix = np.argmin([abs(x-first_trial_time) for x in trial_block_starts])
+                trial_block = trial_blocks[trial_block_ix]
+                # now lets see if all the trials are here
+                if len(trial_block) != exp.ntrials:
+                    print("Experiment %s has fewer trials than expected"%exp.uid)
+                    print("Expected %d, found %d"%(exp.ntrials, len(trial_block)))
+
+                for ix, trial in exp.data.iterrows():
+                    if trial.trial in trial_block.trial.values:
+                        audcode_event = trial_block[trial_block.trial == trial.trial]
+                    else:
+                        # TODO can do some funny shit with TTL Pulses here
+                        print("Trial %d not found in trial block for experiment %s"%(trial.trial, exp.uid))
+                        audcode_event = None
+
+                    start = audcode_event.datetime if audcode_event is not None else exp.trial_start_time(ix)
+                    end = start + exp.trial_duration(ix)
+                    if exp.experiment_type == 'operant':
+                        op_trial_intervals.add_interval(
+                            start_time=start,
+                            end_time=end,
+                            trial_num=ix,
+                            experiment_uid=exp.uid,
+                            stimuli=trial.stimuli,# TODO Make this truncated or something
+                            response=trial.response,
+                            correct=trial.correct
+                        )
+                    else:
+                        pb_trial_intervals.add_interval(
+                            start_time=start,
+                            end_time=end,
+                            trial_num=ix,
+                            experiment_uid=exp.uid,
+                            stimuli=trial.stimuli
+                        )
+        
+
 class GenerateAcquisitionNWB(luigi.WrapperTask):
     site_dir = SiteParameter()
     def requires(self):
         return {
             'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
-            'digital': NWBAddDigitalEvents(site_dir=self.site_dir),
+            'digital': AddDigitalEventsNWB(site_dir=self.site_dir),
             'lfp': AddLFPNWB(site_dir=self.site_dir),
             'motion': AddMotionNWB(site_dir=self.site_dir),
             'audio': AddAudioNWB(site_dir=self.site_dir)
         }
+    
