@@ -9,6 +9,9 @@ import luigi
 import numpy as np
 import tqdm
 from dateutil.tz import tzlocal
+from scipy.stats import zscore
+import scipy.signal as signal
+import scipy.ndimage as ndimage
 
 from pynwb import NWBHDF5IO, NWBFile
 from pynwb.file import LabMetaData
@@ -132,6 +135,24 @@ class NWBTarget(luigi.Target):
         children = [x.name for x in nwbfile.all_children()]
         io.close()
         return all([x in children for x in self.target_names])
+    
+class NWBAcquisitionTarget(luigi.Target):
+    def __init__(self, nwbfile, *target_names):
+        self.path = nwbfile
+        self.target_names = target_names
+    def exists(self):
+        if not os.path.exists(self.path):
+            return False
+        io = NWBHDF5IO(self.path, 'r')
+        nwbfile = io.read()
+        return all([x in nwbfile.acquisition for x in self.target_names])
+    
+    def data(self):
+        io = NWBHDF5IO(self.path, 'r')
+        nwbfile = io.read()
+        return dict({
+            x: nwbfile.acquisition[x] for x in self.target_names
+        })
 
 class CreateSiteNWB(luigi.Task):
     site_dir = SiteParameter()
@@ -419,9 +440,9 @@ class AddLFPNWB(luigi.Task):
             )
             nwbfile.add_acquisition(lfp_ts)
             nwb_io.write(nwbfile)
+
 class AddMotionNWB(luigi.Task):
     site_dir = SiteParameter()
-    sample_rate = luigi.IntParameter(default=7500)
     def requires(self):
         return {
             'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
@@ -438,35 +459,16 @@ class AddMotionNWB(luigi.Task):
         motion_shape = (motion_info['num_samples'], motion_info['num_channels'])
         motion_data = np.memmap(self.input()['motion']['bin'].path,shape=motion_shape, dtype=motion_info['dtype'], mode='r')
 
-        # take the motion data, and calculate a downsampled proxy for total motion
-        # this is the sqrt of the sum of the squares of the motion data
-        if self.sample_rate != motion_info['sampling_rate']:
-            # TODO: I dont think this needs to be in chunks
-            ratio = motion_info['sampling_rate']/self.sample_rate
-            rectified_motion = np.zeros(int(motion_data.shape[0]//ratio))
-            chunk_size = 20000
-            tqdm.tqdm.write("Calculating motion energy")
-            for i in tqdm.tqdm(range(0, rectified_motion.shape[0], chunk_size)):
-                if i+chunk_size > rectified_motion.shape[0]:
-                    chunk_size = rectified_motion.shape[0] - i
-                if i*ratio + chunk_size*ratio > motion_data.shape[0]:
-                    chunk_size = int((motion_data.shape[0] - i*ratio)//ratio)
-                chunk = np.sqrt(np.sum(motion_data[int(i*ratio):int((i+chunk_size)*ratio)]**2, axis=1))
-
-                # NB: This is not correct, but its less computationaly expensive than the correct way
-                # interpolation, and I dont care abou tthe sub-ms accuracy of this signal. PLease dont do this for spiking data
-                inds = (np.round(np.arange(i,i+chunk_size)*ratio) - np.round(i*ratio)).astype(int) 
-                rectified_motion[i:i+chunk_size] = chunk[inds]
-        else:
-            rectified_motion = np.sqrt(np.sum(motion_data.astype(np.float32)**2, axis=1))
-
+        jerk = np.diff(motion_data,axis=0)
+        normed_jerk = np.linalg.norm(jerk, axis=1)
+        zs_jerk = zscore(normed_jerk, axis=0)
 
         motion_ts = TimeSeries(
             name="motion",
-            data=rectified_motion,
-            rate=float(self.sample_rate),
-            description="Motion energy calculated from the motion data",
-            unit="v?",
+            data=zs_jerk,
+            rate=float(motion_info['sampling_rate']),
+            description="Motion energy calculated from the derivative of the accelerometer data",
+            unit="zscore",
         )
 
         behavioral_time_series = BehavioralTimeSeries(
@@ -510,6 +512,118 @@ class AddAudioNWB(luigi.Task):
             nwbfile = nwb_io.read()
             nwbfile.add_acquisition(audio_ts)
             nwb_io.write(nwbfile)
+
+class AddRippleEventsNWB(luigi.Task):
+    site_dir = SiteParameter()
+    ripple_threshold = luigi.FloatParameter(default=2.5)
+    def requires(self):
+        return {
+            'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
+            'lfp': AddLFPNWB(site_dir=self.site_dir),
+            'motion': AddMotionNWB(site_dir=self.site_dir)
+        }
+
+    def output(self):
+        return NWBTarget(self.input()['site_nwb'].path, 'putative_ripples')
+    
+    def run(self):
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
+            nwb = nwb_io.read()
+
+            # lets take our lfp and filter it
+            lfp = nwb.acquisition['LFP']
+            motion = nwb.processing['behavior']['Motion Time Series'].time_series
+
+            # first detect bad channels
+            # take a significantly sized chunk of the data, maybe 10 seconds?
+            chunk_size = 10*lfp.rate
+            chunk_start = np.random.randint(0,lfp.data.shape[0]-chunk_size)
+            random_chunk = lfp.data[chunk_start:chunk_start+chunk_size]
+            # get the average of all the channels
+            channel_means = np.mean(random_chunk, axis=1)
+            # get the correlation of each channel with the average
+            corrs = np.zeros(lfp.data.shape[1])
+            for i in range(lfp.data.shape[1]):
+                corrs[i] = np.corrcoef(channel_means, random_chunk[:,i])[0,1]        
+            zscored_corrs = zscore(corrs)
+            bad_channels = np.where(zscored_corrs < -2)[0]
+
+            # now add the detected ripples to the nwb file
+            putative_ripples = TimeIntervals(
+                name="putative_ripples",
+                description="Putative ripple events detected from LFP data"
+            )
+            putative_ripples.add_column(name="duration", description="Duration of the ripple event")
+            putative_ripples.add_column(name="peak_time", description="Time of the peak of the ripple event")
+            putative_ripples.add_column(name="peak_value", description="Value of the peak of the ripple event")
+            putative_ripples.add_column(name="channel", description="Channel of the ripple event")
+            putative_ripples.add_column(name="AOC", description="Area over the curve of the ripple event")
+            putative_ripples.add_column(name="motion_peak", description="Peak of the motion energy during the ripple event")
+            putative_ripples.add_column(name="motion_peak_time", description="Area over the curve of the motion energy during the ripple event")
+            putative_ripples.add_column(name="motion_avg", description="Average motion energy during the ripple event")
+            
+
+            # lets do this on each channel individually TODO could do this for all at the same time. but gets annoying with bad channels
+            for ch in range(lfp_data.shape[1]):
+                if ch in bad_channels:
+                    print("Skipping BAD channel %d"%ch)
+                    continue
+                print("Detecting ripples on channel %d"%ch)
+                lfp_data = lfp.data[:,ch]
+                # hamming filter from 100 to 200 hz\\\n",
+                taps = signal.firwin(100, [100/(lfp.rate/2), 200/(lfp.rate/2)],pass_zero=False)
+                conv_result = signal.convolve(lfp_data, taps, mode='same',method='fft')
+                # do hilber transform on result
+                hilb = signal.hilbert(conv_result)
+                filtered = ndimage.gaussian_filter1d(np.abs(hilb), 4)
+                zscored = zscore(filtered)
+
+                # now we need to find the peaks
+                above_thresh = np.where(zscored > self.ripple_threshold)[0]
+                # how many continuous events are there
+                diff = np.diff(above_thresh, axis=0)
+                events_boundaries = np.concatenate([[0],np.where(diff > 1)[0]+1, [above_thresh.shape[0]]])
+                event_durations = np.diff(events_boundaries)
+                events = events_boundaries[:-1]
+
+                # take only ones that last for more than 10 ms above 3 std
+                events = events[event_durations > 30]
+                event_durations = event_durations[event_durations > 20]
+
+                # now expand each event to the previous 0 crossing and the next 0 crossing
+                # TODO we can increase 0 to .5 or 1 if these events are too big
+                zero_crossings = np.where(np.diff(np.sign(zscored)))[0]
+                for i in range(events.shape[0]):
+                    start = above_thresh[events[i]]
+                    end = above_thresh[events[i]] + event_durations[i]
+                    start = zero_crossings[zero_crossings <= start][-1]
+                    end = zero_crossings[zero_crossings >= end][0]
+                    events[i] = start
+                    event_durations[i] = end-start
+
+                # remove duplicates
+                events, inds = np.unique(events, return_index=True)
+                event_durations = event_durations[inds]
+
+                # now we need to calculate the area over the curve for each event
+                for i, e in enumerate(events):
+                    conv_factor = motion.rate / lfp.rate
+                    motion_ts = motion.data[int(e * conv_factor):int((e+event_durations[i])*conv_factor)]
+                    putative_ripples.add_interval(
+                                start_time=e/lfp.rate,
+                                stop_time=(e+event_durations[i])/lfp.rate,
+                                peak_time=e/lfp.rate + np.argmax(zscored[e:e+event_durations[i]])/lfp.rate,
+                                peak_value=np.max(zscored[e:e+event_durations[i]]),
+                                channel=ch,
+                                AOC=np.sum(zscored[e:e+event_durations[i]]),
+                                motion_peak=np.max(motion_ts),
+                                motion_peak_time=np.argmax(motion_ts)/motion.rate,
+                                motion_avg=np.mean(motion_ts),
+                                timeseries=[lfp, motion]
+                            )
+                    
+            nwb.add_acquisition(putative_ripples)
+            nwb_io.write(nwb)
 
 class AddKilosortUnits(luigi.Task):
     site_dir = SiteParameter()
