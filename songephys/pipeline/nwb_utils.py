@@ -532,13 +532,14 @@ class AddRippleEventsNWB(luigi.Task):
 
             # lets take our lfp and filter it
             lfp = nwb.acquisition['LFP']
-            motion = nwb.processing['behavior']['Motion Time Series'].time_series
+            fs = lfp.rate
+            motion = nwb.processing['behavior']['Motion Time Series'].time_series['motion']
 
             # first detect bad channels
             # take a significantly sized chunk of the data, maybe 10 seconds?
-            chunk_size = 10*lfp.rate
+            chunk_size = int(10*fs)
             chunk_start = np.random.randint(0,lfp.data.shape[0]-chunk_size)
-            random_chunk = lfp.data[chunk_start:chunk_start+chunk_size]
+            random_chunk = lfp.data[chunk_start:chunk_start+chunk_size,:]
             # get the average of all the channels
             channel_means = np.mean(random_chunk, axis=1)
             # get the correlation of each channel with the average
@@ -564,14 +565,14 @@ class AddRippleEventsNWB(luigi.Task):
             
 
             # lets do this on each channel individually TODO could do this for all at the same time. but gets annoying with bad channels
-            for ch in range(lfp_data.shape[1]):
+            for ch in range(lfp.data.shape[1]):
                 if ch in bad_channels:
                     print("Skipping BAD channel %d"%ch)
                     continue
                 print("Detecting ripples on channel %d"%ch)
                 lfp_data = lfp.data[:,ch]
                 # hamming filter from 100 to 200 hz\\\n",
-                taps = signal.firwin(100, [100/(lfp.rate/2), 200/(lfp.rate/2)],pass_zero=False)
+                taps = signal.firwin(100, [100/(fs/2), 200/(fs/2)],pass_zero=False)
                 conv_result = signal.convolve(lfp_data, taps, mode='same',method='fft')
                 # do hilber transform on result
                 hilb = signal.hilbert(conv_result)
@@ -607,12 +608,13 @@ class AddRippleEventsNWB(luigi.Task):
 
                 # now we need to calculate the area over the curve for each event
                 for i, e in enumerate(events):
-                    conv_factor = motion.rate / lfp.rate
+                    conv_factor = motion.rate / fs
                     motion_ts = motion.data[int(e * conv_factor):int((e+event_durations[i])*conv_factor)]
                     putative_ripples.add_interval(
-                                start_time=e/lfp.rate,
-                                stop_time=(e+event_durations[i])/lfp.rate,
-                                peak_time=e/lfp.rate + np.argmax(zscored[e:e+event_durations[i]])/lfp.rate,
+                                start_time=e/fs,
+                                stop_time=(e+event_durations[i])/fs,
+                                duration=event_durations[i]/fs,
+                                peak_time=e/fs + np.argmax(zscored[e:e+event_durations[i]])/fs,
                                 peak_value=np.max(zscored[e:e+event_durations[i]]),
                                 channel=ch,
                                 AOC=np.sum(zscored[e:e+event_durations[i]]),
@@ -809,6 +811,8 @@ class GenerateAcquisitionNWB(luigi.WrapperTask):
             'digital': AddDigitalEventsNWB(site_dir=self.site_dir),
             'lfp': AddLFPNWB(site_dir=self.site_dir),
             'motion': AddMotionNWB(site_dir=self.site_dir),
-            'audio': AddAudioNWB(site_dir=self.site_dir)
+            'audio': AddAudioNWB(site_dir=self.site_dir),
+            'ripples': AddRippleEventsNWB(site_dir=self.site_dir),
+            'operant': AddPyoperantTrials(site_dir=self.site_dir)
         }
     

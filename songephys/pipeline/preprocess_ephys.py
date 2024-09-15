@@ -549,7 +549,7 @@ class KiloSort4Sorting(luigi.Task):
         # prb_new['kcoords'] = prb['kcoords'][inds]
         # prb_new['n_chan'] = prb['n_chan'] - len(bad_chans)
         # plt.scatter(prb_new['xc'],prb_new['yc'],label=prb_new['chanMap'],c=prb_new['chanMap'])
-
+        # TODO look at info and get nchan and batch_size
         settings = kilosort.DEFAULT_SETTINGS.copy()
         settings['n_chan_bin'] = 64
         settings['nearest_templates'] = 64
@@ -563,7 +563,7 @@ class KiloSort4Sorting(luigi.Task):
         # Reduce Th_learned if I see neurons coming in and out
         settings['Th_learned'] = 8
         ks_output_dir =  os.path.dirname(self.output().path)
-        bin_file = Path(self.input()['full_bin_array'].path)
+        bin_file = Path(self.input()['full_bin_array']['bin'].path)
         kilosort.run_kilosort(settings=settings, probe=prb, filename=bin_file, data_dtype='int16', results_dir=ks_output_dir)
 
 class ManualSorting(luigi.Task):
