@@ -216,6 +216,7 @@ class CreateSiteNWB(luigi.Task):
         # in the nwb file: +x is posterior +y is inferior +z is right
         for (cid, ap, dv) in zip(prb['chanMap'], prb['xc'], prb['yc']):
             nwbfile.add_electrode(
+                    id = cid,
                     group=electrode_group,
                     location="brain area",
                     x = float(ap)/1000,
@@ -459,6 +460,8 @@ class AddMotionNWB(luigi.Task):
         motion_shape = (motion_info['num_samples'], motion_info['num_channels'])
         motion_data = np.memmap(self.input()['motion']['bin'].path,shape=motion_shape, dtype=motion_info['dtype'], mode='r')
 
+        # rescale to 0-1
+        motion_data = motion_data / 2**16 # todo: could use np.iinfo(motion_data.dtype).max
         jerk = np.diff(motion_data,axis=0)
         normed_jerk = np.linalg.norm(jerk, axis=1)
         zs_jerk = zscore(normed_jerk, axis=0)
@@ -626,6 +629,96 @@ class AddRippleEventsNWB(luigi.Task):
                     
             nwb.add_acquisition(putative_ripples)
             nwb_io.write(nwb)
+
+class AgglomerateRippleEventsNWB(luigi.Task):
+    site_dir = SiteParameter()
+    ripple_threshold = luigi.FloatParameter(default=2.5)
+    def requires(self):
+        return {
+            'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
+            'putative_ripples': AddRippleEventsNWB(site_dir=self.site_dir)
+        }
+
+    def output(self):
+        return NWBTarget(self.input()['site_nwb'].path, 'ripple_events')
+    
+    def run(self):
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
+            nwbfile = nwb_io.read()
+            # get operant and playback events
+            operant_events = nwb.intervals['operant_trials'].to_dataframe()
+            playback_events = nwb.intervals['playback_trials'].to_dataframe()
+            # get the putative ripples
+            rip_df = nwb.acquisition['putative_ripples'].to_dataframe()
+            # now to group ripples into events, we can filter out ripples with motion peaks greater than 1.5 stdev
+            rip_df = rip_df[rip_df['motion_peak'] < 1.5]
+            # lets mark all ripples that occur during playback or operant events
+            all_trials = np.concatenate([operant_events[['start_time', 'stop_time']].values, playback_events[['start_time', 'stop_time']].values])
+            def check_if_ripple_in_trial(st, end, all_trials):
+                return any([any([(st > trial[0]) & (st < trial[1]) for trial in all_trials]) | any([(end > trial[0]) & (end < trial[1]) for trial in all_trials])])
+            rip_df['in_trial'] = rip_df.apply(lambda x: check_if_ripple_in_trial(x['start_time'], x['stop_time'], all_trials), axis=1)
+
+            # agglomerate ripples into events
+            rip_df['event'] = -1
+            for ix, ripple in rip_df.iterrows():
+                event = rip_df.event.max() + 1
+                rip_df.loc[ix, 'event'] = event
+                # get all ripples that start before this one ends and end after this one starts
+                ripples = rip_df[(rip_df.start_time < ripple.stop_time) & (rip_df.stop_time > ripple.start_time)]
+                # assert that this ripple is in ripples
+                assert ix in ripples.index
+                # if all events are the same, continue
+                if ripples.event.nunique() == 1:
+                    # A single ripple event
+                    continue
+                event = min(ripples[ripples.event>-1].event.min(), event)
+                # assign all ripples from any event present above -1 to the new event
+                # get all rip_df events that have events that are shared with ripples
+                shared_events = rip_df[rip_df.event.isin(ripples[ripples.event>-1].event.unique())]
+                # assign all of these the same event number
+                rip_df.loc[ripples.index, 'event'] = event
+                rip_df.loc[shared_events.index, 'event'] = event
+            
+            # now make a ripple_events table for the agglomerated events
+            ripple_events = TimeIntervals(
+                name="ripple_events",
+                description="Agglomerated ripple events"
+            )
+            ripple_events.add_column(name="duration", description="Duration of the ripple event")
+            ripple_events.add_column(name="n_ripples", description="Number of ripples in the event")
+            ripple_events.add_column(name="in_trial", description="Whether the event occurs during a trial")
+            ripple_events.add_column(name="channels", description="Channels that the ripples occur on")
+            ripple_events.add_column(name="ripple_indices", description="Indices of the ripples that make up the event")
+            ripple_events.add_column(name="AOC", description="Area over the curve of the ripple event")
+            ripple_events.add_column(name="peak_value", description="Value of the peak of the ripple event")
+            ripple_events.add_column(name="event", description="Event number")
+            for event, event_df in rip_df.groupby('event'):
+                ripple_events.add_interval(
+                    start_time=event_df.start_time.min(),
+                    stop_time=event_df.stop_time.max(),
+                    duration=event_df.stop_time.max() - event_df.start_time.min(),
+                    n_ripples=event_df.shape[0],
+                    in_trial=event_df.in_trial.max(),
+                    channels=event_df.channel.unique(),
+                    ripple_indices=event_df.index,
+                    AOC=event_df.AOC.max(),
+                    peak_value=event_df.peak_value.max(),
+                    event=event
+                )
+
+            if 'ripples' not in nwbfile.processing:
+                nwbfile.create_processing_module(
+                    name="ripples", description="Processed ripple events"
+                )
+            nwbfile.processing['ripples'].add(ripple_events)
+            nwb_io.write(nwbfile)
+
+
+
+
+
+
+
 
 class AddKilosortUnits(luigi.Task):
     site_dir = SiteParameter()
