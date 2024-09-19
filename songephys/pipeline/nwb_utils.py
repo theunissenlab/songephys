@@ -153,6 +153,49 @@ class NWBAcquisitionTarget(luigi.Target):
         return dict({
             x: nwbfile.acquisition[x] for x in self.target_names
         })
+    
+    def delete(self):
+        io = NWBHDF5IO(self.path, 'r+')
+        nwbfile = io.read()
+        for x in self.target_names:
+            try:
+                nwbfile.acquisition.pop(x)
+            except KeyError:
+                pass
+        io.write(nwbfile)
+        io.close()
+class NWBProcessingTarget(luigi.Target):
+    def __init__(self, nwbfile, processing_module, *target_names):
+        self.path = nwbfile
+        self.processing_module = processing_module
+        self.target_names = target_names
+    
+    def exists(self):
+        if not os.path.exists(self.path):
+            return False
+        io = NWBHDF5IO(self.path, 'r')
+        nwbfile = io.read()
+        if self.processing_module not in nwbfile.processing:
+            return False
+        return all([x in nwbfile.processing[self.processing_module].data_interfaces for x in self.target_names])
+    
+    def data(self):
+        io = NWBHDF5IO(self.path, 'r')
+        nwbfile = io.read()
+        return dict({
+            x: nwbfile.processing[self.processing_module].data_interfaces[x] for x in self.target_names
+        })
+    
+    def delete(self):
+        io = NWBHDF5IO(self.path, 'r+')
+        nwbfile = io.read()
+        for x in self.target_names:
+            try:
+                nwbfile.processing[self.processing_module].data_interfaces.pop(x)
+            except KeyError:
+                pass
+        io.write(nwbfile)
+        io.close()
 
 class CreateSiteNWB(luigi.Task):
     site_dir = SiteParameter()
@@ -241,7 +284,7 @@ class AddDigitalEventsNWB(luigi.Task):
         }
 
     def output(self):
-        return NWBTarget(self.input()['site_nwb'].path, 'audcode_events', 'ttl_events', 'event_types')
+        return NWBAcquisitionTarget(self.input()['site_nwb'].path, 'audcode_events', 'ttl_events')
     
     def run(self):
         site_config = self.input()['site_config'].data()
@@ -417,7 +460,7 @@ class AddLFPNWB(luigi.Task):
         }
 
     def output(self):
-        return NWBTarget(self.input()['site_nwb'].path, 'LFP')
+        return NWBAcquisitionTarget(self.input()['site_nwb'].path, 'LFP')
     
     def run(self):
 
@@ -451,7 +494,7 @@ class AddMotionNWB(luigi.Task):
         }
 
     def output(self):
-        return NWBTarget(self.input()['site_nwb'].path, 'Motion Time Series')
+        return NWBProcessingTarget(self.input()['site_nwb'].path, 'behavior', 'Motion Time Series')
     
     def run(self):
 
@@ -474,7 +517,7 @@ class AddMotionNWB(luigi.Task):
             unit="zscore",
         )
 
-        behavioral_time_series = BehavioralTimeSeries(
+        behavioral_time_series = BehavioralTimeSeries( # TODO maybe just add the time_series
             time_series=motion_ts,
             name="Motion Time Series",
         )
@@ -496,7 +539,7 @@ class AddAudioNWB(luigi.Task):
         }
 
     def output(self):
-        return NWBTarget(self.input()['site_nwb'].path, 'audio')
+        return NWBAcquisitionTarget(self.input()['site_nwb'].path, 'audio')
     
     def run(self):
 
@@ -527,7 +570,7 @@ class AddRippleEventsNWB(luigi.Task):
         }
 
     def output(self):
-        return NWBTarget(self.input()['site_nwb'].path, 'putative_ripples')
+        return NWBProcessingTarget(self.input()['site_nwb'].path, 'ripples', 'putative_ripples')
     
     def run(self):
         with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
@@ -626,8 +669,11 @@ class AddRippleEventsNWB(luigi.Task):
                                 motion_avg=np.mean(motion_ts),
                                 timeseries=[lfp, motion]
                             )
-                    
-            nwb.add_acquisition(putative_ripples)
+            if 'ripples' not in nwb.processing:
+                nwb.create_processing_module(
+                    name="ripples", description="Processed ripple events"
+                )
+            nwb.processing['ripples'].add(putative_ripples)
             nwb_io.write(nwb)
 
 class AgglomerateRippleEventsNWB(luigi.Task):
@@ -640,16 +686,16 @@ class AgglomerateRippleEventsNWB(luigi.Task):
         }
 
     def output(self):
-        return NWBTarget(self.input()['site_nwb'].path, 'ripple_events')
+        return NWBProcessingTarget(self.input()['site_nwb'].path, 'ripples', 'ripple_events')
     
     def run(self):
         with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
             nwbfile = nwb_io.read()
             # get operant and playback events
-            operant_events = nwb.intervals['operant_trials'].to_dataframe()
-            playback_events = nwb.intervals['playback_trials'].to_dataframe()
+            operant_events = nwbfile.intervals['operant_trials'].to_dataframe()
+            playback_events = nwbfile.intervals['playback_trials'].to_dataframe()
             # get the putative ripples
-            rip_df = nwb.acquisition['putative_ripples'].to_dataframe()
+            rip_df = nwbfile.processing['ripples']['putative_ripples'].to_dataframe()
             # now to group ripples into events, we can filter out ripples with motion peaks greater than 1.5 stdev
             rip_df = rip_df[rip_df['motion_peak'] < 1.5]
             # lets mark all ripples that occur during playback or operant events
@@ -704,11 +750,6 @@ class AgglomerateRippleEventsNWB(luigi.Task):
                     AOC=event_df.AOC.max(),
                     peak_value=event_df.peak_value.max(),
                     event=event
-                )
-
-            if 'ripples' not in nwbfile.processing:
-                nwbfile.create_processing_module(
-                    name="ripples", description="Processed ripple events"
                 )
             nwbfile.processing['ripples'].add(ripple_events)
             nwb_io.write(nwbfile)
