@@ -145,7 +145,9 @@ class NWBAcquisitionTarget(luigi.Target):
             return False
         io = NWBHDF5IO(self.path, 'r')
         nwbfile = io.read()
-        return all([x in nwbfile.acquisition for x in self.target_names])
+        exists = all([x in nwbfile.acquisition for x in self.target_names])
+        io.close()
+        return exists
     
     def data(self):
         io = NWBHDF5IO(self.path, 'r')
@@ -176,8 +178,11 @@ class NWBProcessingTarget(luigi.Target):
         io = NWBHDF5IO(self.path, 'r')
         nwbfile = io.read()
         if self.processing_module not in nwbfile.processing:
+            io.close()
             return False
-        return all([x in nwbfile.processing[self.processing_module].data_interfaces for x in self.target_names])
+        exists = all([x in nwbfile.processing[self.processing_module].data_interfaces for x in self.target_names])
+        io.close()
+        return exists
     
     def data(self):
         io = NWBHDF5IO(self.path, 'r')
@@ -679,6 +684,7 @@ class AddRippleEventsNWB(luigi.Task):
 class AgglomerateRippleEventsNWB(luigi.Task):
     site_dir = SiteParameter()
     ripple_threshold = luigi.FloatParameter(default=2.5)
+    force = luigi.BoolParameter(default=False)
     def requires(self):
         return {
             'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
@@ -689,6 +695,8 @@ class AgglomerateRippleEventsNWB(luigi.Task):
         return NWBProcessingTarget(self.input()['site_nwb'].path, 'ripples', 'ripple_events')
     
     def run(self):
+        if self.force and self.output().exists():
+            self.output().delete()
         with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
             nwbfile = nwb_io.read()
             # get operant and playback events
@@ -709,8 +717,10 @@ class AgglomerateRippleEventsNWB(luigi.Task):
             for ix, ripple in rip_df.iterrows():
                 event = rip_df.event.max() + 1
                 rip_df.loc[ix, 'event'] = event
-                # get all ripples that start before this one ends and end after this one starts
-                ripples = rip_df[(rip_df.start_time < ripple.stop_time) & (rip_df.stop_time > ripple.start_time)]
+                ## get all ripples that start before this one ends and end after this one starts
+                #ripples = rip_df[(rip_df.start_time < ripple.stop_time) & (rip_df.stop_time > ripple.start_time)]
+                # more conservative: Get all ripples where the peak is within this ripple
+                ripples = rip_df[(rip_df.peak_time > ripple.start_time) & (rip_df.peak_time < ripple.stop_time)]
                 # assert that this ripple is in ripples
                 assert ix in ripples.index
                 # if all events are the same, continue
@@ -734,7 +744,7 @@ class AgglomerateRippleEventsNWB(luigi.Task):
             ripple_events.add_column(name="n_ripples", description="Number of ripples in the event")
             ripple_events.add_column(name="in_trial", description="Whether the event occurs during a trial")
             ripple_events.add_column(name="channels", description="Channels that the ripples occur on")
-            ripple_events.add_column(name="ripple_indices", description="Indices of the ripples that make up the event")
+            ripple_events.add_column(name="ripple_indices", description="Indices of the ripples that make up the event", table=nwbfile.processing['ripples']['putative_ripples'])
             ripple_events.add_column(name="AOC", description="Area over the curve of the ripple event")
             ripple_events.add_column(name="peak_value", description="Value of the peak of the ripple event")
             ripple_events.add_column(name="event", description="Event number")
@@ -746,9 +756,9 @@ class AgglomerateRippleEventsNWB(luigi.Task):
                     n_ripples=event_df.shape[0],
                     in_trial=event_df.in_trial.max(),
                     channels=event_df.channel.unique(),
-                    ripple_indices=event_df.index,
+                    ripple_indices=event_df.index.to_list(),
                     AOC=event_df.AOC.max(),
-                    peak_value=event_df.peak_value.max(),
+                    peak_value=event_df.peak_value.mean(),
                     event=event
                 )
             nwbfile.processing['ripples'].add(ripple_events)
