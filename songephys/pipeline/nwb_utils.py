@@ -704,8 +704,6 @@ class AgglomerateRippleEventsNWB(luigi.Task):
             playback_events = nwbfile.intervals['playback_trials'].to_dataframe()
             # get the putative ripples
             rip_df = nwbfile.processing['ripples']['putative_ripples'].to_dataframe()
-            # now to group ripples into events, we can filter out ripples with motion peaks greater than 1.5 stdev
-            rip_df = rip_df[rip_df['motion_peak'] < 1.5]
             # lets mark all ripples that occur during playback or operant events
             all_trials = np.concatenate([operant_events[['start_time', 'stop_time']].values, playback_events[['start_time', 'stop_time']].values])
             def check_if_ripple_in_trial(st, end, all_trials):
@@ -713,8 +711,9 @@ class AgglomerateRippleEventsNWB(luigi.Task):
             rip_df['in_trial'] = rip_df.apply(lambda x: check_if_ripple_in_trial(x['start_time'], x['stop_time'], all_trials), axis=1)
 
             # agglomerate ripples into events
+            # now to group ripples into events, we can filter out ripples with motion peaks greater than 1.5 stdev
             rip_df['event'] = -1
-            for ix, ripple in rip_df.iterrows():
+            for ix, ripple in rip_df[rip_df['motion_peak'] < 10].iterrows():
                 event = rip_df.event.max() + 1
                 rip_df.loc[ix, 'event'] = event
                 ## get all ripples that start before this one ends and end after this one starts
@@ -744,11 +743,13 @@ class AgglomerateRippleEventsNWB(luigi.Task):
             ripple_events.add_column(name="n_ripples", description="Number of ripples in the event")
             ripple_events.add_column(name="in_trial", description="Whether the event occurs during a trial")
             ripple_events.add_column(name="channels", description="Channels that the ripples occur on")
-            ripple_events.add_column(name="ripple_indices", description="Indices of the ripples that make up the event", table=nwbfile.processing['ripples']['putative_ripples'])
             ripple_events.add_column(name="AOC", description="Area over the curve of the ripple event")
             ripple_events.add_column(name="peak_value", description="Value of the peak of the ripple event")
+            ripple_events.add_column(name='peak_time', description='Time of the peak of the ripple event')
             ripple_events.add_column(name="event", description="Event number")
             for event, event_df in rip_df.groupby('event'):
+                if event == -1:
+                    continue
                 ripple_events.add_interval(
                     start_time=event_df.start_time.min(),
                     stop_time=event_df.stop_time.max(),
@@ -756,12 +757,19 @@ class AgglomerateRippleEventsNWB(luigi.Task):
                     n_ripples=event_df.shape[0],
                     in_trial=event_df.in_trial.max(),
                     channels=event_df.channel.unique(),
-                    ripple_indices=event_df.index.to_list(),
                     AOC=event_df.AOC.max(),
-                    peak_value=event_df.peak_value.mean(),
+                    peak_value=event_df.peak_value.max(),
+                    peak_time=event_df.peak_time.mean(),#TODO could do this too event_df.peak_time[event_df.peak_value.idxmax()],
                     event=event
                 )
             nwbfile.processing['ripples'].add(ripple_events)
+
+            # add the event column to the putative ripples
+            if 'event' not in nwbfile.processing['ripples']['putative_ripples']:
+                nwbfile.processing['ripples']['putative_ripples'].add_column(name="event", description="Event number of the ripple in the ripple_events table", data = rip_df.event.values)
+            else:
+                nwbfile.processing['ripples']['putative_ripples']['event'] = rip_df.event.values
+            
             nwb_io.write(nwbfile)
 
 
