@@ -166,6 +166,37 @@ class NWBAcquisitionTarget(luigi.Target):
                 pass
         io.write(nwbfile)
         io.close()
+
+class NWBIntervalsTarget(luigi.Target):
+    def __init__(self, nwbfile, *target_names):
+        self.path = nwbfile
+        self.target_names = target_names
+    def exists(self):
+        if not os.path.exists(self.path):
+            return False
+        io = NWBHDF5IO(self.path, 'r')
+        nwbfile = io.read()
+        exists = all([x in nwbfile.intervals for x in self.target_names])
+        io.close()
+        return exists
+    
+    def data(self):
+        io = NWBHDF5IO(self.path, 'r')
+        nwbfile = io.read()
+        return dict({
+            x: nwbfile.intervals[x] for x in self.target_names
+        })
+    
+    def delete(self):
+        io = NWBHDF5IO(self.path, 'r+')
+        nwbfile = io.read()
+        for x in self.target_names:
+            try:
+                nwbfile.intervals.pop(x)
+            except KeyError:
+                pass
+        io.write(nwbfile)
+        io.close()
 class NWBProcessingTarget(luigi.Target):
     def __init__(self, nwbfile, processing_module, *target_names):
         self.path = nwbfile
@@ -692,7 +723,7 @@ class AgglomerateRippleEventsNWB(luigi.Task):
         }
 
     def output(self):
-        return NWBProcessingTarget(self.input()['site_nwb'].path, 'ripples', 'ripple_events')
+        return NWBIntervalsTarget(self.input()['site_nwb'].path, 'ripple_events')
     
     def run(self):
         if self.force and self.output().exists():
@@ -762,13 +793,16 @@ class AgglomerateRippleEventsNWB(luigi.Task):
                     peak_time=event_df.peak_time.mean(),#TODO could do this too event_df.peak_time[event_df.peak_value.idxmax()],
                     event=event
                 )
-            nwbfile.processing['ripples'].add(ripple_events)
+            nwbfile.add_time_intervals(ripple_events)
 
             # add the event column to the putative ripples
-            if 'event' not in nwbfile.processing['ripples']['putative_ripples']:
-                nwbfile.processing['ripples']['putative_ripples'].add_column(name="event", description="Event number of the ripple in the ripple_events table", data = rip_df.event.values)
-            else:
-                nwbfile.processing['ripples']['putative_ripples']['event'] = rip_df.event.values
+            nwbfile.processing.pop('ripples')#].data_interfaces.pop('putative_ripples')
+            nwbfile.add_time_intervals(TimeIntervals.from_dataframe(rip_df, name='individual_ripples', table_description='Individual ripples detected from LFP data'))
+
+            # if 'event' not in nwbfile.processing['ripples']['putative_ripples']:
+            #     nwbfile.processing['ripples']['putative_ripples'].add_column(name="event", description="Event number of the ripple in the ripple_events table", data = rip_df.event.values)
+            # else:
+            #     nwbfile.processing['ripples']['putative_ripples']['event'].data[:] = rip_df.event.values
             
             nwb_io.write(nwbfile)
 
@@ -846,7 +880,7 @@ class AddPyoperantTrials(luigi.Task):
             'digital_events': AddDigitalEventsNWB(site_dir=self.site_dir)
         }
     def output(self):
-        return NWBTarget(self.input()['site_nwb'].path, 'operant_trials')
+        return NWBIntervalsTarget(self.input()['site_nwb'].path, 'operant_trials', 'playback_trials', 'pyoperant_experiments')
     def run(self):
         with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
             nwbfile = nwb_io.read()
