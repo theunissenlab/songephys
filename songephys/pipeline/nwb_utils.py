@@ -12,6 +12,7 @@ from dateutil.tz import tzlocal
 from scipy.stats import zscore
 import scipy.signal as signal
 import scipy.ndimage as ndimage
+import scipy.stats as stats
 
 from pynwb import NWBHDF5IO, NWBFile
 from pynwb.file import LabMetaData
@@ -723,104 +724,147 @@ class AgglomerateRippleEventsNWB(luigi.Task):
         }
 
     def output(self):
-        return NWBIntervalsTarget(self.input()['site_nwb'].path, 'ripple_events')
+        return NWBProcessingTarget(self.input()['site_nwb'].path,'ripples', 'ripple_events')
     
     def run(self):
         if self.force and self.output().exists():
             self.output().delete()
-        with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r') as nwb_io:
             nwbfile = nwb_io.read()
+            
             # get operant and playback events
             operant_events = nwbfile.intervals['operant_trials'].to_dataframe()
             playback_events = nwbfile.intervals['playback_trials'].to_dataframe()
             # get the putative ripples
             rip_df = nwbfile.processing['ripples']['putative_ripples'].to_dataframe()
-            # lets mark all ripples that occur during playback or operant events
-            all_trials = np.concatenate([operant_events[['start_time', 'stop_time']].values, playback_events[['start_time', 'stop_time']].values])
-            def check_if_ripple_in_trial(st, end, all_trials):
-                return any([any([(st > trial[0]) & (st < trial[1]) for trial in all_trials]) | any([(end > trial[0]) & (end < trial[1]) for trial in all_trials])])
-            rip_df['in_trial'] = rip_df.apply(lambda x: check_if_ripple_in_trial(x['start_time'], x['stop_time'], all_trials), axis=1)
+            nwb_io.close()
 
-            # agglomerate ripples into events
-            # now to group ripples into events, we can filter out ripples with motion peaks greater than 1.5 stdev
-            rip_df['event'] = -1
-            for ix, ripple in rip_df[rip_df['motion_peak'] < 10].iterrows():
-                event = rip_df.event.max() + 1
-                rip_df.loc[ix, 'event'] = event
-                ## get all ripples that start before this one ends and end after this one starts
-                #ripples = rip_df[(rip_df.start_time < ripple.stop_time) & (rip_df.stop_time > ripple.start_time)]
-                # more conservative: Get all ripples where the peak is within this ripple
-                ripples = rip_df[(rip_df.peak_time > ripple.start_time) & (rip_df.peak_time < ripple.stop_time)]
-                # assert that this ripple is in ripples
-                assert ix in ripples.index
-                # if all events are the same, continue
-                if ripples.event.nunique() == 1:
-                    # A single ripple event
-                    continue
-                event = min(ripples[ripples.event>-1].event.min(), event)
-                # assign all ripples from any event present above -1 to the new event
-                # get all rip_df events that have events that are shared with ripples
-                shared_events = rip_df[rip_df.event.isin(ripples[ripples.event>-1].event.unique())]
-                # assign all of these the same event number
-                rip_df.loc[ripples.index, 'event'] = event
-                rip_df.loc[shared_events.index, 'event'] = event
-            
-            # now make a ripple_events table for the agglomerated events
-            ripple_events = TimeIntervals(
-                name="ripple_events",
-                description="Agglomerated ripple events"
+        # lets mark all ripples that occur during playback or operant events
+        all_trials = np.concatenate([operant_events[['start_time', 'stop_time']].values, playback_events[['start_time', 'stop_time']].values])
+        def check_if_ripple_in_trial(st, end, all_trials):
+            return any([any([(st > trial[0]) & (st < trial[1]) for trial in all_trials]) | any([(end > trial[0]) & (end < trial[1]) for trial in all_trials])])
+        rip_df['in_trial'] = rip_df.apply(lambda x: check_if_ripple_in_trial(x['start_time'], x['stop_time'], all_trials), axis=1)
+
+        # agglomerate ripples into events
+        # now to group ripples into events, we can filter out ripples with motion peaks greater than 1.5 stdev
+        rip_df['event'] = -1
+        for ix, ripple in rip_df[rip_df['motion_peak'] < 10].iterrows():
+            event = rip_df.event.max() + 1
+            rip_df.loc[ix, 'event'] = event
+            ## get all ripples that start before this one ends and end after this one starts
+            #ripples = rip_df[(rip_df.start_time < ripple.stop_time) & (rip_df.stop_time > ripple.start_time)]
+            # more conservative: Get all ripples where the peak is within this ripple
+            ripples = rip_df[(rip_df.peak_time > ripple.start_time) & (rip_df.peak_time < ripple.stop_time)]
+            # assert that this ripple is in ripples
+            assert ix in ripples.index
+            # if all events are the same, continue
+            if ripples.event.nunique() == 1:
+                # A single ripple event
+                continue
+            event = min(ripples[ripples.event>-1].event.min(), event)
+            # assign all ripples from any event present above -1 to the new event
+            # get all rip_df events that have events that are shared with ripples
+            shared_events = rip_df[rip_df.event.isin(ripples[ripples.event>-1].event.unique())]
+            # assign all of these the same event number
+            rip_df.loc[ripples.index, 'event'] = event
+            rip_df.loc[shared_events.index, 'event'] = event
+        
+        # now make a ripple_events table for the agglomerated events
+        ripple_events = TimeIntervals(
+            name="ripple_events",
+            description="Agglomerated ripple events"
+        )
+        ripple_events.add_column(name="duration", description="Duration of the ripple event")
+        ripple_events.add_column(name="n_ripples", description="Number of ripples in the event")
+        ripple_events.add_column(name="in_trial", description="Whether the event occurs during a trial")
+        ripple_events.add_column(name="peak_channel", description="Channel that the peak ripple occurs on")
+        ripple_events.add_column(name="AOC", description="Area over the curve of the ripple event")
+        ripple_events.add_column(name="peak_value", description="Value of the peak of the ripple event")
+        ripple_events.add_column(name='peak_time', description='Time of the peak of the ripple event')
+        ripple_events.add_column(name="event", description="Event number")
+        for event, event_df in rip_df.groupby('event'):
+            if event == -1:
+                continue
+            ripple_events.add_interval(
+                start_time=event_df.start_time.min(),
+                stop_time=event_df.stop_time.max(),
+                duration=event_df.stop_time.max() - event_df.start_time.min(),
+                n_ripples=event_df.shape[0],
+                in_trial=event_df.in_trial.max(),
+                AOC=event_df.AOC.max(),
+                peak_value=event_df.peak_value.max(),
+                peak_channel=event_df.channel[event_df.peak_value.idxmax()],
+                peak_time= event_df.peak_time[event_df.peak_value.idxmax()],
+                event=event
             )
-            ripple_events.add_column(name="duration", description="Duration of the ripple event")
-            ripple_events.add_column(name="n_ripples", description="Number of ripples in the event")
-            ripple_events.add_column(name="in_trial", description="Whether the event occurs during a trial")
-            ripple_events.add_column(name="channels", description="Channels that the ripples occur on")
-            ripple_events.add_column(name="AOC", description="Area over the curve of the ripple event")
-            ripple_events.add_column(name="peak_value", description="Value of the peak of the ripple event")
-            ripple_events.add_column(name='peak_time', description='Time of the peak of the ripple event')
-            ripple_events.add_column(name="event", description="Event number")
-            for event, event_df in rip_df.groupby('event'):
-                if event == -1:
-                    continue
-                ripple_events.add_interval(
-                    start_time=event_df.start_time.min(),
-                    stop_time=event_df.stop_time.max(),
-                    duration=event_df.stop_time.max() - event_df.start_time.min(),
-                    n_ripples=event_df.shape[0],
-                    in_trial=event_df.in_trial.max(),
-                    channels=event_df.channel.unique(),
-                    AOC=event_df.AOC.max(),
-                    peak_value=event_df.peak_value.max(),
-                    peak_time=event_df.peak_time.mean(),#TODO could do this too event_df.peak_time[event_df.peak_value.idxmax()],
-                    event=event
-                )
-            nwbfile.add_time_intervals(ripple_events)
 
-            # add the event column to the putative ripples
-            nwbfile.processing.pop('ripples')#].data_interfaces.pop('putative_ripples')
-            nwbfile.add_time_intervals(TimeIntervals.from_dataframe(rip_df, name='individual_ripples', table_description='Individual ripples detected from LFP data'))
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
+            nwbfile = nwb_io.read()
+            # add the tables to the nwbfile
+            nwbfile.processing['ripples'].add(ripple_events)
 
-            # if 'event' not in nwbfile.processing['ripples']['putative_ripples']:
-            #     nwbfile.processing['ripples']['putative_ripples'].add_column(name="event", description="Event number of the ripple in the ripple_events table", data = rip_df.event.values)
-            # else:
-            #     nwbfile.processing['ripples']['putative_ripples']['event'].data[:] = rip_df.event.values
+            # # add the event column to the putative ripples
+            if 'event' not in nwbfile.processing['ripples']['putative_ripples']:
+                nwbfile.processing['ripples']['putative_ripples'].add_column(name="event", description="Event number of the ripple in the ripple_events table", data = rip_df.event.values)
+            else:
+                nwbfile.processing['ripples']['putative_ripples']['event'].data[:] = rip_df.event.values
             
             nwb_io.write(nwbfile)
+            nwb_io.close()
 
 
 
 
 
 
-
+class ResetUnits(luigi.Task):
+    site_dir = SiteParameter()
+    def requires(self):
+        return {
+            'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
+        }
+    def complete(self):
+        # check if the nwbfile has a units
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r') as nwb_io:
+            nwbfile = nwb_io.read()
+            if nwbfile.units is None:
+                nwb_io.close()
+                return True
+            else:
+                nwb_io.close()
+                return False
+    def output(self):
+        return luigi.LocalTarget("dummy")
+    def run(self):
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r') as nwb_io:
+            nwbfile = nwb_io.read()
+            print("Deleting units")
+            nwbfile.units.reset_parent()
+            nwbfile.fields['units'] = None
+            print("Writing to file")
+            # export to new file
+            export_fn = self.input()['site_nwb'].path.replace('.nwb','_temp.nwb')
+            with NWBHDF5IO(export_fn, 'w') as export_io:
+                export_io.export(src_io=nwb_io, nwbfile=nwbfile)
+                export_io.close()
+            nwb_io.close()
+        os.rename(export_fn, self.input()['site_nwb'].path)
 
 class AddKilosortUnits(luigi.Task):
     site_dir = SiteParameter()
     kilosort_dir = luigi.Parameter(default='ks4_final')
     overwrite = luigi.BoolParameter(default=False)
+    clear_old_units = luigi.BoolParameter(default=False)
     def requires(self):
-        return {
-            'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
-        }
+        if self.clear_old_units:
+            return {
+                'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
+                'reset': ResetUnits(site_dir=self.site_dir),
+            }
+        else:
+            return {
+                'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
+            }
     def output(self):
         # Force this to always run if requested
         return luigi.LocalTarget("dummy") 
@@ -870,6 +914,98 @@ class AddKilosortUnits(luigi.Task):
                             nwbfile.units['group'][ix] = cluster['group']
             nwb_io.write(nwbfile)
 
+class AddUnitValidIntervals(luigi.Task):
+    site_dir = SiteParameter()
+    def requires(self):
+        return {
+            'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
+        }
+    def output(self):
+        return NWBIntervalsTarget(self.input()['site_nwb'].path, 'unit_intervals')
+    def run(self):
+        # load the nwb file
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
+            # go through the units
+            nwb = nwb_io.read()
+            all_units = nwb.units.to_dataframe()
+
+            # create the intervals table
+            unit_intervals = TimeIntervals(
+                name="unit_intervals",
+                description="Valid intervals for each unit"
+            )
+            unit_intervals.add_column(name='unit_id', description='The id of the unit in the nwb file that this interval corresponds to')
+
+
+            for uid, unit in all_units.iterrows():
+                # lets make a psth for this unit
+                spike_times = nwb.units['spike_times'][uid]
+
+                # Get total recording time for this nwb file rounded to the nearest second
+                tot_time = int(nwb.acquisition['LFP'].data.shape[0] / nwb.acquisition['LFP'].rate)
+
+                # bin the spikes by 5
+                t_bin = 3
+                bins = np.arange(0, tot_time, t_bin)
+                spike_counts, _ = np.histogram(spike_times, bins=bins)
+                # smoothed = ndimage.gaussian_filter1d(spike_counts, 2)
+
+                # take a sliding window of 30 seconds and determine if the rate is significantly nonzero using a t test
+                window = 30 // t_bin
+                step = 15 // t_bin
+                active = []
+                pvals = []
+                active_rates = []
+                active_bins = [0]
+                for i in range(0, len(spike_counts) - window, step):
+                    t, p = stats.ttest_1samp(spike_counts[i:i+window], 0)
+                    active_rates.append(np.mean(spike_counts[i:i+window]))
+                    active_bins.append(i*t_bin)
+                    active.append(p < 0.2)
+                    pvals.append(p)
+                # plot the active periods
+                active = np.array(active, dtype=int)
+                active_rates = np.log10(np.array(active_rates))
+                active_mean = np.mean(active_rates[active == 1])
+                active_std = np.std(active_rates[active == 1])
+                # reject active bins that are less than 1 std 
+                active = active * (active_rates > active_mean - active_std)
+
+                # calculate contiguous active periods
+                if np.all(active == 1):
+                    active_periods = [(active_bins[0], active_bins[len(active)])]
+                else:
+                    active_periods = []
+                    start = 0
+                    for i in range(1, len(active)):
+                        if active[i] == 1 and active[i-1] == 0:
+                            start = i
+                        if active[i] == 0 and active[i-1] == 1:
+                            active_periods.append((active_bins[start], active_bins[i+1]))
+                    if active[-1] == 1:
+                        active_periods.append((active_bins[start], active_bins[-1]))
+                if len(active_periods) == 0:
+                    print("Unit %d has no active periods"%unit.kilosort_id)
+                    return []
+                # go through the active periods, and if the inactive period between two active periods is less than 5minutes, then merge them
+                agglomerated_active_periods = [active_periods[0]]
+                for i in range(1, len(active_periods)):
+                    # check if the inactive period is less than 3 minutes
+                    if active_periods[i][0] - agglomerated_active_periods[-1][1] < 180:
+                        agglomerated_active_periods[-1] = (agglomerated_active_periods[-1][0], active_periods[i][1])
+                    else:
+                        agglomerated_active_periods.append(active_periods[i])
+                # now remove any active periods that are less than 5 minutes
+                agglomerated_active_periods = [x for x in agglomerated_active_periods if x[1] - x[0] > 300]
+                for start, stop in agglomerated_active_periods:
+                    unit_intervals.add_interval(
+                        start_time=float(start),
+                        stop_time=float(stop),
+                        unit_id=uid
+                    )
+            # add the table to the nwbfile
+            nwb.add_time_intervals(unit_intervals)
+            nwb_io.write(nwb)
 class AddPyoperantTrials(luigi.Task):
     site_dir = SiteParameter()
     def requires(self):
