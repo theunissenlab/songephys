@@ -210,7 +210,11 @@ def create_config(experiment_name):
 
 @click.command("create-site")
 @click.argument("site_dir", type=click.Path())
-def create_site(site_dir):
+@click.option('--auto', is_flag=True)
+# add ml and ap position as options
+@click.option('--ml', type=float, default=0)
+@click.option('--depth', type=float,default=0)
+def create_site(site_dir, auto, ml, depth):
     from songephys.format.download import downloaders
     from songephys.format.io import load_yaml, save_yaml
     import numpy as np
@@ -223,6 +227,7 @@ def create_site(site_dir):
         print("Project config not found at %s"%project_config_path)
         print("Please run `song create-config EXPERIMENT_NAME` for this Experiment")
         return
+    project_config = load_yaml(project_config_path)
 
 
     config_path = os.path.join(site_dir, "site_config.yaml")
@@ -242,6 +247,9 @@ def create_site(site_dir):
     filelistpath = os.path.join(site_dir,'filelist.txt')
     click.echo(filelistpath)
     if not os.path.exists(filelistpath):
+        if auto:
+            click.echo("Auto mode, no filelist found, exiting")
+            raise ValueError("Auto mode requires a filelist")
         click.echo("Type or paste all .rhd and .csv files for the site separated by line breaks\n"
         "To end recording Press Ctrl+d on Linux/Mac on Crtl+z on Windows")
 
@@ -261,8 +269,11 @@ def create_site(site_dir):
     click.echo("Have filelist {}".format(filelist))
 
     default_experiment_name = os.path.basename(site_dir).split("_")[0]
-    experiment_name = input("Experiment Name [default='{}']: ".format(default_experiment_name))
-    experiment_name = experiment_name.strip() or default_experiment_name
+    if auto:
+        experiment_name = default_experiment_name
+    else:
+        experiment_name = input("Experiment Name [default='{}']: ".format(default_experiment_name))
+        experiment_name = experiment_name.strip() or default_experiment_name
 
     config_data = {
         "download_type": download_type,
@@ -276,6 +287,9 @@ def create_site(site_dir):
     xml_check = [fn.endswith('settings.xml') for fn in filelist]
     if any(xml_check):
         xml_file = filelist[np.where(xml_check)[0][0]]
+        # check if its an absolute path
+        if not os.path.isabs(xml_file):
+            xml_file = os.path.join(project_config['LOCAL_RAW_FILES']['rhd_drive'],xml_file)
         print("Loading electrode config from %s" % xml_file)
         electrode_config = parse_settings_file(xml_file)
         # TODO we should make sure these labels are pulled from the intan header file
@@ -299,6 +313,9 @@ def create_site(site_dir):
         config_data['digital_channel_names'] = electrode_config['Digital']
         config_data['analog_channel_names'] = electrode_config['Analog']
     else:
+        if auto:
+            click.echo("Auto mode, no settings file found, exiting")
+            raise ValueError("Auto mode requires a settings file")
         options = list(enumerate(_configs))
 
         click.echo("Next, choose from a preset electrode configuration of ones we've used before.")
@@ -315,7 +332,7 @@ def create_site(site_dir):
                 elec_config = None
 
             if elec_config not in valid_elec_configs:
-                click.echo("Electrode condig {} invalid. Choose from {}".format(elec_config, valid_elec_configs))
+                click.echo("Electrode config {} invalid. Choose from {}".format(elec_config, valid_elec_configs))
                 elec_config = None
 
         chosen_config_option = _configs[elec_config]
@@ -354,13 +371,32 @@ def create_site(site_dir):
 
     config_data["playback_mic_channels"] = playback_channels
 
-    response = input("What is the depth of this recording? (in mm)")
-    response = response.strip()
-    config_data['depth_mm'] = float(response)
+    if auto:
+        if depth == 0:
+            click.echo("Auto mode, you must set depth using --depth")
+            raise ValueError("Auto mode requires a depth")
+        
+        config_data['depth_mm'] = depth
+        click.echo("AP: %.2f mm ap from project_config"%project_config['EPHYS']['AP'])
+        config_data['ap_mm'] = project_config['EPHYS']['AP']
+        click.echo("ML: %.2f mm from project_config"%project_config['EPHYS']['ML'])
+        config_data['ml_mm'] = project_config['EPHYS']['ML']
+    else:
+        response = input("What is the depth of this recording? (in mm) default %.2f"%depth)
+        response = response.strip()
+        if response == "":
+            config_data['depth_mm'] = depth
+        else:
+            config_data['depth_mm'] = float(response)
 
-    response = input("What is the medial-lateral position of this recording? (in mm)")
-    response = response.strip()
-    config_data['ml_mm'] = float(response)
+        response = input("What is the medial-lateral position of this recording? (in mm)")
+        response = response.strip()
+        config_data['ml_mm'] = float(response)
+
+        response = input("What is the anterior-posterior position of this recording? (in mm)")
+        response = response.strip()
+        config_data['ap_mm'] = float(response) 
+
 
     click.echo("Okay. Saving {}".format(config_path))
 
