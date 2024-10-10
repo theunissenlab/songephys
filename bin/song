@@ -357,21 +357,24 @@ def create_site(site_dir, auto, ml, depth):
                 click.echo("{}: {} {}".format(ch, k, v))
                 ch += 1
 
-    valid = False
-    while valid is False:
-        response = input("Mic channels with playback (separated by commas, default all): ")
-        response = response.strip()
+    if auto:
+        playback_channels = [0]
+    else:
+        valid = False
+        while valid is False:
+            response = input("Mic channels with playback (separated by commas, default all): ")
+            response = response.strip()
 
-        if response == "":
-            playback_channels = None
-            valid = True
-        else:
-            try:
-                playback_channels = [int(x) for x in response.strip().split(",")]
-            except:
-                click.echo("Invalid input")
-            else:
+            if response == "":
+                playback_channels = None
                 valid = True
+            else:
+                try:
+                    playback_channels = [int(x) for x in response.strip().split(",")]
+                except:
+                    click.echo("Invalid input")
+                else:
+                    valid = True
 
     config_data["playback_mic_channels"] = playback_channels
 
