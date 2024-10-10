@@ -237,12 +237,16 @@ def create_site(site_dir, auto, ml, depth):
             return
 
     valid_downloaders = list(downloaders.keys())
-    download_type = None
-    while not download_type:
-        download_type = input("Download Type [choose from: {}]: ".format(valid_downloaders))
-        if download_type not in valid_downloaders:
-            click.echo("Download type {} invalid. Choose from {}".format(download_type, valid_downloaders))
-            download_type = None
+    if auto:
+        click.echo("Auto mode, using local downloader")
+        download_type = 'local'
+    else:
+        download_type = None
+        while not download_type:
+            download_type = input("Download Type [choose from: {}]: ".format(valid_downloaders))
+            if download_type not in valid_downloaders:
+                click.echo("Download type {} invalid. Choose from {}".format(download_type, valid_downloaders))
+                download_type = None
 
     filelistpath = os.path.join(site_dir,'filelist.txt')
     click.echo(filelistpath)
