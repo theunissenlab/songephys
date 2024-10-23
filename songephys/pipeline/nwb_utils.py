@@ -198,6 +198,37 @@ class NWBIntervalsTarget(luigi.Target):
                 pass
         io.write(nwbfile)
         io.close()
+
+class NWBStimulusTarget(luigi.Target):
+    def __init__(self, nwbfile, *target_names):
+        self.path = nwbfile
+        self.target_names = target_names
+    def exists(self):
+        if not os.path.exists(self.path):
+            return False
+        io = NWBHDF5IO(self.path, 'r')
+        nwbfile = io.read()
+        exists = all([x in nwbfile.stimulus for x in self.target_names])
+        io.close()
+        return exists
+    
+    def data(self):
+        io = NWBHDF5IO(self.path, 'r')
+        nwbfile = io.read()
+        return dict({
+            x: nwbfile.stimulus[x] for x in self.target_names
+        })
+    
+    def delete(self):
+        io = NWBHDF5IO(self.path, 'r+')
+        nwbfile = io.read()
+        for x in self.target_names:
+            try:
+                nwbfile.stimulus.pop(x)
+            except KeyError:
+                pass
+        io.write(nwbfile)
+        io.close()
 class NWBProcessingTarget(luigi.Target):
     def __init__(self, nwbfile, processing_module, *target_names):
         self.path = nwbfile
@@ -885,33 +916,41 @@ class AddKilosortUnits(luigi.Task):
             ks_output_dir =  os.path.join(self.site_dir, self.kilosort_dir)
             if not os.path.exists(ks_output_dir):
                 raise ValueError("Kilosort directory not found")
+
+            if os.path.exists(os.path.join(ks_output_dir,'shank_0')):
+                import glob
+                shanks = glob.glob(os.path.join(ks_output_dir,'shank_*'))
+                ks_output_dirs = shanks
+            else:
+                ks_output_dirs = [ks_output_dir]
             # load samplerate from params.py
-            sys.path.append(ks_output_dir)
+            sys.path.append(ks_output_dirs[0])
             from params import sample_rate
-            ks_spike_times = np.load(os.path.join(ks_output_dir, 'spike_times.npy'))/sample_rate
-            ks_spike_cluster = np.load(os.path.join(ks_output_dir, 'spike_clusters.npy'))
-            ks_cluster_info = pd.read_csv(os.path.join(ks_output_dir, 'cluster_info.tsv'),delimiter='\t')
-            
-            for i, cluster in ks_cluster_info.iterrows():
-                if cluster['group'] != 'noise':
-                    if (cluster['cluster_id'], ks_output_dir) not in zip(nwbfile.units['kilosort_id'], nwbfile.units['kilosort_dir']):
-                        print("Adding unit %d from %s"%(cluster['cluster_id'], ks_output_dir))
-                        nwbfile.add_unit(
-                            spike_times=ks_spike_times[ks_spike_cluster == cluster['cluster_id']],
-                            electrodes=[cluster.ch], # for now lets just put the main electrode
-                            kilosort_id=cluster['cluster_id'],
-                            group=cluster['group'],
-                            contampct=cluster['ContamPct'],
-                            kilosort_dir=ks_output_dir
-                        )
-                    else:
-                        print("Unit %d from %s already exists"%(cluster['cluster_id'], ks_output_dir))
-                        if self.overwrite:
-                            print("Overwriting")
-                            ix = (nwbfile.units['kilosort_id'] == cluster['cluster_id']) & (nwbfile.units['kilosort_dir'] == ks_output_dir)
-                            nwbfile.units['spike_times'][ix] = ks_spike_times[ks_spike_cluster == cluster['cluster_id']]
-                            nwbfile.units['contampct'][ix] = cluster['ContamPct']
-                            nwbfile.units['group'][ix] = cluster['group']
+            for ksod in ks_output_dirs:
+                ks_spike_times = np.load(os.path.join(ksod, 'spike_times.npy'))/sample_rate
+                ks_spike_cluster = np.load(os.path.join(ksod, 'spike_clusters.npy'))
+                ks_cluster_info = pd.read_csv(os.path.join(ksod, 'cluster_info.tsv'),delimiter='\t')
+                
+                for i, cluster in ks_cluster_info.iterrows():
+                    if cluster['group'] != 'noise':
+                        if (cluster['cluster_id'], ksod) not in zip(nwbfile.units['kilosort_id'], nwbfile.units['kilosort_dir']):
+                            print("Adding unit %d from %s"%(cluster['cluster_id'], ksod))
+                            nwbfile.add_unit(
+                                spike_times=ks_spike_times[ks_spike_cluster == cluster['cluster_id']],
+                                electrodes=[cluster.ch], # for now lets just put the main electrode
+                                kilosort_id=cluster['cluster_id'],
+                                group=cluster['group'],
+                                contampct=cluster['ContamPct'],
+                                kilosort_dir=ksod
+                            )
+                        else:
+                            print("Unit %d from %s already exists"%(cluster['cluster_id'], ksod))
+                            if self.overwrite:
+                                print("Overwriting")
+                                ix = (nwbfile.units['kilosort_id'] == cluster['cluster_id']) & (nwbfile.units['kilosort_dir'] == ksod)
+                                nwbfile.units['spike_times'][ix] = ks_spike_times[ks_spike_cluster == cluster['cluster_id']]
+                                nwbfile.units['contampct'][ix] = cluster['ContamPct']
+                                nwbfile.units['group'][ix] = cluster['group']
             nwb_io.write(nwbfile)
 
 class AddUnitValidIntervals(luigi.Task):
@@ -1124,6 +1163,15 @@ class AddPyoperantTrials(luigi.Task):
             nwbfile.add_time_intervals(op_trial_intervals)
             nwbfile.add_time_intervals(pb_trial_intervals)
             nwb_io.write(nwbfile)
+
+class AddStimuliNWB(luigi.Task):
+    def requires(self):
+        return {
+            'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
+            'pyoperant_trials': AddPyoperantTrials(site_dir=self.site_dir)
+        }
+    def output(self):
+        return NWBStimulusTarget(self.input()['site_nwb'].path)
 
 class GenerateAcquisitionNWB(luigi.WrapperTask):
     site_dir = SiteParameter()

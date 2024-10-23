@@ -422,12 +422,26 @@ def download_site(site_dir):
 
 @click.command("gen-singlesite-files")
 @click.argument("site_dir", type=click.Path(exists=True))
-def download_site(site_dir):
+def gensinglesitefiles(site_dir):
     import luigi
     from songephys.pipeline.file_setup import GenerateSingleSiteFiles
     luigi.build([GenerateSingleSiteFiles(site_dir=site_dir)], local_scheduler=True)
 
+@click.command("sort-singlesite")
+@click.argument("site_dir", type=click.Path(exists=True))
+def sortsinglesite(site_dir):
+    import luigi
+    from songephys.pipeline.preprocess_ephys import KiloSort4Sorting
+    luigi.build([KiloSort4Sorting(site_dir=site_dir)], local_scheduler=True)
 
+
+@click.command('add-sorted-units')
+@click.argument("site_dir", type=click.Path(exists=True))
+@click.option("-d", "--dir", "_dir", type=str, default="ks4_indiv_shanks_tfd")
+def addsortedunits(site_dir,_dir):
+    import luigi
+    from songephys.pipeline.nwb_utils import AddKilosortUnits
+    luigi.build([AddKilosortUnits(site_dir=site_dir, kilosort_dir=_dir)], local_scheduler=True)
 
 @click.command(help="Run unittests")
 @click.option("-d", "--dir", "_dir", type=str, default="tests/")
@@ -562,6 +576,9 @@ cli.add_command(create_site)
 cli.add_command(create_config)
 cli.add_command(unittest)
 cli.add_command(download_site)
+cli.add_command(gensinglesitefiles)
+cli.add_command(sortsinglesite)
+cli.add_command(addsortedunits)
 cli.add_command(gen_filelists)
 cli.add_command(read_rhd_settings)
 
