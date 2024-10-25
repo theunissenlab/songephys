@@ -650,6 +650,8 @@ class GenerateSingleSiteLFP(luigi.Task):
 
         # concatenate the recording extractors in a single one
         multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
+        if site_config['bad_channels'] != []:
+            multirecording = multirecording.remove_channels(['A-%03d'%x for x in site_config['bad_channels']])
         # add a band pass filter
         hp_freq = 1
         lp_freq = 300
@@ -1236,8 +1238,27 @@ class GenerateSingleSiteMemmap(luigi.Task):
         # concatenate the recording extractors in a single one
         multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
 
+        # according to INTAN: 
+        # Each sampling cycle is separated into 35 time slices
+        # in the first 32 time slices, the data from each channel is sampled in sequence
+        # for 64 channels, there are 2 32 channel groups, so 0 and 32 are sampled at the same time, etc.
+        time_bins = np.linspace(0,1,36) # split the time into 35 bins
+        time_shifts = dict({})
+        for i in range(0,32):
+            time_shifts['A-%03d'%i] = time_bins[i]
+            time_shifts['A-%03d'%(i+32)] = time_bins[i]
+        
         # lets try a bandpass instead of highpass
-        multirecording_f = bandpass_filter(multirecording, freq_min=300, freq_max=8000)
+        multirecording = bandpass_filter(multirecording, freq_min=300, freq_max=8000)
+        if site_config['bad_channels'] != []:
+            multirecording = multirecording.remove_channels(['A-%03d'%x for x in site_config['bad_channels']])
+        inter_sample_shift = [time_shifts[x] for x in multirecording.get_channel_ids()]
+        multirecording = phase_shift(multirecording,inter_sample_shift=inter_sample_shift)
+        multirecording = common_reference(recording=multirecording)#,groups=pared_groups) # could group by shank, but dont think its necessary
+
+
+
+        multirecording = blank_staturation(multirecording,quantile_threshold=.00001,direction='both')
 
         # now save info
         info = get_recording_info(multirecording_f)

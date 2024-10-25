@@ -214,7 +214,8 @@ def create_config(experiment_name):
 # add ml and ap position as options
 @click.option('--ml', type=float, default=0)
 @click.option('--depth', type=float,default=0)
-def create_site(site_dir, auto, ml, depth):
+@click.option('--bad_channels', type=str, default="")
+def create_site(site_dir, auto, ml, depth, bad_channels):
     from songephys.format.download import downloaders
     from songephys.format.io import load_yaml, save_yaml
     import numpy as np
@@ -278,7 +279,10 @@ def create_site(site_dir, auto, ml, depth):
     else:
         experiment_name = input("Experiment Name [default='{}']: ".format(default_experiment_name))
         experiment_name = experiment_name.strip() or default_experiment_name
-
+    
+    bcs = []
+    if bad_channels != "":
+        bcs = [int(x) for x in bad_channels.split(",")]
     config_data = {
         "download_type": download_type,
         "experiment_name": experiment_name,
@@ -286,6 +290,7 @@ def create_site(site_dir, auto, ml, depth):
         "playback_mic_channels": None,
         "spike_sorting.seconds_before_peak": 0.0005,
         "spike_sorting.seconds_after_peak": 0.0015,
+        "bad_channels": bcs
     }
     # read the settings file if its present
     xml_check = [fn.endswith('settings.xml') for fn in filelist]
@@ -296,6 +301,8 @@ def create_site(site_dir, auto, ml, depth):
             xml_file = os.path.join(project_config['LOCAL_RAW_FILES']['rhd_drive'],xml_file)
         print("Loading electrode config from %s" % xml_file)
         electrode_config = parse_settings_file(xml_file)
+
+
         # TODO we should make sure these labels are pulled from the intan header file
         # Amplifier -> RHD2000 amplifier channel
         # Board ADC -> USB board ADC input channel
