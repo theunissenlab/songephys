@@ -444,6 +444,9 @@ class KiloSort4Sorting(luigi.Task):
 
         site_config = self.input()["site_config"].data()
         project_config = self.input()['project_config'].data()
+        
+        bin_file = Path(self.input()['full_bin_array']['bin'].path)
+        bin_info = json.load(open(self.input()['full_bin_array']['info'].path,'r'))
 
         probes = dict({
             "P1": 'cambridge_P1.prb', # 4 shank
@@ -453,8 +456,13 @@ class KiloSort4Sorting(luigi.Task):
         import os
         prb = kilosort.io.load_probe(os.path.join(kilosort.PROBE_DIR,probes[project_config["EPHYS"].get('PROBETYPE','H10')]))
 
+        good_chans = prb['chanMap']
+        if 'bad_channels' in site_config and site_config['bad_channels'] != []:
+            good_chans = [x not in site_config['bad_channels'] for x in prb['chanMap']]
+        assert(len(good_chans) == bin_info['num_channels'])
+
         settings = kilosort.DEFAULT_SETTINGS.copy()
-        settings['n_chan_bin'] = 64
+        settings['n_chan_bin'] = len(good_chans)
         settings['nearest_templates'] = 100
         settings['nearest_chans'] = 10
 
@@ -468,7 +476,6 @@ class KiloSort4Sorting(luigi.Task):
 
         # # TODO if we keep running OOM then we should set kcoords to 1
         ks_output_dir =  os.path.dirname(self.output().path)
-        bin_file = Path(self.input()['full_bin_array']['bin'].path)
         # kilosort.run_kilosort(settings=settings, probe=prb, filename=bin_file, data_dtype='int16', results_dir=ks_output_dir, clear_cache=True)
 
         # lets do each shank individually
@@ -477,6 +484,7 @@ class KiloSort4Sorting(luigi.Task):
             prb_kc = prb['kcoords']
             inds = prb_kc == sh
             prb_sh['n_chan'] = sum(inds)
+            inds = np.logical_and(good_chans,inds)
             # remove the bad channels
             if 'bad_channels' in site_config and site_config['bad_channels'] != []:
                 good_chans = [x not in site_config['bad_channels'] for x in prb['chanMap']]
