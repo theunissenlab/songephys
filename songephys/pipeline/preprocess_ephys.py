@@ -427,6 +427,7 @@ class KiloSortSorting(luigi.Task):
                      n_channels=len(chan_names),data_dtype='int16')
 class KiloSort4Sorting(luigi.Task):
     site_dir = SiteParameter()
+    kilosort_dir = luigi.Parameter(default='ks4_CAR')
     def requires(self):
         return {
             "site_config": SiteConfig(self.site_dir),
@@ -435,7 +436,7 @@ class KiloSort4Sorting(luigi.Task):
         }
 
     def output(self):
-        return luigi.LocalTarget(os.path.join(self.site_dir,'ks4_indiv_shanks_tfd','complete'))
+        return luigi.LocalTarget(os.path.join(self.site_dir,self.kilosort_dir,'complete'))
 
     def run(self):
         import kilosort
