@@ -15,7 +15,7 @@ from neo.io import NixIO, IntanIO, NWBIO
 from neo.rawio import IntanRawIO
 from spikeinterface.extractors import read_intan
 from spikeinterface.core import ConcatenateSegmentRecording, BinaryRecordingExtractor
-from spikeinterface.preprocessing import highpass_filter, bandpass_filter, resample, phase_shift, common_reference
+from spikeinterface.preprocessing import highpass_filter, bandpass_filter, resample, phase_shift, common_reference, blank_staturation
 
 from ..format.download import downloaders
 from ..format.io import load_yaml, save_yaml
@@ -1255,13 +1255,10 @@ class GenerateSingleSiteMemmap(luigi.Task):
         inter_sample_shift = [time_shifts[x] for x in multirecording.get_channel_ids()]
         multirecording = phase_shift(multirecording,inter_sample_shift=inter_sample_shift)
         multirecording = common_reference(recording=multirecording)#,groups=pared_groups) # could group by shank, but dont think its necessary
-
-
-
         multirecording = blank_staturation(multirecording,quantile_threshold=.00001,direction='both')
 
         # now save info
-        info = get_recording_info(multirecording_f)
+        info = get_recording_info(multirecording)
 
         self.output()['info'].makedirs()
         with open(self.output()['info'].path, 'w') as f:
@@ -1269,7 +1266,7 @@ class GenerateSingleSiteMemmap(luigi.Task):
         # then save to binary if the file does not exist
         if not self.output()['bin'].exists():
             filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
-                multirecording_f, os.path.dirname(self.output()['bin'].path), data_name=os.path.basename(self.output()['bin'].path), dtype=np.int16,
+                multirecording, os.path.dirname(self.output()['bin'].path), data_name=os.path.basename(self.output()['bin'].path), dtype=np.int16,
                 chunksize=60000   )       
 
 class GenerateSingleSiteFiles(luigi.WrapperTask):
