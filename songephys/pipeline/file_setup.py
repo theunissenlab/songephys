@@ -15,7 +15,7 @@ from neo.io import NixIO, IntanIO, NWBIO
 from neo.rawio import IntanRawIO
 from spikeinterface.extractors import read_intan
 from spikeinterface.core import ConcatenateSegmentRecording, BinaryRecordingExtractor
-from spikeinterface.preprocessing import highpass_filter, bandpass_filter, resample
+from spikeinterface.preprocessing import highpass_filter, bandpass_filter, resample, phase_shift, common_reference
 
 from ..format.download import downloaders
 from ..format.io import load_yaml, save_yaml
