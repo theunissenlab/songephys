@@ -462,14 +462,8 @@ class KiloSort4Sorting(luigi.Task):
         if 'bad_channels' in site_config and site_config['bad_channels'] != []:
             good_chans = [x not in site_config['bad_channels'] for x in prb['chanMap']]
             # now we have to remap the chanMap
-            # eg, 
-            # chanMap = [0,1,2,3,4,5,6]
-            # bad_channels = [3,4,5]
-            # new_chanMap = [0,1,2,6] but 6 is the 6th channel in the original chanMap, so we need to remap it to 3
-            # remap chanMap = [0,1,2,3]
-            chan_nums = np.arange(len(prb['chanMap']))[good_chans]
-            chan_map = {x:i for i,x in enumerate(chan_nums)}
-            prb['chanMap'] = [chan_map[x] for x in prb['chanMap']]
+            _, new_map = np.unique(prb['chanMap'][good_chans], return_inverse=True)
+            prb['chanMap'][good_chans] = new_map
             
         print(sum(good_chans),bin_info['num_channels'])
         assert(sum(good_chans) == bin_info['num_channels'])
