@@ -442,6 +442,7 @@ class KiloSort4Sorting(luigi.Task):
         import kilosort
         from kilosort import run_kilosort, DEFAULT_SETTINGS
         from pathlib import Path
+        import json
 
         site_config = self.input()["site_config"].data()
         project_config = self.input()['project_config'].data()
@@ -457,13 +458,14 @@ class KiloSort4Sorting(luigi.Task):
         import os
         prb = kilosort.io.load_probe(os.path.join(kilosort.PROBE_DIR,probes[project_config["EPHYS"].get('PROBETYPE','H10')]))
 
-        good_chans = prb['chanMap']
+        good_chans = [True for _ in prb['chanMap']]
         if 'bad_channels' in site_config and site_config['bad_channels'] != []:
             good_chans = [x not in site_config['bad_channels'] for x in prb['chanMap']]
-        assert(len(good_chans) == bin_info['num_channels'])
+        print(sum(good_chans),bin_info['num_channels'])
+        assert(sum(good_chans) == bin_info['num_channels'])
 
         settings = kilosort.DEFAULT_SETTINGS.copy()
-        settings['n_chan_bin'] = len(good_chans)
+        settings['n_chan_bin'] = bin_info['num_channels']
         settings['nearest_templates'] = 100
         settings['nearest_chans'] = 10
 
