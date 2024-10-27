@@ -1255,7 +1255,7 @@ class GenerateSingleSiteMemmap(luigi.Task):
         inter_sample_shift = [time_shifts[x] for x in multirecording.get_channel_ids()]
         multirecording = phase_shift(multirecording,inter_sample_shift=inter_sample_shift)
         multirecording = common_reference(recording=multirecording)#,groups=pared_groups) # could group by shank, but dont think its necessary
-        multirecording = blank_staturation(multirecording,quantile_threshold=.00001,direction='both')
+        #multirecording = blank_staturation(multirecording,quantile_threshold=.00001,direction='both') This sometimes clips actual spikes... maybe figure out a threshold that works
 
         # now save info
         info = get_recording_info(multirecording)
