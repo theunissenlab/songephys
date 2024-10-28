@@ -104,6 +104,7 @@ class FastIntanRecordingExtractor(NeoBaseRecordingExtractor):
         neo_kwargs = {"filename": str(file_path)}
         return neo_kwargs
 
+from spikeinterface.preprocessing.basepreprocessor import BasePreprocessor, BasePreprocessorSegment
 class RemoveJumps(BasePreprocessor):
     def __init__(self, recording, threshold):
         BasePreprocessor.__init__(self, recording)
@@ -116,6 +117,8 @@ class RemoveJumps(BasePreprocessor):
     def _make_preprocessor_segment(self, parent_segment):
         return RemoveJumpsSegment(parent_segment, self.threshold)
 
+
+
 class RemoveJumpsSegment(BasePreprocessorSegment):
     def __init__(self, parent_recording_segment, threshold):
         BasePreprocessorSegment.__init__(self, parent_recording_segment)
@@ -125,74 +128,49 @@ class RemoveJumpsSegment(BasePreprocessorSegment):
         traces = self.parent_recording_segment.get_traces(start_frame, end_frame, channel_indices)
         for i in range(traces.shape[1]):
             trace = traces[:, i]
-            trace_int16 = (trace - 32768).astype(np.int16)
-            trace_diff = np.abs(np.diff(trace_int16))
-            jumps = np.where(trace_diff > self.threshold)[0]
-            jumps_down = np.where(trace_diff < -self.threshold)[0]
-
-            # Pair up jumps and corresponding jump downs
-            paired_jumps = []
-            paired_jumps_down = []
-            for jump in jumps:
-                # Find the closest jump down after the jump
-                jump_down = jumps_down[jumps_down > jump][0] if jumps_down.size > 0 else None
-                if jump_down is not None and jump_down not in paired_jumps_down:
-                    paired_jumps.append(jump)
-                    paired_jumps_down.append(jump_down)
-
-            # Interpolate between paired jumps and jump downs
-            for jump, jump_down in zip(paired_jumps, paired_jumps_down):
-                trace[(jump + 1):(jump_down + 1)] = (trace[jump] + trace[jump_down + 1]) / 2
-
-            traces[:, i] = trace
-
-        return traces
-
-
-class RemoveJumpsSegment(BasePreprocessorSegment):
-    def __init__(self, parent_recording_segment, threshold, buffer=50):
-        BasePreprocessorSegment.__init__(self, parent_recording_segment)
-        self.threshold = threshold
-        self.buffer = buffer
-
-    def get_traces(self, start_frame=None, end_frame=None, channel_indices=None):
-        nsamps = self.parent_recording_segment.total_length
-        buffer_start = min(self.buffer, start_frame)
-        buffer_end = min(self.buffer, nsamps - end_frame)
-        traces = self.parent_recording_segment.get_traces(start_frame-buffer_start, end_frame+buffer_end, channel_indices)
-        for i in range(traces.shape[1]):
-            trace = traces[:, i]
             trace_int16=(trace-32768).astype(np.int16)
+            trace_int16 -= np.int16(np.mean(trace_int16))
             trace_diff = np.diff(np.abs(trace_int16))
             # find all jumps up
             jumps = np.where(trace_diff > self.threshold)[0]
             jumps_down = np.where(trace_diff < -self.threshold)[0]
-            if len(jumps) == 0:
+            if len(jumps) == 0 or len(jumps_down) == 0:
                 continue
-            # # if there are two jump ups in a row, take the first one
-            # jumps = jumps[1:][np.diff(jumps) > 1]
-            # # if there are two jump downs in a row, take the second one
-            # jumps_down = jumps_down[:-1][np.diff(jumps_down) > 1]
-            # lets make sure each jump up is paired with a jump down
+
+            # remove all jump ups that are after the last jump down
+            jumps = jumps[jumps < jumps_down[-1]]
+            if len(jumps)==0:
+                continue
+            # remove all jump downs that are before the first jump up
+            jumps_down = jumps_down[jumps_down > jumps[0]]
+            if len(jumps_down)==0:
+                continue
+
+        
             if len(jumps) > 1:
                 jumps = np.concatenate(([jumps[0]], jumps[1:][np.diff(jumps) > 1]))
             if len(jumps_down) > 1:
                 jumps_down = np.concatenate((jumps_down[:-1][np.diff(jumps_down) > 1], [jumps_down[-1]]))
+            # if your first jump down is before your first jump up, ignore it
             if jumps_down[0] < jumps[0]:
                 jumps_down = jumps_down[1:]
+            # if your last jump up is after your last jump down, ignore it
             if jumps_down[-1] < jumps[-1]:
-                jumps_down = jumps_down[:-1]
-            
+                jumps = jumps[:-1]
             # now we pair the jumps and jumps_down
             paired_jumps = []
             paired_jumps_down = []
-            for i,jump in enumerate(jumps):
+            for jump in jumps:
                 # find the closest jump_down after the jump
-                jump_down = jumps_down[jumps_down>jump][0]
+                # if there are no jumps_down after this jump, we ignore it
+                possible_jd = jumps_down[jumps_down>jump]
+                if len(possible_jd) == 0:
+                    continue
+                jump_down = possible_jd[0]
                 if jump_down in paired_jumps_down:
                     continue
                 if jump_down - jump > 30: # if its more than 1ms, we ignore it
-                    print(f"Jump too long: {jump} -> {jump_down}")
+                    #print(f"Jump too long: {jump+start_frame-buffer_start} -> {jump_down+start_frame-buffer_start}")
                     continue    
                 paired_jumps.append(jump)
                 paired_jumps_down.append(jump_down)
@@ -202,7 +180,7 @@ class RemoveJumpsSegment(BasePreprocessorSegment):
                 # interpolate between the two points
                 trace[(jump[0]+1):(jump[1]+1)] = trace[jump[0]]/2 + trace[jump[1] + 1]/2
             traces[:, i] = trace
-        return traces[buffer_start:-buffer_end, :]
+        return traces
 
 
 
@@ -1355,8 +1333,8 @@ class GenerateSingleSiteMemmap(luigi.Task):
         multirecording = bandpass_filter(multirecording, freq_min=300, freq_max=8000)
         if site_config['bad_channels'] != []:
             multirecording = multirecording.remove_channels(['A-%03d'%x for x in site_config['bad_channels']])
-        inter_sample_shift = [time_shifts[x] for x in multirecording.get_channel_ids()]
-        multirecording = phase_shift(multirecording,inter_sample_shift=inter_sample_shift)
+        # inter_sample_shift = [time_shifts[x] for x in multirecording.get_channel_ids()]
+        # multirecording = phase_shift(multirecording,inter_sample_shift=inter_sample_shift)
         multirecording = common_reference(recording=multirecording)#,groups=pared_groups) # could group by shank, but dont think its necessary
 
         # now save info
