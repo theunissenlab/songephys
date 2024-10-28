@@ -60,6 +60,7 @@ def get_sorted_rhd_files(rhd_files):
 
 from pathlib import Path
 from spikeinterface.extractors.neoextractors.neobaseextractor import NeoBaseRecordingExtractor
+from spikeinterface.preprocessing.basepreprocessor import BasePreprocessor, BasePreprocessorSegment
 
 # Modification of the IntanRecordingExtractor class to support fast reading of intan files
 class FastIntanRecordingExtractor(NeoBaseRecordingExtractor):
@@ -102,6 +103,108 @@ class FastIntanRecordingExtractor(NeoBaseRecordingExtractor):
     def map_to_neo_kwargs(cls, file_path):
         neo_kwargs = {"filename": str(file_path)}
         return neo_kwargs
+
+class RemoveJumps(BasePreprocessor):
+    def __init__(self, recording, threshold):
+        BasePreprocessor.__init__(self, recording)
+        self._kwargs = dict(recording=recording, threshold=threshold)
+        self.threshold = threshold
+        for parent_segment in recording._recording_segments:
+            preprocessor_segment = self._make_preprocessor_segment(parent_segment)
+            self.add_recording_segment(preprocessor_segment)
+
+    def _make_preprocessor_segment(self, parent_segment):
+        return RemoveJumpsSegment(parent_segment, self.threshold)
+
+class RemoveJumpsSegment(BasePreprocessorSegment):
+    def __init__(self, parent_recording_segment, threshold):
+        BasePreprocessorSegment.__init__(self, parent_recording_segment)
+        self.threshold = threshold
+
+    def get_traces(self, start_frame=None, end_frame=None, channel_indices=None):
+        traces = self.parent_recording_segment.get_traces(start_frame, end_frame, channel_indices)
+        for i in range(traces.shape[1]):
+            trace = traces[:, i]
+            trace_int16 = (trace - 32768).astype(np.int16)
+            trace_diff = np.abs(np.diff(trace_int16))
+            jumps = np.where(trace_diff > self.threshold)[0]
+            jumps_down = np.where(trace_diff < -self.threshold)[0]
+
+            # Pair up jumps and corresponding jump downs
+            paired_jumps = []
+            paired_jumps_down = []
+            for jump in jumps:
+                # Find the closest jump down after the jump
+                jump_down = jumps_down[jumps_down > jump][0] if jumps_down.size > 0 else None
+                if jump_down is not None and jump_down not in paired_jumps_down:
+                    paired_jumps.append(jump)
+                    paired_jumps_down.append(jump_down)
+
+            # Interpolate between paired jumps and jump downs
+            for jump, jump_down in zip(paired_jumps, paired_jumps_down):
+                trace[(jump + 1):(jump_down + 1)] = (trace[jump] + trace[jump_down + 1]) / 2
+
+            traces[:, i] = trace
+
+        return traces
+
+
+class RemoveJumpsSegment(BasePreprocessorSegment):
+    def __init__(self, parent_recording_segment, threshold, buffer=50):
+        BasePreprocessorSegment.__init__(self, parent_recording_segment)
+        self.threshold = threshold
+        self.buffer = buffer
+
+    def get_traces(self, start_frame=None, end_frame=None, channel_indices=None):
+        nsamps = self.parent_recording_segment.total_length
+        buffer_start = min(self.buffer, start_frame)
+        buffer_end = min(self.buffer, nsamps - end_frame)
+        traces = self.parent_recording_segment.get_traces(start_frame-buffer_start, end_frame+buffer_end, channel_indices)
+        for i in range(traces.shape[1]):
+            trace = traces[:, i]
+            trace_int16=(trace-32768).astype(np.int16)
+            trace_diff = np.diff(np.abs(trace_int16))
+            # find all jumps up
+            jumps = np.where(trace_diff > self.threshold)[0]
+            jumps_down = np.where(trace_diff < -self.threshold)[0]
+            if len(jumps) == 0:
+                continue
+            # # if there are two jump ups in a row, take the first one
+            # jumps = jumps[1:][np.diff(jumps) > 1]
+            # # if there are two jump downs in a row, take the second one
+            # jumps_down = jumps_down[:-1][np.diff(jumps_down) > 1]
+            # lets make sure each jump up is paired with a jump down
+            if len(jumps) > 1:
+                jumps = np.concatenate(([jumps[0]], jumps[1:][np.diff(jumps) > 1]))
+            if len(jumps_down) > 1:
+                jumps_down = np.concatenate((jumps_down[:-1][np.diff(jumps_down) > 1], [jumps_down[-1]]))
+            if jumps_down[0] < jumps[0]:
+                jumps_down = jumps_down[1:]
+            if jumps_down[-1] < jumps[-1]:
+                jumps_down = jumps_down[:-1]
+            
+            # now we pair the jumps and jumps_down
+            paired_jumps = []
+            paired_jumps_down = []
+            for i,jump in enumerate(jumps):
+                # find the closest jump_down after the jump
+                jump_down = jumps_down[jumps_down>jump][0]
+                if jump_down in paired_jumps_down:
+                    continue
+                if jump_down - jump > 30: # if its more than 1ms, we ignore it
+                    print(f"Jump too long: {jump} -> {jump_down}")
+                    continue    
+                paired_jumps.append(jump)
+                paired_jumps_down.append(jump_down)
+
+            assert(len(paired_jumps) == len(paired_jumps_down))
+            for jump in zip(paired_jumps, paired_jumps_down):
+                # interpolate between the two points
+                trace[(jump[0]+1):(jump[1]+1)] = trace[jump[0]]/2 + trace[jump[1] + 1]/2
+            traces[:, i] = trace
+        return traces[buffer_start:-buffer_end, :]
+
+
 
 class SiteConfig(luigi.Task):
     """Verify config file exists and specific keys exist
@@ -1196,7 +1299,6 @@ class GenerateSingleSiteAuxMemmap(luigi.Task):
                 multirecording, os.path.dirname(self.output()['bin'].path), data_name=os.path.basename(self.output()['bin'].path), dtype=np.uint16,
                 chunksize=120000   )
 
-        
 
 class GenerateSingleSiteMemmap(luigi.Task):
     """
@@ -1249,13 +1351,13 @@ class GenerateSingleSiteMemmap(luigi.Task):
             time_shifts['A-%03d'%(i+32)] = time_bins[i]
         
         # lets try a bandpass instead of highpass
+        multirecording = RemoveJumps(multirecording, threshold=6000) # about 1.1 mV if you jump up and down by that much within 1 same you are removed
         multirecording = bandpass_filter(multirecording, freq_min=300, freq_max=8000)
         if site_config['bad_channels'] != []:
             multirecording = multirecording.remove_channels(['A-%03d'%x for x in site_config['bad_channels']])
         inter_sample_shift = [time_shifts[x] for x in multirecording.get_channel_ids()]
         multirecording = phase_shift(multirecording,inter_sample_shift=inter_sample_shift)
         multirecording = common_reference(recording=multirecording)#,groups=pared_groups) # could group by shank, but dont think its necessary
-        #multirecording = blank_staturation(multirecording,quantile_threshold=.00001,direction='both') This sometimes clips actual spikes... maybe figure out a threshold that works
 
         # now save info
         info = get_recording_info(multirecording)
