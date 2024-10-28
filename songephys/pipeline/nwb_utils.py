@@ -322,10 +322,18 @@ class CreateSiteNWB(luigi.Task):
                 location="NCM", # TODO put this in site_config
             )
 
+        # remove bad channels from probe
+        good_chans = [True for _ in prb['chanMap']]
+        if 'bad_channels' in site_config and site_config['bad_channels'] != []:
+            good_chans = [x not in site_config['bad_channels'] for x in prb['chanMap']]
+            # now we have to remap the chanMap
+            _, new_map = np.unique(prb['chanMap'][good_chans], return_inverse=True)
+            prb['chanMap'][good_chans] = new_map
+
         # Add electrodes to the electrode group
         # for this experiment prb file, x is A-P, y is D-V
         # in the nwb file: +x is posterior +y is inferior +z is right
-        for (cid, ap, dv) in zip(prb['chanMap'], prb['xc'], prb['yc']):
+        for (cid, ap, dv) in zip(prb['chanMap'][good_chans], prb['xc'][good_chans], prb['yc'][good_chans]):
             nwbfile.add_electrode(
                     id = cid,
                     group=electrode_group,
