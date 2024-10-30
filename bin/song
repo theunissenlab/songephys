@@ -455,10 +455,11 @@ def gennwb(site_dir):
 @click.command('add-sorted-units')
 @click.argument("site_dir", type=click.Path(exists=True))
 @click.option("-d", "--dir", "_dir", type=str, default="ks4_indiv_shanks_tfd")
-def addsortedunits(site_dir,_dir):
+@click.option('--clear_old_units', is_flag=True)
+def addsortedunits(site_dir,_dir,clear_old_units):
     import luigi
     from songephys.pipeline.nwb_utils import AddKilosortUnits
-    luigi.build([AddKilosortUnits(site_dir=site_dir, kilosort_dir=_dir)], local_scheduler=True)
+    luigi.build([AddKilosortUnits(site_dir=site_dir, kilosort_dir=_dir,clear_old_units=clear_old_units)], local_scheduler=True)
 
 @click.command(help="Run unittests")
 @click.option("-d", "--dir", "_dir", type=str, default="tests/")
