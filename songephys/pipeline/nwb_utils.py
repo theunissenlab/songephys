@@ -935,27 +935,29 @@ class AddKilosortUnits(luigi.Task):
             sys.path.append(ks_output_dirs[0])
             from params import sample_rate
             for ksod in ks_output_dirs:
+                ks_dir_name = os.path.relpath(ksod, self.site_dir)
+                print("Loading Kilosort data from %s"%ks_dir_name)
                 ks_spike_times = np.load(os.path.join(ksod, 'spike_times.npy'))/sample_rate
                 ks_spike_cluster = np.load(os.path.join(ksod, 'spike_clusters.npy'))
                 ks_cluster_info = pd.read_csv(os.path.join(ksod, 'cluster_info.tsv'),delimiter='\t')
                 
                 for i, cluster in ks_cluster_info.iterrows():
                     if cluster['group'] != 'noise':
-                        if (cluster['cluster_id'], ksod) not in zip(nwbfile.units['kilosort_id'], nwbfile.units['kilosort_dir']):
-                            print("Adding unit %d from %s"%(cluster['cluster_id'], ksod))
+                        if (cluster['cluster_id'], dir) not in zip(nwbfile.units['kilosort_id'], nwbfile.units['kilosort_dir']):
+                            print("Adding unit %d from %s"%(cluster['cluster_id'], dir))
                             nwbfile.add_unit(
                                 spike_times=ks_spike_times[ks_spike_cluster == cluster['cluster_id']],
                                 electrodes=[cluster.ch], # for now lets just put the main electrode
                                 kilosort_id=cluster['cluster_id'],
                                 group=cluster['group'],
                                 contampct=cluster['ContamPct'],
-                                kilosort_dir=ksod
+                                kilosort_dir=ks_dir_name
                             )
                         else:
-                            print("Unit %d from %s already exists"%(cluster['cluster_id'], ksod))
+                            print("Unit %d from %s already exists"%(cluster['cluster_id'], ks_dir_name))
                             if self.overwrite:
                                 print("Overwriting")
-                                ix = (nwbfile.units['kilosort_id'] == cluster['cluster_id']) & (nwbfile.units['kilosort_dir'] == ksod)
+                                ix = (nwbfile.units['kilosort_id'] == cluster['cluster_id']) & (nwbfile.units['kilosort_dir'] == ks_dir_name)
                                 nwbfile.units['spike_times'][ix] = ks_spike_times[ks_spike_cluster == cluster['cluster_id']]
                                 nwbfile.units['contampct'][ix] = cluster['ContamPct']
                                 nwbfile.units['group'][ix] = cluster['group']

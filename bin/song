@@ -461,6 +461,17 @@ def addsortedunits(site_dir,_dir,clear_old_units):
     from songephys.pipeline.nwb_utils import AddKilosortUnits
     luigi.build([AddKilosortUnits(site_dir=site_dir, kilosort_dir=_dir,clear_old_units=clear_old_units)], local_scheduler=True)
 
+@click.command("run-pipeline-job")
+@click.argument("job_name")
+@click.argument("site_dir", type=click.Path(exists=True))
+# Could add kwargs
+def runpipelinejob(job_name, site_dir):
+    import luigi
+    from songephys.pipeline import *
+    job = eval(job_name)
+    luigi.build([job(site_dir=site_dir)], local_scheduler=True)
+
+
 @click.command(help="Run unittests")
 @click.option("-d", "--dir", "_dir", type=str, default="tests/")
 @click.option("-v", "--verbose", type=int, default=1)
@@ -600,7 +611,7 @@ cli.add_command(addsortedunits)
 cli.add_command(gennwb)
 cli.add_command(gen_filelists)
 cli.add_command(read_rhd_settings)
-
+cli.add_command(runpipelinejob)
 # cli.add_command(rhd)
 
 if __name__ == "__main__":
