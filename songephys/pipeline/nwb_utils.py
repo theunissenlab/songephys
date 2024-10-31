@@ -1119,8 +1119,8 @@ class AddPyoperantTrials(luigi.Task):
             )
             pb_trial_intervals.add_column(name="trial_num", description="Trial number")
             pb_trial_intervals.add_column(name="experiment_uid", description="Unique Identifier for experiment (base of filename)")
-            op_trial_intervals.add_column(name="stimuli_path", description="Path of Stimuli presented")
-            op_trial_intervals.add_column(name="stimuli_name", description="Name of Stimuli presented")
+            pb_trial_intervals.add_column(name="stimuli_path", description="Path of Stimuli presented")
+            pb_trial_intervals.add_column(name="stimuli_name", description="Name of Stimuli presented")
 
             all_stims = dict({
                 'path': [],
