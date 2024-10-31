@@ -8,6 +8,7 @@ import pandas as pd
 import luigi
 import numpy as np
 import tqdm
+import soundfile as sf
 from dateutil.tz import tzlocal
 from scipy.stats import zscore
 import scipy.signal as signal
@@ -117,7 +118,7 @@ class PyoperantExperiment(Experiment):
                 return timedelta(seconds=trial.max_wait)
         else:
             # TODO read stimui and add this to length for playbacks
-            return timedelta(seconds=2)
+            return timedelta(seconds=4)
 
     def trial_end_time(self, trial_num):
         return self.trial_start_time(trial_num) + self.trial_duration(trial_num)
@@ -642,7 +643,8 @@ class AddRippleEventsNWB(luigi.Task):
         return {
             'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
             'lfp': AddLFPNWB(site_dir=self.site_dir),
-            'motion': AddMotionNWB(site_dir=self.site_dir)
+            'motion': AddMotionNWB(site_dir=self.site_dir),
+            'site_config': SiteConfig(site_dir=self.site_dir)
         }
 
     def output(self):
@@ -651,25 +653,29 @@ class AddRippleEventsNWB(luigi.Task):
     def run(self):
         with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
             nwb = nwb_io.read()
-
+            site_config = self.input()['site_config'].data()
             # lets take our lfp and filter it
             lfp = nwb.acquisition['LFP']
             fs = lfp.rate
             motion = nwb.processing['behavior']['Motion Time Series'].time_series['motion']
 
-            # first detect bad channels
-            # take a significantly sized chunk of the data, maybe 10 seconds?
-            chunk_size = int(10*fs)
-            chunk_start = np.random.randint(0,lfp.data.shape[0]-chunk_size)
-            random_chunk = lfp.data[chunk_start:chunk_start+chunk_size,:]
-            # get the average of all the channels
-            channel_means = np.mean(random_chunk, axis=1)
-            # get the correlation of each channel with the average
-            corrs = np.zeros(lfp.data.shape[1])
-            for i in range(lfp.data.shape[1]):
-                corrs[i] = np.corrcoef(channel_means, random_chunk[:,i])[0,1]        
-            zscored_corrs = zscore(corrs)
-            bad_channels = np.where(zscored_corrs < -2)[0]
+            if 'bad_channels' not in site_config:
+                # first detect bad channels
+                # take a significantly sized chunk of the data, maybe 10 seconds?
+                chunk_size = int(10*fs)
+                chunk_start = np.random.randint(0,lfp.data.shape[0]-chunk_size)
+                random_chunk = lfp.data[chunk_start:chunk_start+chunk_size,:]
+                # get the average of all the channels
+                channel_means = np.mean(random_chunk, axis=1)
+                # get the correlation of each channel with the average
+                corrs = np.zeros(lfp.data.shape[1])
+                for i in range(lfp.data.shape[1]):
+                    corrs[i] = np.corrcoef(channel_means, random_chunk[:,i])[0,1]        
+                zscored_corrs = zscore(corrs)
+                bad_channels = np.where(zscored_corrs < -2)[0]
+            else:
+                # bad channels should be already removed from the lfp
+                bad_channels = []
 
             # now add the detected ripples to the nwb file
             putative_ripples = TimeIntervals(
@@ -1102,7 +1108,8 @@ class AddPyoperantTrials(luigi.Task):
             )
             op_trial_intervals.add_column(name="trial_num", description="Trial number")
             op_trial_intervals.add_column(name="experiment_uid", description="Unique Identifier for experiment (base of filename)")
-            op_trial_intervals.add_column(name="stimuli", description="Stimuli presented")
+            op_trial_intervals.add_column(name="stimuli_path", description="Path of Stimuli presented")
+            op_trial_intervals.add_column(name="stimuli_name", description="Name of Stimuli presented")
             op_trial_intervals.add_column(name="response", description="Response made")
             op_trial_intervals.add_column(name="correct", description="Correct response")
 
@@ -1112,7 +1119,15 @@ class AddPyoperantTrials(luigi.Task):
             )
             pb_trial_intervals.add_column(name="trial_num", description="Trial number")
             pb_trial_intervals.add_column(name="experiment_uid", description="Unique Identifier for experiment (base of filename)")
-            pb_trial_intervals.add_column(name="stimuli", description="Stimuli presented")
+            op_trial_intervals.add_column(name="stimuli_path", description="Path of Stimuli presented")
+            op_trial_intervals.add_column(name="stimuli_name", description="Name of Stimuli presented")
+
+            all_stims = dict({
+                'path': [],
+                'bird_name': [],
+                'stim_name': [],
+                'category': []
+            })
 
             # now we need to match the trial blocks with the operant experiments
             for exp in pyoperant_experiments:
@@ -1148,27 +1163,68 @@ class AddPyoperantTrials(luigi.Task):
 
                         start = audcode_event.timestamp if audcode_event is not None else (exp.trial_start_time(ix) - session_start).total_seconds()
                         end = (start + exp.trial_duration(ix).total_seconds())
+                        all_stims['path'].append(trial.stimulus_name)
+                        all_stims['stim_name'].append(trial.stimulus_name.split('\\')[-1])
+                        all_stims['bird_name'].append(all_stims['stim_name'][-1].split('_')[3])
+
                         if exp.experiment_type == 'operant':
+                            all_stims['category'].append(trial.stimulus_name.split('\\')[-2])
                             op_trial_intervals.add_interval(
                                 start_time=start,
                                 stop_time=end,
                                 trial_num=ix,
                                 experiment_uid=exp.uid,
-                                stimuli=trial.stimulus_name,# TODO Make this truncated or something
+                                stimuli_path=trial.stimulus_name,
+                                stimuli_name=trial.stimulus_name.split('\\')[-1],
                                 response=trial.response,
                                 correct=trial.correct,
                                 timeseries=all_time_series
                             )
                         else:
+                            all_stims['category'].apppend('playback')
                             pb_trial_intervals.add_interval(
                                 start_time=start,
                                 stop_time=end,
                                 trial_num=ix,
                                 experiment_uid=exp.uid,
-                                stimuli=trial.stimulus_name,
+                                stimuli_path=trial.stimulus_name,
+                                stimuli_name=trial.stimulus_name.split('\\')[-1],
                                 timeseries=all_time_series
                             )
-            # now save them to the nwb file
+            # now lets add the stims to the nwb
+            all_stims_df = pd.DataFrame(all_stims)
+            stim_root_dir = project_cfg['LOCAL_RAW_FILES']['stimuli_drive']
+            # now save all unique stims
+            for stim, stim_df in all_stims_df.groupby('stim_name'):
+                # find the stim in the Stimuli Folder
+                stim_files = glob.glob(os.path.join(stim_dir,'**',stim))
+                if len(stim_files) == 0:
+                    print("Stimulus %s not found"%stim)
+                    continue
+                # TODO: for now just take the first one
+                #       we should take the shortest one...
+                bird_name = stim_df['bird_name'].iloc[0]
+                categories = stim_df['category'].unique()
+                if len(categories) > 1:
+                    # take the non 'playback' one
+                    category = [x for x in categories if x != 'playback'][0]
+                else:
+                    category = categories[0]
+                stim_file = stim_files[0]
+                # now load the wav file
+                stim_data, stim_fs = sf.read(stim_file)
+                stim_ts = TimeSeries(
+                    name=stim,
+                    data=stim_data,
+                    rate=stim_fs,
+                    bird_name = bird_name,
+                    category = category,
+                    description="Stimulus %s"%stim,
+                    unit="wav"
+                )
+                nwbfile.add_stimulus(stimulus=stim_ts)
+                
+            # now save the trials to the nwb file
             nwbfile.add_time_intervals(pyoperant_experiments_intervals)
             nwbfile.add_time_intervals(op_trial_intervals)
             nwbfile.add_time_intervals(pb_trial_intervals)
@@ -1182,6 +1238,21 @@ class AddStimuliNWB(luigi.Task):
         }
     def output(self):
         return NWBStimulusTarget(self.input()['site_nwb'].path)
+    def run(self):
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
+            nwbfile = nwb_io.read()
+            # get the pyoperant trials
+            pyoperant_trials = nwbfile.intervals['operant_trials'].to_dataframe()
+            # get the unique stimuli
+            stimuli = pyoperant_trials.stimuli.unique()
+            # create the stimulus table
+            stimulus_table = nwbfile.create_stimulus_template(name='stimuli')
+            for stim in stimuli:
+                stimulus_table.add_row(
+                    name=stim,
+                    description="Stimulus %s"%stim
+                )
+            nwb_io.write(nwbfile)
 
 class GenerateAcquisitionNWB(luigi.WrapperTask):
     site_dir = SiteParameter()
