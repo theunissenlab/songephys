@@ -1181,7 +1181,7 @@ class AddPyoperantTrials(luigi.Task):
                                 timeseries=all_time_series
                             )
                         else:
-                            all_stims['category'].apppend('playback')
+                            all_stims['category'].append('playback')
                             pb_trial_intervals.add_interval(
                                 start_time=start,
                                 stop_time=end,
