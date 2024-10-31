@@ -1216,7 +1216,7 @@ class AddPyoperantTrials(luigi.Task):
                 stim_ts = TimeSeries(
                     name=stim,
                     data=stim_data,
-                    rate=stim_fs,
+                    rate=float(stim_fs),
                     bird_name = bird_name,
                     category = category,
                     description="Stimulus %s"%stim,
