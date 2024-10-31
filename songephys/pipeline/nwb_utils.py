@@ -200,7 +200,7 @@ class NWBIntervalsTarget(luigi.Target):
                 pass
         io.write(nwbfile)
         io.close()
-class PyoperantStimuli(pynwb.TimeSeries):
+class PyoperantStimuli(TimeSeries):
     def __init__(self, name, data, rate, bird_name,category,rendition_id, **kwargs):
         super().__init__(name=name, data=data, unit='wav', rate=float(rate), **kwargs)
         self.bird_name = bird_name
