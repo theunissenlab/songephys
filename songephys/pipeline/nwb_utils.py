@@ -933,7 +933,7 @@ class AddKilosortUnits(luigi.Task):
                 
                 for i, cluster in ks_cluster_info.iterrows():
                     if cluster['group'] != 'noise':
-                        if (cluster['cluster_id'], dir) not in zip(nwbfile.units['kilosort_id'], nwbfile.units['kilosort_dir']):
+                        if (cluster['cluster_id'], ks_dir_name) not in zip(nwbfile.units['kilosort_id'], nwbfile.units['kilosort_dir']):
                             print("Adding unit %d from %s"%(cluster['cluster_id'], dir))
                             nwbfile.add_unit(
                                 spike_times=ks_spike_times[ks_spike_cluster == cluster['cluster_id']],
