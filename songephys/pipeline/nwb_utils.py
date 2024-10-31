@@ -722,7 +722,7 @@ class AddRippleEventsNWB(luigi.Task):
             for ch, result in enumerate(results):
                 for e in result:
                     conv_factor = motion.rate / fs
-                    motion_ts = motion.data[int(e * conv_factor):int((e['event']+e['duration'])*conv_factor)]
+                    motion_ts = motion.data[int(e['event'] * conv_factor):int((e['event']+e['duration'])*conv_factor)]
                     putative_ripples.add_interval(
                         start_time=e['event']/fs,
                         stop_time=(e['event']+e['duration'])/fs,
