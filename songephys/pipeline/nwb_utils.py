@@ -1193,7 +1193,7 @@ class AddPyoperantTrials(luigi.Task):
                             )
             # now lets add the stims to the nwb
             all_stims_df = pd.DataFrame(all_stims)
-            stim_root_dir = project_cfg['LOCAL_RAW_FILES']['stimuli_drive']
+            stim_root_dir = project_config['LOCAL_RAW_FILES']['stimuli_drive']
             # now save all unique stims
             for stim, stim_df in all_stims_df.groupby('stim_name'):
                 # find the stim in the Stimuli Folder
