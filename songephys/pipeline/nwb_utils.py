@@ -200,37 +200,12 @@ class NWBIntervalsTarget(luigi.Target):
                 pass
         io.write(nwbfile)
         io.close()
-
-class NWBStimulusTarget(luigi.Target):
-    def __init__(self, nwbfile, *target_names):
-        self.path = nwbfile
-        self.target_names = target_names
-    def exists(self):
-        if not os.path.exists(self.path):
-            return False
-        io = NWBHDF5IO(self.path, 'r')
-        nwbfile = io.read()
-        exists = all([x in nwbfile.stimulus for x in self.target_names])
-        io.close()
-        return exists
-    
-    def data(self):
-        io = NWBHDF5IO(self.path, 'r')
-        nwbfile = io.read()
-        return dict({
-            x: nwbfile.stimulus[x] for x in self.target_names
-        })
-    
-    def delete(self):
-        io = NWBHDF5IO(self.path, 'r+')
-        nwbfile = io.read()
-        for x in self.target_names:
-            try:
-                nwbfile.stimulus.pop(x)
-            except KeyError:
-                pass
-        io.write(nwbfile)
-        io.close()
+class PyoperantStimuli(pynwb.TimeSeries):
+    def __init__(self, name, data, rate, bird_name,category,rendition_id, **kwargs):
+        super().__init__(name=name, data=data, unit='wav', rate=float(rate), **kwargs)
+        self.bird_name = bird_name
+        self.category = category
+        self.rendition_id = rendition_id
 class NWBProcessingTarget(luigi.Target):
     def __init__(self, nwbfile, processing_module, *target_names):
         self.path = nwbfile
@@ -1126,7 +1101,8 @@ class AddPyoperantTrials(luigi.Task):
                 'path': [],
                 'bird_name': [],
                 'stim_name': [],
-                'category': []
+                'category': [],
+                'rendition_id': []
             })
 
             # now we need to match the trial blocks with the operant experiments
@@ -1164,8 +1140,10 @@ class AddPyoperantTrials(luigi.Task):
                         start = audcode_event.timestamp if audcode_event is not None else (exp.trial_start_time(ix) - session_start).total_seconds()
                         end = (start + exp.trial_duration(ix).total_seconds())
                         all_stims['path'].append(trial.stimulus_name)
-                        all_stims['stim_name'].append(trial.stimulus_name.split('\\')[-1])
-                        all_stims['bird_name'].append(all_stims['stim_name'][-1].split('_')[3])
+                        stim_name = trial.stimulus_name.split('\\')[-1]
+                        all_stims['stim_name'].append(stim_name)
+                        all_stims['bird_name'].append(stim_name.split('_')[3])
+                        all_stims['rendition_id'].append(stim_name.strip('.wav').split('_')[-1])
 
                         if exp.experiment_type == 'operant':
                             all_stims['category'].append(trial.stimulus_name.split('\\')[-2])
@@ -1204,6 +1182,7 @@ class AddPyoperantTrials(luigi.Task):
                 # TODO: for now just take the first one
                 #       we should take the shortest one...
                 bird_name = stim_df['bird_name'].iloc[0]
+                rendition_id = stim_df['rendition_id'].iloc[0]
                 categories = stim_df['category'].unique()
                 if len(categories) > 1:
                     # take the non 'playback' one
@@ -1213,14 +1192,13 @@ class AddPyoperantTrials(luigi.Task):
                 stim_file = stim_files[0]
                 # now load the wav file
                 stim_data, stim_fs = sf.read(stim_file)
-                stim_ts = TimeSeries(
+                stim_ts = PyoperantStimuli(
                     name=stim,
                     data=stim_data,
-                    rate=float(stim_fs),
+                    rate=stim_fs,
                     bird_name = bird_name,
                     category = category,
-                    description="Stimulus %s"%stim,
-                    unit="wav"
+                    rendition_id=rendition_id
                 )
                 nwbfile.add_stimulus(stimulus=stim_ts)
                 
