@@ -1197,7 +1197,7 @@ class AddPyoperantTrials(luigi.Task):
             # now save all unique stims
             for stim, stim_df in all_stims_df.groupby('stim_name'):
                 # find the stim in the Stimuli Folder
-                stim_files = glob.glob(os.path.join(stim_dir,'**',stim))
+                stim_files = glob.glob(os.path.join(stim_root_dir,'**',stim))
                 if len(stim_files) == 0:
                     print("Stimulus %s not found"%stim)
                     continue
