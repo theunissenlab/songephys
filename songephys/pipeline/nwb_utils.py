@@ -201,10 +201,9 @@ class NWBIntervalsTarget(luigi.Target):
         io.write(nwbfile)
         io.close()
 class PyoperantStimuli(TimeSeries):
-    def __init__(self, name, data, rate, bird_name,category,rendition_id, **kwargs):
+    def __init__(self, name, data, rate, bird_name,rendition_id, **kwargs):
         super().__init__(name=name, data=data, unit='wav', rate=float(rate), **kwargs)
         self.bird_name = bird_name
-        self.category = category
         self.rendition_id = rendition_id
 class NWBProcessingTarget(luigi.Target):
     def __init__(self, nwbfile, processing_module, *target_names):
@@ -1107,13 +1106,6 @@ class AddPyoperantTrials(luigi.Task):
             pb_trial_intervals.add_column(name="stimuli_path", description="Path of Stimuli presented")
             pb_trial_intervals.add_column(name="stimuli_name", description="Name of Stimuli presented")
 
-            all_stims = dict({
-                'path': [],
-                'bird_name': [],
-                'stim_name': [],
-                'category': [],
-                'rendition_id': []
-            })
 
             # now we need to match the trial blocks with the operant experiments
             for exp in pyoperant_experiments:
@@ -1148,15 +1140,37 @@ class AddPyoperantTrials(luigi.Task):
                             audcode_event = None
 
                         start = audcode_event.timestamp if audcode_event is not None else (exp.trial_start_time(ix) - session_start).total_seconds()
-                        end = (start + exp.trial_duration(ix).total_seconds())
-                        all_stims['path'].append(trial.stimulus_name)
+                        stim_path = trial.stimulus_name
                         stim_name = trial.stimulus_name.split('\\')[-1]
-                        all_stims['stim_name'].append(stim_name)
-                        all_stims['bird_name'].append(stim_name.split('_')[3])
-                        all_stims['rendition_id'].append(stim_name.strip('.wav').split('_')[-1])
+                        
+
+                        # add the stim to the nwb file if it is not present already
+                        if stim_name not in nwbfile.stimulus:
+                            bird_name = stim_name.split('_')[3]
+                            rendition_id = stim_name.strip('.wav').split('_')[-1]
+                            stim_files = glob.glob(os.path.join(stim_root_dir,'**',stim_name),recursive=True)
+                            if len(stim_files) == 0:
+                                print("Stimulus %s not found"%stim)
+                                continue
+                            # TODO: for now just take the first one
+                            #       we should take the shortest one...
+                            #       but maybe this isnt an issue
+
+                            stim_file = stim_files[0]
+                            # now load the wav file
+                            stim_data, stim_fs = sf.read(stim_file)
+                            stim_ts = PyoperantStimuli(
+                                name=stim,
+                                data=stim_data,
+                                rate=stim_fs,
+                                bird_name = bird_name,
+                                rendition_id=rendition_id
+                            )
+                            nwbfile.add_stimulus(stimulus=stim_ts)
+
 
                         if exp.experiment_type == 'operant':
-                            all_stims['category'].append(trial.stimulus_name.split('\\')[-2])
+                            end = (start + exp.trial_duration(ix).total_seconds())
                             op_trial_intervals.add_interval(
                                 start_time=start,
                                 stop_time=end,
@@ -1169,7 +1183,7 @@ class AddPyoperantTrials(luigi.Task):
                                 timeseries=all_time_series
                             )
                         else:
-                            all_stims['category'].append('playback')
+                            end = (start + (nwbfile.stimulus[stim_name].data.shape[0] / nwbfile.stimulus[stim_name].rate))
                             pb_trial_intervals.add_interval(
                                 start_time=start,
                                 stop_time=end,
@@ -1179,38 +1193,6 @@ class AddPyoperantTrials(luigi.Task):
                                 stimuli_name=trial.stimulus_name.split('\\')[-1],
                                 timeseries=all_time_series
                             )
-            # now lets add the stims to the nwb
-            all_stims_df = pd.DataFrame(all_stims)
-            stim_root_dir = project_config['LOCAL_RAW_FILES']['stimuli_drive']
-            # now save all unique stims
-            for stim, stim_df in all_stims_df.groupby('stim_name'):
-                # find the stim in the Stimuli Folder
-                stim_files = glob.glob(os.path.join(stim_root_dir,'**',stim))
-                if len(stim_files) == 0:
-                    print("Stimulus %s not found"%stim)
-                    continue
-                # TODO: for now just take the first one
-                #       we should take the shortest one...
-                bird_name = stim_df['bird_name'].iloc[0]
-                rendition_id = stim_df['rendition_id'].iloc[0]
-                categories = stim_df['category'].unique()
-                if len(categories) > 1:
-                    # take the non 'playback' one
-                    category = [x for x in categories if x != 'playback'][0]
-                else:
-                    category = categories[0]
-                stim_file = stim_files[0]
-                # now load the wav file
-                stim_data, stim_fs = sf.read(stim_file)
-                stim_ts = PyoperantStimuli(
-                    name=stim,
-                    data=stim_data,
-                    rate=stim_fs,
-                    bird_name = bird_name,
-                    category = category,
-                    rendition_id=rendition_id
-                )
-                nwbfile.add_stimulus(stimulus=stim_ts)
                 
             # now save the trials to the nwb file
             nwbfile.add_time_intervals(pyoperant_experiments_intervals)
