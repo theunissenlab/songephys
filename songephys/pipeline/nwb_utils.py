@@ -669,14 +669,10 @@ class AddRippleEventsNWB(luigi.Task):
             
 
             # lets do this on each channel individually TODO could do this for all at the same time. but gets annoying with bad channels
-            for ch in range(lfp.data.shape[1]):
-                if ch in bad_channels:
-                    print("Skipping BAD channel %d"%ch)
-                    continue
-                print("Detecting ripples on channel %d"%ch)
+            def detect_ripples_on_channel(ch, lfp, bad_channels, ripple_threshold):
                 lfp_data = lfp.data[:,ch]
                 # hamming filter from 100 to 200 hz\\\n",
-                taps = signal.firwin(100, [100/(fs/2), 200/(fs/2)],pass_zero=False)
+                taps = signal.firwin(100, [100/(lfp.rate/2), 200/(lfp.rate/2)],pass_zero=False)
                 conv_result = signal.convolve(lfp_data, taps, mode='same',method='fft')
                 # do hilber transform on result
                 hilb = signal.hilbert(conv_result)
@@ -684,7 +680,7 @@ class AddRippleEventsNWB(luigi.Task):
                 zscored = zscore(filtered)
 
                 # now we need to find the peaks
-                above_thresh = np.where(zscored > self.ripple_threshold)[0]
+                above_thresh = np.where(zscored > ripple_threshold)[0]
                 # how many continuous events are there
                 diff = np.diff(above_thresh, axis=0)
                 events_boundaries = np.concatenate([[0],np.where(diff > 1)[0]+1, [above_thresh.shape[0]]])
@@ -709,24 +705,38 @@ class AddRippleEventsNWB(luigi.Task):
                 # remove duplicates
                 events, inds = np.unique(events, return_index=True)
                 event_durations = event_durations[inds]
-
-                # now we need to calculate the area over the curve for each event
-                for i, e in enumerate(events):
+                event_output = []
+                for event, duration in zip(events, event_durations):
+                    event_output.append(dict({
+                        'event': event,
+                        'duration': duration,
+                        'zscored': zscored[event:event+duration]
+                    }))
+                return event_output
+            
+            # in parallel detect ripples on each channel
+            from concurrent.futures import ThreadPoolExecutor
+            with ThreadPoolExecutor() as executor:
+                results = executor.map(lambda x: detect_ripples_on_channel(x, lfp, bad_channels, self.ripple_threshold), range(lfp.data.shape[1]))
+            # now add the results to the putative ripples
+            for ch, result in enumerate(results):
+                for e in result:
                     conv_factor = motion.rate / fs
-                    motion_ts = motion.data[int(e * conv_factor):int((e+event_durations[i])*conv_factor)]
+                    motion_ts = motion.data[int(e * conv_factor):int((e['event']+e['duration'])*conv_factor)]
                     putative_ripples.add_interval(
-                                start_time=e/fs,
-                                stop_time=(e+event_durations[i])/fs,
-                                duration=event_durations[i]/fs,
-                                peak_time=e/fs + np.argmax(zscored[e:e+event_durations[i]])/fs,
-                                peak_value=np.max(zscored[e:e+event_durations[i]]),
-                                channel=ch,
-                                AOC=np.sum(zscored[e:e+event_durations[i]]),
-                                motion_peak=np.max(motion_ts),
-                                motion_peak_time=np.argmax(motion_ts)/motion.rate,
-                                motion_avg=np.mean(motion_ts),
-                                timeseries=[lfp, motion]
-                            )
+                        start_time=e['event']/fs,
+                        stop_time=(e['event']+e['duration'])/fs,
+                        duration=e['duration']/fs,
+                        peak_time=e['event']/fs + np.argmax(e['zscored'])/fs,
+                        peak_value=np.max(e['zscored']),
+                        channel=ch,
+                        AOC=np.sum(e['zscored']),
+                        motion_peak=np.max(motion_ts),
+                        motion_peak_time=np.argmax(motion_ts)/motion.rate,
+                        motion_avg=np.mean(motion_ts),
+                        timeseries=[lfp, motion]
+                    )
+
             if 'ripples' not in nwb.processing:
                 nwb.create_processing_module(
                     name="ripples", description="Processed ripple events"
