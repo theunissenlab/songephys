@@ -1075,6 +1075,7 @@ class AddPyoperantTrials(luigi.Task):
             # first we need to find the csv files
             site_config = self.input()['site_config'].data()
             project_config = self.input()['project_config'].data()
+            stim_root_dir = project_config['LOCAL_RAW_FILES']['stimuli_drive']
             pyoperant_csvs = [os.path.join(project_config['LOCAL_RAW_FILES']['pyoperant_drive'],f) for f in site_config['filelist'] if f.endswith('trialdata.csv')]
             pyoperant_experiments = [PyoperantExperiment(x) for x in pyoperant_csvs]
 
@@ -1150,7 +1151,7 @@ class AddPyoperantTrials(luigi.Task):
                             rendition_id = stim_name.strip('.wav').split('_')[-1]
                             stim_files = glob.glob(os.path.join(stim_root_dir,'**',stim_name),recursive=True)
                             if len(stim_files) == 0:
-                                print("Stimulus %s not found"%stim)
+                                print("Stimulus %s not found"%stim_name)
                                 continue
                             # TODO: for now just take the first one
                             #       we should take the shortest one...
@@ -1160,7 +1161,7 @@ class AddPyoperantTrials(luigi.Task):
                             # now load the wav file
                             stim_data, stim_fs = sf.read(stim_file)
                             stim_ts = PyoperantStimuli(
-                                name=stim,
+                                name=stim_name,
                                 data=stim_data,
                                 rate=stim_fs,
                                 bird_name = bird_name,
