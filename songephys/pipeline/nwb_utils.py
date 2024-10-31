@@ -3,6 +3,7 @@ from uuid import uuid4
 import os
 import sys
 import json
+import glob
 
 import pandas as pd
 import luigi
@@ -932,7 +933,6 @@ class AddKilosortUnits(luigi.Task):
                 raise ValueError("Kilosort directory not found")
 
             if os.path.exists(os.path.join(ks_output_dir,'shank_0')):
-                import glob
                 shanks = glob.glob(os.path.join(ks_output_dir,'shank_*'))
                 ks_output_dirs = shanks
             else:
