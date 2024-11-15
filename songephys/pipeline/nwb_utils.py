@@ -291,7 +291,8 @@ class CreateSiteNWB(luigi.Task):
         device = nwbfile.create_device(name=probe_name, manufacturer='Cambridge Neurotech')
 
         # then make the electrode group for the probe
-        ml = site_config.get('ml_mm',.3) # mm, same for all probes TODO: Make this part of site_config optionally
+        ml = project_config['EPHYS'].get('ML', .3)
+        ap = project_config['EPHYS'].get('AP', 0)
         depth = site_config['depth_mm']
         electrode_group = nwbfile.create_electrode_group(
                 name=probe_name,
@@ -832,6 +833,7 @@ class AgglomerateRippleEventsNWB(luigi.Task):
             #nwb_io.close()
 
             # lets mark all ripples that occur during playback or operant events
+            # NB: This marks ripples that bridge between trials as in trial
             all_trials = np.concatenate([operant_events[['start_time', 'stop_time']].values, playback_events[['start_time', 'stop_time']].values])
             def check_if_ripple_in_trial(st, end, all_trials):
                 return any([any([(st > trial[0]) & (st < trial[1]) for trial in all_trials]) | any([(end > trial[0]) & (end < trial[1]) for trial in all_trials])])
@@ -1030,7 +1032,7 @@ class AddUnitValidIntervals(luigi.Task):
                 name="unit_intervals",
                 description="Valid intervals for each unit"
             )
-            unit_intervals.add_column(name='unit_id', description='The id of the unit in the nwb file that this interval corresponds to')
+            unit_intervals.add_column(name='unit_id', description='The id of the unit in the nwb file that this interval corresponds to',data=np.array([],dtype=int))
 
 
             for uid, unit in all_units.iterrows():
@@ -1141,29 +1143,30 @@ class AddPyoperantTrials(luigi.Task):
                 name="pyoperant_experiments",
                 description="Top level intervales for operant experiments, approximate start and stop times",
             )
-            pyoperant_experiments_intervals.add_column(name="experiment_type", description="Type of experiment (operant or playback)")
-            pyoperant_experiments_intervals.add_column(name="uid", description="Unique Identifier for experiment (base of filename)")
+            pyoperant_experiments_intervals.add_column(name="experiment_type", description="Type of experiment (operant or playback)",data=np.array([],dtype=str))
+            pyoperant_experiments_intervals.add_column(name="uid", description="Unique Identifier for experiment (base of filename)",data=np.array([],dtype=str))
 
             op_trial_intervals = TimeIntervals(
                 name="operant_trials",
                 description="Intervals for individual operant trials"
             )
-            op_trial_intervals.add_column(name="trial_num", description="Trial number")
-            op_trial_intervals.add_column(name="experiment_uid", description="Unique Identifier for experiment (base of filename)")
-            op_trial_intervals.add_column(name="stimuli_path", description="Path of Stimuli presented")
-            op_trial_intervals.add_column(name="stimuli_name", description="Name of Stimuli presented")
-            op_trial_intervals.add_column(name="response", description="Response made")
-            op_trial_intervals.add_column(name="correct", description="Correct response")
+            op_trial_intervals.add_column(name="trial_num", description="Trial number",data=np.array([],dtype=int))
+            op_trial_intervals.add_column(name="experiment_uid", description="Unique Identifier for experiment (base of filename)",data=np.array([],dtype=str))
+            op_trial_intervals.add_column(name="stimuli_path", description="Path of Stimuli presented",data=np.array([],dtype=str))
+            op_trial_intervals.add_column(name="stimuli_name", description="Name of Stimuli presented",data=np.array([],dtype=str))
+            op_trial_intervals.add_column(name="response", description="Response made",data=np.array([],dtype=bool))
+            op_trial_intervals.add_column(name="correct", description="Correct response",data=np.array([],dtype=bool))
+            any_op = False
 
             pb_trial_intervals = TimeIntervals(
                 name="playback_trials",
                 description="Intervals for individual playback trials"
             )
-            pb_trial_intervals.add_column(name="trial_num", description="Trial number")
-            pb_trial_intervals.add_column(name="experiment_uid", description="Unique Identifier for experiment (base of filename)")
-            pb_trial_intervals.add_column(name="stimuli_path", description="Path of Stimuli presented")
-            pb_trial_intervals.add_column(name="stimuli_name", description="Name of Stimuli presented")
-
+            pb_trial_intervals.add_column(name="trial_num", description="Trial number",data=np.array([],dtype=int))
+            pb_trial_intervals.add_column(name="experiment_uid", description="Unique Identifier for experiment (base of filename)",data=np.array([],dtype=str))
+            pb_trial_intervals.add_column(name="stimuli_path", description="Path of Stimuli presented",data=np.array([],dtype=str))
+            pb_trial_intervals.add_column(name="stimuli_name", description="Name of Stimuli presented",data=np.array([],dtype=str))
+            any_pb = False
 
             # now we need to match the trial blocks with the operant experiments
             for exp in pyoperant_experiments:
@@ -1251,7 +1254,7 @@ class AddPyoperantTrials(luigi.Task):
                                 stimuli_name=trial.stimulus_name.split('\\')[-1],
                                 timeseries=all_time_series
                             )
-                
+            
             # now save the trials to the nwb file
             nwbfile.add_time_intervals(pyoperant_experiments_intervals)
             nwbfile.add_time_intervals(op_trial_intervals)
