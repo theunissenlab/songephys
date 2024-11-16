@@ -382,12 +382,12 @@ class AddDigitalEventsNWB(luigi.Task):
         ttls_table = EventsTable(name='ttl_events',description="Metadata about TTL events", target_tables={"event_type": ttl_types_table})
         
         audcode_table = EventsTable(name="audcode_events", description="Precise time and metadata about stimuli played", target_tables={"event_type": ttl_types_table})
-        audcode_table.add_column(name="code", description='stimuli code')
-        audcode_table.add_column(name="object", description='object name')
-        audcode_table.add_column(name="action", description='action name')
-        audcode_table.add_column(name="repetition", description='repetition number')
-        audcode_table.add_column(name="trial", description='trial number')
-        audcode_table.add_column(name="md5", description='md5 hash of the stimulus file')
+        audcode_table.add_column(name="code", description='stimuli code',data=np.array([],dtype=str))
+        audcode_table.add_column(name="object", description='object name', data=np.array([],dtype=str))
+        audcode_table.add_column(name="action", description='action name', data=np.array([],dtype=str))
+        audcode_table.add_column(name="repetition", description='repetition number', data=np.array([],dtype=int))
+        audcode_table.add_column(name="trial", description='trial number',  data=np.array([],dtype=int))
+        audcode_table.add_column(name="md5", description='md5 hash of the stimulus file', data=np.array([],dtype=str))
         
         # now load the digital memmap and fill in the ttl table and events table
         digital_memmap_info = json.load(open(self.input()['site_digital_memmap']['info'].path, 'r'))
