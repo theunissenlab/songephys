@@ -640,17 +640,17 @@ def detect_ripples_on_channel(ch, lfp_data, fs, ripple_threshold):
     # now expand each event to the previous 0 crossing and the next 0 crossing
     # TODO we can increase 0 to .5 or 1 if these events are too big
     zero_crossings = np.where(np.diff(np.sign(zscored)))[0]
-    for i in range(events.shape[0]):
-        start = above_thresh[events[i]]
-        end = above_thresh[events[i]] + event_durations[i]
-        zc_before = zero_crossings[zero_crossings < start]
-        if len(zc_before) > 0:
-            start = zc_before[zc_before > start][-1]
-        zc_after = zero_crossings[zero_crossings > end]
-        if len(zc_after) > 0:
-            end = zc_after[zc_after < end][0]
-        events[i] = start
-        event_durations[i] = end-start
+
+    # now we find the index of the zero crossing that is closest to the start and end of the event
+    event_starts = above_thresh[events]
+    event_ends = above_thresh[events] + event_durations
+    zc_start_inds = np.searchsorted(zero_crossings, event_starts) - 1
+    event_starts[zc_start_inds >= 0] = zero_crossings[zc_start_inds[zc_start_inds >= 0]]
+    zc_end_inds = np.searchsorted(zero_crossings, event_ends)
+    event_ends[zc_end_inds < zero_crossings.shape[0]] = zero_crossings[zc_end_inds[zc_end_inds < zero_crossings.shape[0]]]
+
+    events = event_starts
+    event_durations = event_ends - event_starts
 
     # remove duplicates
     events, inds = np.unique(events, return_index=True)
