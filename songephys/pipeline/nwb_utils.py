@@ -839,9 +839,14 @@ class AgglomerateRippleEventsNWB(luigi.Task):
             # lets mark all ripples that occur during playback or operant events
             # NB: This marks ripples that bridge between trials as in trial
             all_trials = np.concatenate([operant_events[['start_time', 'stop_time']].values, playback_events[['start_time', 'stop_time']].values])
-            def check_if_ripple_in_trial(st, end, all_trials):
-                return any([any([(st > trial[0]) & (st < trial[1]) for trial in all_trials]) | any([(end > trial[0]) & (end < trial[1]) for trial in all_trials])])
-            rip_df['in_trial'] = rip_df.apply(lambda x: check_if_ripple_in_trial(x['start_time'], x['stop_time'], all_trials), axis=1)
+            all_trials = all_trials[all_trials[:,0].argsort()]
+            rip_df['in_trial'] = np.searchsorted(all_trials[:,0], rip_df['stop_time'].values) - np.searchsorted(all_trials[:,1], rip_df['start_time'])  == 1
+
+
+            # def check_if_ripple_in_trial(st, end, all_trials):
+
+            #     return any([any([(st > trial[0]) & (st < trial[1]) for trial in all_trials]) | any([(end > trial[0]) & (end < trial[1]) for trial in all_trials])])
+            # rip_df['in_trial'] = rip_df.apply(lambda x: check_if_ripple_in_trial(x['start_time'], x['stop_time'], all_trials), axis=1)
 
             # agglomerate ripples into events
             # now to group ripples into events, we can filter out ripples with motion peaks greater than 1.5 stdev
