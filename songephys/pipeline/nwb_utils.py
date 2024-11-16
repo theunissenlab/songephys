@@ -1123,30 +1123,8 @@ class AddPyoperantTrials(luigi.Task):
         with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
             nwbfile = nwb_io.read()
             audcode_events = nwbfile.acquisition['audcode_events'].to_dataframe()
-            session_start = nwbfile.session_start_time.replace(tzinfo=None)
-            audcode_events['datetime'] = [session_start + timedelta(seconds=x) for x in audcode_events['timestamp']]
-
-            # all of these TimeIntervals are relevant to all time series
-            all_time_series = [c for c in nwbfile.all_children() if isinstance(c, TimeSeries)]
-
-            # find contiguous blocks of audcode trials
-            trial_blocks = np.split(audcode_events,np.where(np.diff(audcode_events.trial) != 1)[0]+1)
-            if len(trial_blocks) == 0:
-                trial_block_starts = []
-                trial_block_ends = []
-            else:
-                trial_block_starts = [x.datetime.iloc[0] for x in trial_blocks]
-                trial_block_ends = [x.datetime.iloc[-1] for x in trial_blocks]
-
-            # now we need to match each of these blocks with the corresponding csv files
-            # first we need to find the csv files
-            site_config = self.input()['site_config'].data()
-            project_config = self.input()['project_config'].data()
-            stim_root_dir = project_config['LOCAL_RAW_FILES']['stimuli_drive']
-            pyoperant_csvs = [os.path.join(project_config['LOCAL_RAW_FILES']['pyoperant_drive'],f) for f in site_config['filelist'] if f.endswith('trialdata.csv')]
-            pyoperant_experiments = [PyoperantExperiment(x) for x in pyoperant_csvs]
-
-            # create the different timeintervales we will keep track of
+            
+            # create the different timeintervals we will keep track of
             pyoperant_experiments_intervals = TimeIntervals(
                 name="pyoperant_experiments",
                 description="Top level intervales for operant experiments, approximate start and stop times",
@@ -1164,7 +1142,6 @@ class AddPyoperantTrials(luigi.Task):
             op_trial_intervals.add_column(name="stimuli_name", description="Name of Stimuli presented",data=np.array([],dtype=str))
             op_trial_intervals.add_column(name="response", description="Response made",data=np.array([],dtype=bool))
             op_trial_intervals.add_column(name="correct", description="Correct response",data=np.array([],dtype=bool))
-            any_op = False
 
             pb_trial_intervals = TimeIntervals(
                 name="playback_trials",
@@ -1174,95 +1151,123 @@ class AddPyoperantTrials(luigi.Task):
             pb_trial_intervals.add_column(name="experiment_uid", description="Unique Identifier for experiment (base of filename)",data=np.array([],dtype=str))
             pb_trial_intervals.add_column(name="stimuli_path", description="Path of Stimuli presented",data=np.array([],dtype=str))
             pb_trial_intervals.add_column(name="stimuli_name", description="Name of Stimuli presented",data=np.array([],dtype=str))
-            any_pb = False
-
-            # now we need to match the trial blocks with the operant experiments
-            for exp in pyoperant_experiments:
-                if exp.ntrials > 0:
-                    # add the top level interval
-                    pyoperant_experiments_intervals.add_interval(
-                        start_time=(exp.experiment_start_time - session_start).total_seconds(),
-                        stop_time=(exp.experiment_end_time - session_start).total_seconds(),
-                        experiment_type=exp.experiment_type,
-                        uid=exp.uid,
-                        timeseries=all_time_series
-                    )
-
-                    # now find the trialblock that corresponds to this experiment
-                    first_trial_time = exp.trial_start_time(1)
-                    last_trial_time = exp.trial_end_time(exp.ntrials)
-                    # find the trial block that starts at the closest time to the first trial and ends at the closest time to the last trial
-                    trial_block_ix = np.argmin([abs(x-first_trial_time) for x in trial_block_starts])
-                    trial_block = trial_blocks[trial_block_ix]
-                    # now lets see if all the trials are here
-                    if len(trial_block) != exp.ntrials:
-                        print("Experiment %s has fewer trials than expected"%exp.uid)
-                        print("Expected %d, found %d"%(exp.ntrials, len(trial_block)))
-
-                    for ix, trial in exp.data.iterrows():
-                        if ix in trial_block.trial.values:
-                            # TODO can assert if there is more than one trial with the same number
-                            audcode_event = trial_block[trial_block.trial == ix].iloc[0]
-                        else:
-                            # TODO can do some funny shit with TTL Pulses here
-                            print("Trial %d not found in trial block for experiment %s"%(ix, exp.uid))
-                            audcode_event = None
-
-                        start = audcode_event.timestamp if audcode_event is not None else (exp.trial_start_time(ix) - session_start).total_seconds()
-                        stim_path = trial.stimulus_name
-                        stim_name = trial.stimulus_name.split('\\')[-1]
-                        
-
-                        # add the stim to the nwb file if it is not present already
-                        if stim_name not in nwbfile.stimulus:
-                            bird_name = stim_name.split('_')[3]
-                            rendition_id = stim_name.strip('.wav').split('_')[-1]
-                            stim_files = glob.glob(os.path.join(stim_root_dir,'**',stim_name),recursive=True)
-                            if len(stim_files) == 0:
-                                print("Stimulus %s not found"%stim_name)
-                                continue
-                            # TODO: for now just take the first one
-                            #       we should take the shortest one...
-                            #       but maybe this isnt an issue
-
-                            stim_file = stim_files[0]
-                            # now load the wav file
-                            stim_data, stim_fs = sf.read(stim_file)
-                            stim_ts = PyoperantStimuli(
-                                name=stim_name,
-                                data=stim_data,
-                                rate=stim_fs,
-                                bird_name = bird_name,
-                                rendition_id=rendition_id
-                            )
-                            nwbfile.add_stimulus(stimulus=stim_ts)
 
 
-                        if exp.experiment_type == 'operant':
-                            end = (start + exp.trial_duration(ix).total_seconds())
-                            op_trial_intervals.add_interval(
-                                start_time=start,
-                                stop_time=end,
-                                trial_num=ix,
-                                experiment_uid=exp.uid,
-                                stimuli_path=trial.stimulus_name,
-                                stimuli_name=trial.stimulus_name.split('\\')[-1],
-                                response=trial.response,
-                                correct=trial.correct,
-                                timeseries=all_time_series
-                            )
-                        else:
-                            end = (start + (nwbfile.stimulus[stim_name].data.shape[0] / nwbfile.stimulus[stim_name].rate))
-                            pb_trial_intervals.add_interval(
-                                start_time=start,
-                                stop_time=end,
-                                trial_num=ix,
-                                experiment_uid=exp.uid,
-                                stimuli_path=trial.stimulus_name,
-                                stimuli_name=trial.stimulus_name.split('\\')[-1],
-                                timeseries=all_time_series
-                            )
-            
+            if len(audcode_events) == 0:
+                print("No audcode events found... skipping adding experiments")
+            else:
+                session_start = nwbfile.session_start_time.replace(tzinfo=None)
+                audcode_events['datetime'] = [session_start + timedelta(seconds=x) for x in audcode_events['timestamp']]
+
+                # all of these TimeIntervals are relevant to all time series
+                all_time_series = [c for c in nwbfile.all_children() if isinstance(c, TimeSeries)]
+
+                # find contiguous blocks of audcode trials
+                trial_blocks = np.split(audcode_events,np.where(np.diff(audcode_events.trial) != 1)[0]+1)
+                if len(trial_blocks) == 0:
+                    trial_block_starts = []
+                    trial_block_ends = []
+                else:
+                    trial_block_starts = [x.datetime.iloc[0] for x in trial_blocks]
+                    trial_block_ends = [x.datetime.iloc[-1] for x in trial_blocks]
+
+                # now we need to match each of these blocks with the corresponding csv files
+                # first we need to find the csv files
+                site_config = self.input()['site_config'].data()
+                project_config = self.input()['project_config'].data()
+                stim_root_dir = project_config['LOCAL_RAW_FILES']['stimuli_drive']
+                pyoperant_csvs = [os.path.join(project_config['LOCAL_RAW_FILES']['pyoperant_drive'],f) for f in site_config['filelist'] if f.endswith('trialdata.csv')]
+                pyoperant_experiments = [PyoperantExperiment(x) for x in pyoperant_csvs]
+
+                
+
+                # now we need to match the trial blocks with the operant experiments
+                for exp in pyoperant_experiments:
+                    if exp.ntrials > 0:
+                        # add the top level interval
+                        pyoperant_experiments_intervals.add_interval(
+                            start_time=(exp.experiment_start_time - session_start).total_seconds(),
+                            stop_time=(exp.experiment_end_time - session_start).total_seconds(),
+                            experiment_type=exp.experiment_type,
+                            uid=exp.uid,
+                            timeseries=all_time_series
+                        )
+
+                        # now find the trialblock that corresponds to this experiment
+                        first_trial_time = exp.trial_start_time(1)
+                        last_trial_time = exp.trial_end_time(exp.ntrials)
+                        # find the trial block that starts at the closest time to the first trial and ends at the closest time to the last trial
+                        trial_block_ix = np.argmin([abs(x-first_trial_time) for x in trial_block_starts])
+                        trial_block = trial_blocks[trial_block_ix]
+                        # now lets see if all the trials are here
+                        if len(trial_block) != exp.ntrials:
+                            print("Experiment %s has fewer trials than expected"%exp.uid)
+                            print("Expected %d, found %d"%(exp.ntrials, len(trial_block)))
+
+                        for ix, trial in exp.data.iterrows():
+                            if ix in trial_block.trial.values:
+                                # TODO can assert if there is more than one trial with the same number
+                                audcode_event = trial_block[trial_block.trial == ix].iloc[0]
+                            else:
+                                # TODO can do some funny shit with TTL Pulses here
+                                print("Trial %d not found in trial block for experiment %s"%(ix, exp.uid))
+                                audcode_event = None
+
+                            start = audcode_event.timestamp if audcode_event is not None else (exp.trial_start_time(ix) - session_start).total_seconds()
+                            stim_path = trial.stimulus_name
+                            stim_name = trial.stimulus_name.split('\\')[-1]
+                            
+
+                            # add the stim to the nwb file if it is not present already
+                            if stim_name not in nwbfile.stimulus:
+                                bird_name = stim_name.split('_')[3]
+                                rendition_id = stim_name.strip('.wav').split('_')[-1]
+                                stim_files = glob.glob(os.path.join(stim_root_dir,'**',stim_name),recursive=True)
+                                if len(stim_files) == 0:
+                                    print("Stimulus %s not found"%stim_name)
+                                    continue
+                                # TODO: for now just take the first one
+                                #       we should take the shortest one...
+                                #       but maybe this isnt an issue
+
+                                stim_file = stim_files[0]
+                                # now load the wav file
+                                stim_data, stim_fs = sf.read(stim_file)
+                                stim_ts = PyoperantStimuli(
+                                    name=stim_name,
+                                    data=stim_data,
+                                    rate=stim_fs,
+                                    bird_name = bird_name,
+                                    rendition_id=rendition_id
+                                )
+                                nwbfile.add_stimulus(stimulus=stim_ts)
+
+
+                            if exp.experiment_type == 'operant':
+                                end = (start + exp.trial_duration(ix).total_seconds())
+                                op_trial_intervals.add_interval(
+                                    start_time=start,
+                                    stop_time=end,
+                                    trial_num=ix,
+                                    experiment_uid=exp.uid,
+                                    stimuli_path=trial.stimulus_name,
+                                    stimuli_name=trial.stimulus_name.split('\\')[-1],
+                                    response=trial.response,
+                                    correct=trial.correct,
+                                    timeseries=all_time_series
+                                )
+                            else:
+                                end = (start + (nwbfile.stimulus[stim_name].data.shape[0] / nwbfile.stimulus[stim_name].rate))
+                                pb_trial_intervals.add_interval(
+                                    start_time=start,
+                                    stop_time=end,
+                                    trial_num=ix,
+                                    experiment_uid=exp.uid,
+                                    stimuli_path=trial.stimulus_name,
+                                    stimuli_name=trial.stimulus_name.split('\\')[-1],
+                                    timeseries=all_time_series
+                                )
+                
             # now save the trials to the nwb file
             nwbfile.add_time_intervals(pyoperant_experiments_intervals)
             nwbfile.add_time_intervals(op_trial_intervals)
