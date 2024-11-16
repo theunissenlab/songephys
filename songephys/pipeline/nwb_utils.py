@@ -644,9 +644,11 @@ def detect_ripples_on_channel(ch, lfp_data, fs, ripple_threshold):
         start = above_thresh[events[i]]
         end = above_thresh[events[i]] + event_durations[i]
         zc_before = zero_crossings[zero_crossings < start]
-        start = zc_before[zc_before > start][-1] if zc_before.shape[0] > 0 else start
+        if len(zc_before) > 0:
+            start = zc_before[zc_before > start][-1]
         zc_after = zero_crossings[zero_crossings > end]
-        end = zc_after[zc_after < end][0] if zc_after.shape[0] > 0 else end
+        if len(zc_after) > 0:
+            end = zc_after[zc_after < end][0]
         events[i] = start
         event_durations[i] = end-start
 
