@@ -1127,8 +1127,12 @@ class AddPyoperantTrials(luigi.Task):
 
             # find contiguous blocks of audcode trials
             trial_blocks = np.split(audcode_events,np.where(np.diff(audcode_events.trial) != 1)[0]+1)
-            trial_block_starts = [x.datetime.iloc[0] for x in trial_blocks]
-            trial_block_ends = [x.datetime.iloc[-1] for x in trial_blocks]
+            if len(trial_blocks) == 0:
+                trial_block_starts = []
+                trial_block_ends = []
+            else:
+                trial_block_starts = [x.datetime.iloc[0] for x in trial_blocks]
+                trial_block_ends = [x.datetime.iloc[-1] for x in trial_blocks]
 
             # now we need to match each of these blocks with the corresponding csv files
             # first we need to find the csv files
