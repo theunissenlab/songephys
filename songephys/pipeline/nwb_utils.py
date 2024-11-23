@@ -282,7 +282,7 @@ class CreateSiteNWB(luigi.Task):
         probes = dict({
             "P1": 'cambridge_neurotech_assy_236_P1.prb', # 4 shank
             "H10": 'cambridge_H10.prb', # 2 shank
-            "M16": 'microprobes_16ch.prb' # microprobes with 16 wires
+            "M16": 'microprobes_16ch.json' # microprobes with 16 wires
         })
         probe_name = probes[project_config["EPHYS"].get('PROBETYPE','H10')]
         prb = kilosort.io.load_probe(os.path.join(kilosort.PROBE_DIR,probe_name))
@@ -395,10 +395,9 @@ class AddDigitalEventsNWB(luigi.Task):
 
         if digital_memmap_info['num_channels'] == 1:
             # if digital memmap is only one channel then we need to deinterleave them, if not then it is done for us
-            digital_memmap = np.memmap(self.input()['site_digital_memmap']['bin'].path, dtype='uint16', mode='r')
-            num_chans = int(np.log2(np.max(digital_memmap)))
+            dig_trace = np.memmap(self.input()['site_digital_memmap']['bin'].path, dtype='uint16', mode='r')
+            num_chans = int(np.log2(np.max(dig_trace)))
 
-            dig_trace = np.memmap(self.input()["dig_memmap"].path, dtype='uint16', mode='r')
             #dig_trace = multirecording.get_traces().flatten()
             # NB: np.unpackbits does this for 8 bit unsigned ints. This works for us as long as we are not using more than 8 channels
             for i in range(num_chans):
@@ -487,7 +486,7 @@ class AddDigitalEventsNWB(luigi.Task):
                                 falling = falling[1:]
                                 assert(len(rising) == len(falling))
                             # if the last falling is before the last rising then we need to add a falling at the end that is the total duration
-                            if rising[-1] < falling[-1]:
+                            if rising[-1] > falling[-1]:
                                 falling = np.append(falling, len(dig_data))
                                 assert(len(rising) == len(falling))              
                     for r, f in zip(rising, falling):
