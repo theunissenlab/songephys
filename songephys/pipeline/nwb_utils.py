@@ -1311,7 +1311,7 @@ class GenerateAcquisitionNWB(luigi.WrapperTask):
             'lfp': AddLFPNWB(site_dir=self.site_dir),
             'motion': AddMotionNWB(site_dir=self.site_dir),
             'audio': AddAudioNWB(site_dir=self.site_dir),
-            'ripples': AgglomerateRippleEventsNWB(site_dir=self.site_dir),
+            #'ripples': AgglomerateRippleEventsNWB(site_dir=self.site_dir), # not everyone needs to do this
             'operant': AddPyoperantTrials(site_dir=self.site_dir)
         }
     

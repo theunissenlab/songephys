@@ -86,7 +86,8 @@ def generate_config_file(experiment_name, out_path=None, data_dir = os.environ.g
     expeiriment_cfg['EPHYS'] = dict()
     ephys_cfg = expeiriment_cfg['EPHYS']
     ephys_cfg["ELECTRODE_START"] = 0
-    ephys_cfg["ELECTRODE_N"] = 32
+    ephys_cfg["ELECTRODE_N"] = 64
+    ephys_cfg['PROBE'] = 'H10'
     ephys_cfg["ML"] = 0 # Medial-Lateral
     ephys_cfg["AP"] = 0 # Anterior-Posterior
 
