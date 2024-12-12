@@ -1,0 +1,11 @@
+name: conda_se
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+    - python==3.9
+    - ipython
+    - pip
+    - pip:
+      - git+ssh://git@github.com/theunissenlab/python-neo.git@songephys-module-neo#egg=neo
+      - kilosort

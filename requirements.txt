@@ -7,7 +7,6 @@ jupyter>=1.0.0
 luigi>=2.6.2
 matplotlib>=2.2.2
 networkx>=2.1
-nixio==1.3.1
 numpy>=1.16.0
 pandas>=1.1.5
 scikit-learn>=0.21.2
@@ -23,25 +22,3 @@ wavio>=0.0.4
 soundfile
 PyYAML>=5.1
 click
-
-# Load intan rhd format code
-# -e git+https://github.com/theunissenlab/load_intan_rhd_format.git@master#egg=intanutil
-
-# Modified neo package
-# -e git+https://github.com/theunissenlab/python-neo.git@master#egg=neo
-
-# Google drive api access
-# -e git+https://github.com/theunissenlab/gdrive_python.git@v0.1.1#egg=gdrive_access
-
-# Spike sorting library
-# For now, install by cloning and setting the path
-# -e git://github.com/kevinyu/solid-garbanzo.git@master#egg=suss
-
-# Isosplit
-# -e git+https://github.com/magland/isosplit5_python.git@master#egg=isosplit5
-
-# Soundsig (Need latest master of soundsig for bug fixes)
-# -e git+https://github.com/theunissenlab/soundsig.git@master#egg=soundsig
-# -e git+https://github.com/theunissenlab/soundsep2.git@main#egg=soundsep
-
-# --process-dependency-links
