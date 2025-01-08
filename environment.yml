@@ -8,4 +8,12 @@ dependencies:
     - pip
     - pip:
       - git+ssh://git@github.com/theunissenlab/python-neo.git@songephys-module-neo#egg=neo
+      - pynwb
       - kilosort
+      - wavemap
+      - isosplit5
+      - click
+      - luigi
+      - soundsig
+      - scipy==1.9.3
+      - spikeinterface

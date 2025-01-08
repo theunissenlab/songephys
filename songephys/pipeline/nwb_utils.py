@@ -20,19 +20,13 @@ from concurrent.futures import ProcessPoolExecutor
 from pynwb import NWBHDF5IO, NWBFile
 from pynwb import validate
 from pynwb.file import LabMetaData
-from pynwb.base import TimeSeries
+from pynwb.base import TimeSeries, DynamicTable
 from pynwb.epoch import TimeIntervals
 from pynwb.behavior import BehavioralTimeSeries
 from pynwb.ecephys import LFP, ElectricalSeries
 import kilosort
 
 #from neo.rawio.intanrawio import read_rhd_signal_groups
-from ndx_events import (
-    EventsTable,
-    CategoricalVectorData,
-    MeaningsTable,
-    NdxEventsNWBFile,
-)
 
 from ..preprocess.sound.playback_utils import convert_raw_digital_to_metadata, convert_pyoperant_operant_csvs, _get_stim_dirs, convert_pyoperant_playback_csvs
 
@@ -178,38 +172,6 @@ class NWBAcquisitionTarget(luigi.Target):
         io.close()
 
 
-class NWBEventsTarget(luigi.Target):
-    def __init__(self, nwbfile, *target_names):
-        self.path = nwbfile
-        self.target_names = target_names
-    def exists(self):
-        if not os.path.exists(self.path):
-            return False
-        io = NWBHDF5IO(self.path, 'r')
-        nwbfile = io.read()
-        exists = all([x in nwbfile.events for x in self.target_names])
-        io.close()
-        return exists
-    
-    def data(self):
-        io = NWBHDF5IO(self.path, 'r')
-        nwbfile = io.read()
-        return dict({
-            x: nwbfile.events[x] for x in self.target_names
-        })
-    
-    def delete(self):
-        io = NWBHDF5IO(self.path, 'r+')
-        nwbfile = io.read()
-        for x in self.target_names:
-            try:
-                nwbfile.events.pop(x)
-            except KeyError:
-                pass
-        io.write(nwbfile)
-        io.close()
-
-
 class NWBIntervalsTarget(luigi.Target):
     def __init__(self, nwbfile, *target_names):
         self.path = nwbfile
@@ -304,8 +266,7 @@ class CreateSiteNWB(luigi.Task):
         start_time = min(start_times)
 
         # first init the NWB file
-        # NOTE: For now, we have to use NdxEventsNWBFile, until NWBEP001 is merged into the core NWB schema
-        nwbfile = NdxEventsNWBFile(
+        nwbfile = NWBFile(
             session_description=project_config['EXPERIMENT_NAME'],
             identifier=str(uuid4()), # random uuid
             session_start_time=start_time, # TODO: Get time from the rhd file
@@ -378,7 +339,7 @@ class AddDigitalEventsNWB(luigi.Task):
         }
 
     def output(self):
-        return NWBEventsTarget(self.input()['site_nwb'].path, 'audcode_events', 'ttl_events')
+        return NWBAcquisitionTarget(self.input()['site_nwb'].path, 'audcode_events', 'ttl_events')
     
     def run(self):
         site_config = self.input()['site_config'].data()
@@ -391,29 +352,15 @@ class AddDigitalEventsNWB(luigi.Task):
         else:
             digital_channel_names = ['AUDCODE', 'TTL', 'BUTTON', 'FEEDER', 'SEED', 'HOUSE']
 
-        # make the ttl types table
-        ttl_types_table = MeaningsTable(name="event_types", description="Metadata about TTL types")
-        ttl_types_table.add_row(value=0, meaning="AUDCODE")
-        ttl_types_table.add_row(value=1, meaning="TTL")
-        ttl_types_table.add_row(value=2, meaning="BUTTON")
-        ttl_types_table.add_row(value=3, meaning="FEEDER")
-        ttl_types_table.add_row(value=4, meaning="SEED")
-        ttl_types_table.add_row(value=5, meaning="HOUSE")
-
-        ttl_type_column = CategoricalVectorData(
-            name="ttl_type", description="Integer value of the TTL pulse", meanings=ttl_types_table
-        )
-        # make the ttl types table
-        audcode_types_table = MeaningsTable(name="audcode_types", description="Metadata about TTL types")
-        audcode_types_table.add_row(value=0, meaning="AUDCODE")
-        audcode_type_column = CategoricalVectorData(
-            name="audcode_type", description="Integer value of the TTL pulse", meanings=audcode_types_table
-        )
-
         # now make the ttls table
-        ttls_table = EventsTable(name='ttl_events',description="Metadata about TTL events", columns=[ttl_type_column], meanings_tables=[ttl_types_table])
-        
-        audcode_table = EventsTable(name="audcode_events", description="Precise time and metadata about stimuli played", columns=[audcode_type_column], meanings_tables=[audcode_types_table])
+        ttls_table = DynamicTable(name="ttl_events", description="Precise time and metadata about TTL pulses")
+        ttls_table.add_column(name="timestamp", description='time of the TTL pulse', data=np.array([],dtype=float))
+        ttls_table.add_column(name="ttl_type", description='type of the TTL pulse', data=np.array([],dtype=int))
+        ttls_table.add_column(name='ttl_name', description='name of the TTL pulse', data=np.array([],dtype=str))
+        ttls_table.add_column(name="duration", description='duration of the TTL pulse', data=np.array([],dtype=float))  
+
+        audcode_table = DynamicTable(name="audcode_events", description="Precise time and metadata about stimuli played")
+        audcode_table.add_column(name="timestamp", description='time of the TTL pulse', data=np.array([],dtype=float))
         audcode_table.add_column(name="code", description='stimuli code',data=np.array([],dtype=str))
         audcode_table.add_column(name="object", description='object name', data=np.array([],dtype=str))
         audcode_table.add_column(name="action", description='action name', data=np.array([],dtype=str))
@@ -441,7 +388,6 @@ class AddDigitalEventsNWB(luigi.Task):
                         t, metadata = stim
                         audcode_table.add_row(
                             timestamp=t/fs,
-                            audcode_type=i,
                             code=metadata['code'],
                             object=metadata['object'],
                             action=metadata['action'],
@@ -475,6 +421,7 @@ class AddDigitalEventsNWB(luigi.Task):
                         ttls_table.add_row(
                             timestamp=r/fs,
                             ttl_type=i,
+                            ttl_name=digital_channel_names[i],
                             duration=(f-r)/fs
                         )
         else:
@@ -490,7 +437,6 @@ class AddDigitalEventsNWB(luigi.Task):
                         t, metadata = stim
                         audcode_table.add_row(
                             timestamp=t/fs,
-                            audcode_type=i,
                             code=metadata['code'],
                             object=metadata['object'],
                             action=metadata['action'],
@@ -525,13 +471,14 @@ class AddDigitalEventsNWB(luigi.Task):
                         ttls_table.add_row(
                             timestamp=r/fs,
                             ttl_type=i,
+                            ttl_name=chan,
                             duration=(f-r)/fs
                         )
         with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
             nwbfile = nwb_io.read()
             # add the tables to the nwbfile
-            nwbfile.add_events_table(ttls_table)
-            nwbfile.add_events_table(audcode_table)
+            nwbfile.add_acquisition(ttls_table)
+            nwbfile.add_acquisition(audcode_table)
             nwb_io.write(nwbfile)
 
 class AddLFPNWB(luigi.Task):
@@ -883,7 +830,7 @@ class AddPyoperantTrials(luigi.Task):
     def run(self):
         with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
             nwbfile = nwb_io.read()
-            audcode_events = nwbfile.events['audcode_events'].to_dataframe()
+            audcode_events = nwbfile.acquisition['audcode_events'].to_dataframe()
             
             # create the different timeintervals we will keep track of
             pyoperant_experiments_intervals = TimeIntervals(
