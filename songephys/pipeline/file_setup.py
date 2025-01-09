@@ -378,6 +378,12 @@ class SiteProjectConfig(luigi.Task):
     def config_path(self):
         # get project_dir from site_dir
         project_dir = self.site_dir.split("sites")[0]
+        if os.path.exists(os.path.join(project_dir, "project_config.yaml")):
+            return os.path.join(project_dir, "project_config.yaml")
+        elif os.path.exists(os.path.join(project_dir, "remote_config.yaml")):
+            remote_cfg = load_yaml(os.path.join(project_dir, "remote_config.yaml"))
+            project_path = remote_cfg["REMOTE_PATH"]
+            return os.path.join(project_path, "project_config.yaml")
         return os.path.join(project_dir, "project_config.yaml")
 
     def output(self):

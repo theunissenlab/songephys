@@ -208,6 +208,22 @@ def create_config(experiment_name):
     from songephys.config import generate_config_file
     generate_config_file(experiment_name)
 
+@click.command("create-remote-config")
+@click.argument("remote_path", type=click.Path())
+def create_remote_config(remote_path):
+    from songephys.config import generate_remote_config
+    generate_remote_config( remote_path)
+
+@click.command("list-sites")
+@click.argument("experiment_name", type=click.Path(), default=".")
+def list_sites(experiment_name):
+    from songephys.config import get_project_path
+    import glob, os
+    project_path = get_project_path(experiment_name)
+    sites = glob.glob(os.path.join(project_path, "sites", "*/site_config.yaml"))
+    for site in sites:
+        click.echo(os.path.relpath(os.path.dirname(site), start = project_path))
+
 @click.command("create-site")
 @click.argument("site_dir", type=click.Path())
 @click.option('--auto', is_flag=True)
@@ -458,8 +474,9 @@ def gennwb(site_dir):
 @click.option('--clear_old_units', is_flag=True)
 def addsortedunits(site_dir,_dir,clear_old_units):
     import luigi
-    from songephys.pipeline.nwb_utils import AddKilosortUnits
-    luigi.build([AddKilosortUnits(site_dir=site_dir, kilosort_dir=_dir,clear_old_units=clear_old_units)], local_scheduler=True)
+    from songephys.pipeline.nwb_utils import AddKilosortUnits, AddUnitValidIntervals
+    luigi.build([AddKilosortUnits(site_dir=site_dir, kilosort_dir=_dir,clear_old_units=clear_old_units),
+                    AddUnitValidIntervals(site_dir=site_dir)], local_scheduler=True)
 
 @click.command("run-pipeline-job")
 @click.argument("module")
@@ -604,6 +621,8 @@ cli.add_command(rhd_header)
 cli.add_command(wav_info)
 cli.add_command(create_site)
 cli.add_command(create_config)
+cli.add_command(create_remote_config)
+cli.add_command(list_sites)
 cli.add_command(unittest)
 cli.add_command(download_site)
 cli.add_command(gensinglesitefiles)

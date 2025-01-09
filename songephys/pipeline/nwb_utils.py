@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from uuid import uuid4
 import os
+import shutil
 import sys
 import json
 import glob
@@ -31,6 +32,8 @@ import kilosort
 from ..preprocess.sound.playback_utils import convert_raw_digital_to_metadata, convert_pyoperant_operant_csvs, _get_stim_dirs, convert_pyoperant_playback_csvs
 
 from .pipeline_utils import (
+    LocalTask,
+    RemoteTask,
     SiteParameter,
     parse_filelist,
     session_basename,
@@ -45,6 +48,8 @@ from .file_setup import (
     GenerateSingleSiteAuxMemmap, 
     GenerateSingleSiteAudioFile
 )
+
+from ..format.io import load_yaml
 
 def get_rhd_start_from_fn(rhd_file):
     # start is from the filename
@@ -71,7 +76,11 @@ def pyoperant_type(trialdata):
         return 'operant'
     else:
         return 'playback'
-    
+
+
+
+
+
 class Experiment(object):
     def __init__(self, file):
         pass
@@ -243,20 +252,17 @@ class NWBProcessingTarget(luigi.Target):
         io.write(nwbfile)
         io.close()
 
-class CreateSiteNWB(luigi.Task):
-    site_dir = SiteParameter()
+class CreateSiteNWB(LocalTask):
     def requires(self):
-        return {
-            'site_config': SiteConfig(site_dir=self.site_dir),
-            'project_config': SiteProjectConfig(site_dir=self.site_dir)
-        }
+        self.prerun_check()
+        return None
 
     def output(self):
         return luigi.LocalTarget(os.path.join(self.site_dir, '%s.nwb'%os.path.basename(self.site_dir)))
     
     def run(self):
-        site_config = self.input()['site_config'].data()
-        project_config = self.input()['project_config'].data()
+        site_config = self.site_config
+        project_config = self.project_config
         
         # get the recording start time from the rhd files
         rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
@@ -327,13 +333,12 @@ class CreateSiteNWB(luigi.Task):
         # save the nwb
         with NWBHDF5IO(self.output().path, 'w') as io:
             io.write(nwbfile)
+
         
-class AddDigitalEventsNWB(luigi.Task):
-    site_dir = SiteParameter()
+class AddDigitalEventsNWB(LocalTask):
     def requires(self):
+        self.prerun_check()
         return {
-            'site_config': SiteConfig(site_dir=self.site_dir),
-            'project_config': SiteProjectConfig(site_dir=self.site_dir),
             'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
             'site_digital_memmap': GenerateSingleSiteDigitalMemmap(site_dir=self.site_dir)
         }
@@ -342,8 +347,8 @@ class AddDigitalEventsNWB(luigi.Task):
         return NWBAcquisitionTarget(self.input()['site_nwb'].path, 'audcode_events', 'ttl_events')
     
     def run(self):
-        site_config = self.input()['site_config'].data()
-        project_config = self.input()['project_config'].data()
+        site_config = self.site_config
+        project_config = self.project_config
         file_list = site_config["filelist"]
 
         # get the name of the digital channels
@@ -481,9 +486,9 @@ class AddDigitalEventsNWB(luigi.Task):
             nwbfile.add_acquisition(audcode_table)
             nwb_io.write(nwbfile)
 
-class AddLFPNWB(luigi.Task):
-    site_dir = SiteParameter()
+class AddLFPNWB(LocalTask):
     def requires(self):
+        self.prerun_check()
         return {
             'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
             'lfp': GenerateSingleSiteLFP(site_dir=self.site_dir)
@@ -515,9 +520,9 @@ class AddLFPNWB(luigi.Task):
             nwbfile.add_acquisition(lfp_ts)
             nwb_io.write(nwbfile)
 
-class AddMotionNWB(luigi.Task):
-    site_dir = SiteParameter()
+class AddMotionNWB(LocalTask):
     def requires(self):
+        self.prerun_check()
         return {
             'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
             'motion': GenerateSingleSiteAuxMemmap(site_dir=self.site_dir)
@@ -560,9 +565,9 @@ class AddMotionNWB(luigi.Task):
             nwbfile.processing['behavior'].add(behavioral_time_series)
             nwb_io.write(nwbfile)
 
-class AddAudioNWB(luigi.Task):
-    site_dir = SiteParameter()
+class AddAudioNWB(LocalTask):
     def requires(self):
+        self.prerun_check()
         return {
             'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
             'audio': GenerateSingleSiteAudioFile(site_dir=self.site_dir)
@@ -591,10 +596,10 @@ class AddAudioNWB(luigi.Task):
 
 
 
-class RemoveProcessingModule(luigi.Task):
-    site_dir = SiteParameter()
+class RemoveProcessingModule(LocalTask):
     module_name = luigi.Parameter()
     def requires(self):
+        self.prerun_check()
         return {
             'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
         }
@@ -614,215 +619,11 @@ class RemoveProcessingModule(luigi.Task):
             nwb_io.close()
         os.rename(export_fn, self.input()['site_nwb'].path)
 
-
-
-
-class ResetUnits(luigi.Task):
-    site_dir = SiteParameter()
+class AddPyoperantTrials(LocalTask):
     def requires(self):
+        self.prerun_check()
         return {
             'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
-        }
-    def complete(self):
-        # check if the nwbfile has a units
-        with NWBHDF5IO(self.input()['site_nwb'].path, 'r') as nwb_io:
-            nwbfile = nwb_io.read()
-            if nwbfile.units is None:
-                nwb_io.close()
-                return True
-            else:
-                nwb_io.close()
-                return False
-    def output(self):
-        return luigi.LocalTarget("dummy")
-    def run(self):
-        with NWBHDF5IO(self.input()['site_nwb'].path, 'r') as nwb_io:
-            nwbfile = nwb_io.read()
-            print("Deleting units")
-            nwbfile.units.reset_parent()
-            nwbfile.fields['units'] = None
-            print("Writing to file")
-            # export to new file
-            export_fn = self.input()['site_nwb'].path.replace('.nwb','_temp.nwb')
-            with NWBHDF5IO(export_fn, 'w') as export_io:
-                export_io.export(src_io=nwb_io, nwbfile=nwbfile)
-                export_io.close()
-            nwb_io.close()
-        os.rename(export_fn, self.input()['site_nwb'].path)
-
-
-class AddKilosortUnits(luigi.Task):
-    site_dir = SiteParameter()
-    kilosort_dir = luigi.Parameter(default='ks4_final')
-    overwrite = luigi.BoolParameter(default=False)
-    clear_old_units = luigi.BoolParameter(default=False)
-    def requires(self):
-        if self.clear_old_units:
-            return {
-                'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
-                'reset': ResetUnits(site_dir=self.site_dir),
-            }
-        else:
-            return {
-                'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
-            }
-    def output(self):
-        # Force this to always run if requested
-        return luigi.LocalTarget("dummy") 
-
-    def run(self):
-        with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
-            nwbfile = nwb_io.read()
-
-            if nwbfile.units is None:
-                # assert there are no units
-                nwbfile.add_unit_column(name='kilosort_dir', description='The directory where the kilosort output is stored')
-                nwbfile.add_unit_column(name='kilosort_id', description='The id of the unit in the kilosort output')
-                nwbfile.add_unit_column(name='group', description='The Kilosort Group (good, mua, noise)')
-                nwbfile.add_unit_column(name='contampct', description='The Contamination Percentage from Kilosort')
-
-            # load the kilosort data
-            # first check if the director exists
-            ks_output_dir =  os.path.join(self.site_dir, self.kilosort_dir)
-            if not os.path.exists(ks_output_dir):
-                raise ValueError("Kilosort directory not found")
-
-            if os.path.exists(os.path.join(ks_output_dir,'shank_0')):
-                shanks = glob.glob(os.path.join(ks_output_dir,'shank_*'))
-                ks_output_dirs = shanks
-            else:
-                ks_output_dirs = [ks_output_dir]
-            # load samplerate from params.py
-            sys.path.append(ks_output_dirs[0])
-            from params import sample_rate
-            for ksod in ks_output_dirs:
-                ks_dir_name = os.path.relpath(ksod, self.site_dir)
-                print("Loading Kilosort data from %s"%ks_dir_name)
-                ks_spike_times = np.load(os.path.join(ksod, 'spike_times.npy'))/sample_rate
-                ks_spike_cluster = np.load(os.path.join(ksod, 'spike_clusters.npy'))
-                ks_cluster_info = pd.read_csv(os.path.join(ksod, 'cluster_info.tsv'),delimiter='\t')
-                
-                for i, cluster in ks_cluster_info.iterrows():
-                    if cluster['group'] != 'noise':
-                        if (cluster['cluster_id'], ks_dir_name) not in zip(nwbfile.units['kilosort_id'], nwbfile.units['kilosort_dir']):
-                            print("Adding unit %d from %s"%(cluster['cluster_id'], ks_dir_name))
-                            nwbfile.add_unit(
-                                spike_times=ks_spike_times[ks_spike_cluster == cluster['cluster_id']],
-                                electrodes=[cluster.ch], # for now lets just put the main electrode
-                                kilosort_id=cluster['cluster_id'],
-                                group=cluster['group'],
-                                contampct=cluster['ContamPct'],
-                                kilosort_dir=ks_dir_name
-                            )
-                        else:
-                            print("Unit %d from %s already exists"%(cluster['cluster_id'], ks_dir_name))
-                            if self.overwrite:
-                                print("Overwriting")
-                                ix = (nwbfile.units['kilosort_id'] == cluster['cluster_id']) & (nwbfile.units['kilosort_dir'] == ks_dir_name)
-                                nwbfile.units['spike_times'][ix] = ks_spike_times[ks_spike_cluster == cluster['cluster_id']]
-                                nwbfile.units['contampct'][ix] = cluster['ContamPct']
-                                nwbfile.units['group'][ix] = cluster['group']
-            nwb_io.write(nwbfile)
-
-class AddUnitValidIntervals(luigi.Task):
-    site_dir = SiteParameter()
-    def requires(self):
-        return {
-            'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
-        }
-    def output(self):
-        return NWBIntervalsTarget(self.input()['site_nwb'].path, 'unit_intervals')
-    def run(self):
-        # load the nwb file
-        with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
-            # go through the units
-            nwb = nwb_io.read()
-            all_units = nwb.units.to_dataframe()
-
-            # create the intervals table
-            unit_intervals = TimeIntervals(
-                name="unit_intervals",
-                description="Valid intervals for each unit"
-            )
-            unit_intervals.add_column(name='unit_id', description='The id of the unit in the nwb file that this interval corresponds to',data=np.array([],dtype=int))
-
-
-            for uid, unit in all_units.iterrows():
-                # lets make a psth for this unit
-                spike_times = nwb.units['spike_times'][uid]
-
-                # Get total recording time for this nwb file rounded to the nearest second
-                tot_time = int(nwb.acquisition['LFP'].data.shape[0] / nwb.acquisition['LFP'].rate)
-
-                # bin the spikes by 5
-                t_bin = 3
-                bins = np.arange(0, tot_time, t_bin)
-                spike_counts, _ = np.histogram(spike_times, bins=bins)
-                # smoothed = ndimage.gaussian_filter1d(spike_counts, 2)
-
-                # take a sliding window of 30 seconds and determine if the rate is significantly nonzero using a t test
-                window = 30 // t_bin
-                step = 15 // t_bin
-                active = []
-                pvals = []
-                active_rates = []
-                active_bins = [0]
-                for i in range(0, len(spike_counts) - window, step):
-                    t, p = stats.ttest_1samp(spike_counts[i:i+window], 0)
-                    active_rates.append(np.mean(spike_counts[i:i+window]))
-                    active_bins.append(i*t_bin)
-                    active.append(p < 0.2)
-                    pvals.append(p)
-                # plot the active periods
-                active = np.array(active, dtype=int)
-                active_rates = np.log10(np.array(active_rates))
-                active_mean = np.mean(active_rates[active == 1])
-                active_std = np.std(active_rates[active == 1])
-                # reject active bins that are less than 1 std 
-                active = active * (active_rates > active_mean - active_std)
-
-                # calculate contiguous active periods
-                if np.all(active == 1):
-                    active_periods = [(active_bins[0], active_bins[len(active)])]
-                else:
-                    active_periods = []
-                    start = 0
-                    for i in range(1, len(active)):
-                        if active[i] == 1 and active[i-1] == 0:
-                            start = i
-                        if active[i] == 0 and active[i-1] == 1:
-                            active_periods.append((active_bins[start], active_bins[i+1]))
-                    if active[-1] == 1:
-                        active_periods.append((active_bins[start], active_bins[-1]))
-                if len(active_periods) == 0:
-                    print("Unit %d has no active periods"%unit.kilosort_id)
-                    return []
-                # go through the active periods, and if the inactive period between two active periods is less than 5minutes, then merge them
-                agglomerated_active_periods = [active_periods[0]]
-                for i in range(1, len(active_periods)):
-                    # check if the inactive period is less than 3 minutes
-                    if active_periods[i][0] - agglomerated_active_periods[-1][1] < 180:
-                        agglomerated_active_periods[-1] = (agglomerated_active_periods[-1][0], active_periods[i][1])
-                    else:
-                        agglomerated_active_periods.append(active_periods[i])
-                # now remove any active periods that are less than 5 minutes
-                agglomerated_active_periods = [x for x in agglomerated_active_periods if x[1] - x[0] > 300]
-                for start, stop in agglomerated_active_periods:
-                    unit_intervals.add_interval(
-                        start_time=float(start),
-                        stop_time=float(stop),
-                        unit_id=uid
-                    )
-            # add the table to the nwbfile
-            nwb.add_time_intervals(unit_intervals)
-            nwb_io.write(nwb)
-class AddPyoperantTrials(luigi.Task):
-    site_dir = SiteParameter()
-    def requires(self):
-        return {
-            'site_config': SiteConfig(site_dir=self.site_dir),
-            'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
-            'project_config': SiteProjectConfig(site_dir=self.site_dir),
             'digital_events': AddDigitalEventsNWB(site_dir=self.site_dir)
         }
     def output(self):
@@ -881,8 +682,8 @@ class AddPyoperantTrials(luigi.Task):
 
                 # now we need to match each of these blocks with the corresponding csv files
                 # first we need to find the csv files
-                site_config = self.input()['site_config'].data()
-                project_config = self.input()['project_config'].data()
+                site_config = self.site_config
+                project_config = self.project_config
                 stim_root_dir = project_config['LOCAL_RAW_FILES']['stimuli_drive']
                 pyoperant_csvs = [os.path.join(project_config['LOCAL_RAW_FILES']['pyoperant_drive'],f) for f in site_config['filelist'] if f.endswith('trialdata.csv')]
                 pyoperant_experiments = [PyoperantExperiment(x) for x in pyoperant_csvs]
@@ -982,8 +783,9 @@ class AddPyoperantTrials(luigi.Task):
             nwbfile.add_time_intervals(pb_trial_intervals)
             nwb_io.write(nwbfile)
 
-class AddStimuliNWB(luigi.Task):
+class AddStimuliNWB(LocalTask):
     def requires(self):
+        self.prerun_check()
         return {
             'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
             'pyoperant_trials': AddPyoperantTrials(site_dir=self.site_dir)
@@ -1018,3 +820,213 @@ class GenerateAcquisitionNWB(luigi.WrapperTask):
             'operant': AddPyoperantTrials(site_dir=self.site_dir)
         }
     
+
+# Remote Tasks ================================================================
+
+class CreateRemoteSiteNWB(RemoteTask):
+    suffix = luigi.Parameter(default='')
+    def requires(self):
+        return CreateSiteNWB(site_dir=self.remote_site_dir)
+
+    def output(self):
+        # note this wont do anything if we are not remote
+        return luigi.LocalTarget(os.path.join(self.site_dir, '%s_%s.nwb'%(os.path.basename(self.site_dir), self.suffix)))
+
+    def run(self):
+        # copy the file from the remote to the local with shutil
+        shutil.copy(self.input().path, self.output().path)
+class ResetUnits(RemoteTask):
+    def requires(self):
+        return {
+            'site_nwb': CreateRemoteSiteNWB(site_dir=self.site_dir),
+        }
+    def complete(self):
+        # check if the nwbfile has a units
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r') as nwb_io:
+            nwbfile = nwb_io.read()
+            if nwbfile.units is None:
+                nwb_io.close()
+                return True
+            else:
+                nwb_io.close()
+                return False
+    def output(self):
+        return luigi.LocalTarget("dummy")
+    def run(self):
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r') as nwb_io:
+            nwbfile = nwb_io.read()
+            print("Deleting units")
+            nwbfile.units.reset_parent()
+            nwbfile.fields['units'] = None
+            print("Writing to file")
+            # export to new file
+            export_fn = self.input()['site_nwb'].path.replace('.nwb','_temp.nwb')
+            with NWBHDF5IO(export_fn, 'w') as export_io:
+                export_io.export(src_io=nwb_io, nwbfile=nwbfile)
+                export_io.close()
+            nwb_io.close()
+        os.rename(export_fn, self.input()['site_nwb'].path)
+
+class AddKilosortUnits(RemoteTask):
+    kilosort_dir = luigi.Parameter(default='ks4_final')
+    overwrite = luigi.BoolParameter(default=False)
+    clear_old_units = luigi.BoolParameter(default=False)
+    def requires(self):
+        if self.clear_old_units:
+            return {
+                'site_nwb': CreateRemoteSiteNWB(site_dir=self.site_dir, suffix=self.kilosort_dir),
+                'reset': ResetUnits(site_dir=self.site_dir),
+            }
+        else:
+            return {
+                'site_nwb': CreateRemoteSiteNWB(site_dir=self.site_dir, suffix=self.kilosort_dir),
+            }
+    def output(self):
+        # Force this to always run if requested
+        return luigi.LocalTarget("dummy") 
+
+    def run(self):
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
+            nwbfile = nwb_io.read()
+
+            if nwbfile.units is None:
+                # assert there are no units
+                nwbfile.add_unit_column(name='kilosort_dir', description='The directory where the kilosort output is stored')
+                nwbfile.add_unit_column(name='kilosort_id', description='The id of the unit in the kilosort output')
+                nwbfile.add_unit_column(name='group', description='The Kilosort Group (good, mua, noise)')
+                nwbfile.add_unit_column(name='contampct', description='The Contamination Percentage from Kilosort')
+
+            # load the kilosort data
+            # first check if the director exists
+            ks_output_dir =  os.path.join(self.site_dir, self.kilosort_dir)
+            if not os.path.exists(ks_output_dir):
+                raise ValueError("Kilosort directory not found")
+
+            if os.path.exists(os.path.join(ks_output_dir,'shank_0')):
+                shanks = glob.glob(os.path.join(ks_output_dir,'shank_*'))
+                ks_output_dirs = shanks
+            else:
+                ks_output_dirs = [ks_output_dir]
+            # load samplerate from params.py
+            sys.path.append(ks_output_dirs[0])
+            from params import sample_rate
+            for ksod in ks_output_dirs:
+                ks_dir_name = os.path.relpath(ksod, self.site_dir)
+                print("Loading Kilosort data from %s"%ks_dir_name)
+                ks_spike_times = np.load(os.path.join(ksod, 'spike_times.npy'))/sample_rate
+                ks_spike_cluster = np.load(os.path.join(ksod, 'spike_clusters.npy'))
+                ks_cluster_info = pd.read_csv(os.path.join(ksod, 'cluster_info.tsv'),delimiter='\t')
+                
+                for i, cluster in ks_cluster_info.iterrows():
+                    if cluster['group'] != 'noise':
+                        if (cluster['cluster_id'], ks_dir_name) not in zip(nwbfile.units['kilosort_id'], nwbfile.units['kilosort_dir']):
+                            print("Adding unit %d from %s"%(cluster['cluster_id'], ks_dir_name))
+                            nwbfile.add_unit(
+                                spike_times=ks_spike_times[ks_spike_cluster == cluster['cluster_id']],
+                                electrodes=[cluster.ch], # for now lets just put the main electrode
+                                kilosort_id=cluster['cluster_id'],
+                                group=cluster['group'],
+                                contampct=cluster['ContamPct'],
+                                kilosort_dir=ks_dir_name
+                            )
+                        else:
+                            print("Unit %d from %s already exists"%(cluster['cluster_id'], ks_dir_name))
+                            if self.overwrite:
+                                print("Overwriting")
+                                ix = (nwbfile.units['kilosort_id'] == cluster['cluster_id']) & (nwbfile.units['kilosort_dir'] == ks_dir_name)
+                                nwbfile.units['spike_times'][ix] = ks_spike_times[ks_spike_cluster == cluster['cluster_id']]
+                                nwbfile.units['contampct'][ix] = cluster['ContamPct']
+                                nwbfile.units['group'][ix] = cluster['group']
+            nwb_io.write(nwbfile)
+
+class AddUnitValidIntervals(RemoteTask):
+    def requires(self):
+        return {
+            'site_nwb': CreateRemoteSiteNWB(site_dir=self.site_dir),
+        }
+    def output(self):
+        return NWBIntervalsTarget(self.input()['site_nwb'].path, 'unit_intervals')
+    def run(self):
+        # load the nwb file
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
+            # go through the units
+            nwb = nwb_io.read()
+            all_units = nwb.units.to_dataframe()
+
+            # create the intervals table
+            unit_intervals = TimeIntervals(
+                name="unit_intervals",
+                description="Valid intervals for each unit"
+            )
+            unit_intervals.add_column(name='unit_id', description='The id of the unit in the nwb file that this interval corresponds to',data=np.array([],dtype=int))
+
+
+            for uid, unit in all_units.iterrows():
+                # lets make a psth for this unit
+                spike_times = nwb.units['spike_times'][uid]
+
+                # Get total recording time for this nwb file rounded to the nearest second
+                tot_time = int(nwb.acquisition['LFP'].data.shape[0] / nwb.acquisition['LFP'].rate)
+
+                # bin the spikes by 5
+                t_bin = 3
+                bins = np.arange(0, tot_time, t_bin)
+                spike_counts, _ = np.histogram(spike_times, bins=bins)
+                # smoothed = ndimage.gaussian_filter1d(spike_counts, 2)
+
+                # take a sliding window of 30 seconds and determine if the rate is significantly nonzero using a t test
+                window = 30 // t_bin
+                step = 15 // t_bin
+                active = []
+                pvals = []
+                active_rates = []
+                active_bins = [0]
+                for i in range(0, len(spike_counts) - window, step):
+                    t, p = stats.ttest_1samp(spike_counts[i:i+window], 0)
+                    active_rates.append(np.mean(spike_counts[i:i+window]))
+                    active_bins.append(i*t_bin)
+                    active.append(p < 0.2)
+                    pvals.append(p)
+                # plot the active periods
+                active = np.array(active, dtype=int)
+                active_rates = np.log10(np.array(active_rates))
+                active_mean = np.mean(active_rates[active == 1])
+                active_std = np.std(active_rates[active == 1])
+                # reject active bins that are less than 1 std 
+                active = active * (active_rates > active_mean - active_std)
+
+                # calculate contiguous active periods
+                if np.all(active == 1):
+                    active_periods = [(active_bins[0], active_bins[len(active)])]
+                else:
+                    active_periods = []
+                    start = 0
+                    for i in range(1, len(active)):
+                        if active[i] == 1 and active[i-1] == 0:
+                            start = i
+                        if active[i] == 0 and active[i-1] == 1:
+                            active_periods.append((active_bins[start], active_bins[i+1]))
+                    if active[-1] == 1:
+                        active_periods.append((active_bins[start], active_bins[-1]))
+                if len(active_periods) == 0:
+                    print("Unit %d has no active periods"%unit.kilosort_id)
+                    return []
+                # go through the active periods, and if the inactive period between two active periods is less than 5minutes, then merge them
+                agglomerated_active_periods = [active_periods[0]]
+                for i in range(1, len(active_periods)):
+                    # check if the inactive period is less than 3 minutes
+                    if active_periods[i][0] - agglomerated_active_periods[-1][1] < 180:
+                        agglomerated_active_periods[-1] = (agglomerated_active_periods[-1][0], active_periods[i][1])
+                    else:
+                        agglomerated_active_periods.append(active_periods[i])
+                # now remove any active periods that are less than 5 minutes
+                agglomerated_active_periods = [x for x in agglomerated_active_periods if x[1] - x[0] > 300]
+                for start, stop in agglomerated_active_periods:
+                    unit_intervals.add_interval(
+                        start_time=float(start),
+                        stop_time=float(stop),
+                        unit_id=uid
+                    )
+            # add the table to the nwbfile
+            nwb.add_time_intervals(unit_intervals)
+            nwb_io.write(nwb)

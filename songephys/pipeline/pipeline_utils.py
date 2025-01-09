@@ -12,14 +12,8 @@ from ..format.io import load_yaml
 from ..utils import intervals_overlap
 
 
-class BaseTask(luigi.Task):
-    force = luigi.BoolParameter()
-    def complete(self):
-        outputs = luigi.task.flatten(self.output())
-        for output in outputs:
-            if self.force and output.exists():
-                output.remove()
-        return all(map(lambda output: output.exists(), outputs))
+
+    
 
 class SiteParameter(Parameter):
     def normalize(self, x):
@@ -47,6 +41,85 @@ class SessionParameter(Parameter):
             raise ValueError("The session-dir parameter {} is not in a directory called sessions".format(x))
 
         return x
+
+class BaseTask(luigi.Task):
+    force = luigi.BoolParameter()
+
+    def complete(self):
+        outputs = luigi.task.flatten(self.output())
+        for output in outputs:
+            if self.force and output.exists():
+                output.remove()
+        return all(map(lambda output: output.exists(), outputs))
+
+class BaseSiteTask(BaseTask):
+    site_dir = SiteParameter()
+    
+    # a function to check if this task is remote
+    @property
+    def is_remote(self):
+        # if this is run on a remote machine, it cannot be run
+        if os.path.exists(os.path.join(self.site_dir.split("sites")[0], "remote_config.yaml")):
+            return True
+        return False
+
+    @property
+    def site_config(self):
+        base_path = self.site_dir.split("sites")[0]
+        if self.is_remote:
+            # load the remote config
+            remote_cfg = load_yaml(os.path.join(base_path, "remote_config.yaml"))
+            return load_yaml(os.path.join(remote_cfg["REMOTE_PATH"], os.path.relpath(self.site_dir, base_path), "site_config.yaml"))
+        return load_yaml(os.path.join(self.site_dir, "site_config.yaml"))
+
+    @property
+    def project_config(self):
+        base_path = self.site_dir.split("sites")[0]
+        if self.is_remote:
+            # load the remote config
+            remote_cfg = load_yaml(os.path.join(base_path, "remote_config.yaml"))
+            return load_yaml(os.path.join(remote_cfg["REMOTE_PATH"], "project_config.yaml"))
+        return load_yaml(os.path.join(base_path, "project_config.yaml"))
+        
+    def prerun_check(self):
+        return True
+
+
+class LocalTask(BaseSiteTask):
+    # local tasks are tasks that are run on the local machine
+    def prerun_check(self):
+        if self.is_remote:
+            raise Exception("This task is meant to be run on the local machine")
+        return True
+    
+    
+class RemoteTask(BaseSiteTask):
+    # remote tasks are tasks that can be run on the remote machine or a local machine
+
+    @property
+    def site_config(self):
+        return load_yaml(os.path.join(self.remote_site_dir, "site_config.yaml"))
+
+    @property
+    def remote_site_dir(self):
+        base_path = self.site_dir.split("sites")[0]
+        self.site_dir = self.site_dir
+        if os.path.exists(os.path.join(base_path, "remote_config.yaml")):
+            # load the remote config
+            remote_cfg = load_yaml(os.path.join(base_path, "remote_config.yaml"))
+            return os.path.join(remote_cfg["REMOTE_PATH"], self.site_dir)
+        else:
+            return self.site_dir
+        
+    @property
+    def remote_config(self):
+        base_path = self.site_dir.split("sites")[0]
+        if os.path.exists(os.path.join(base_path, "remote_config.yaml")):
+            # load the remote config
+            return load_yaml(os.path.join(base_path, "remote_config.yaml"))
+        else:
+            return None
+
 
 
 def group_raw_files(filelist):

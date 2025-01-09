@@ -4,7 +4,6 @@ from .format.io import load_yaml, save_yaml
 #############
 ### Paths ###
 #############
-
 def generate_config_file(experiment_name, out_path=None, data_dir = os.environ.get("DATA_DIR")):
     """ Generates a config file in the current directory for use with the songephys pipeline
 
@@ -100,17 +99,77 @@ def generate_config_file(experiment_name, out_path=None, data_dir = os.environ.g
     print(f"Saving Config to {cfg_path}")
     save_yaml(cfg_path, expeiriment_cfg)
 
-def get_config(experiment_name=None):
-    if experiment_name is None:
-        # loads config from current directory
-        return load_yaml("project_config.yaml")
-    else:
-        # loads config from the experiment path
+
+def generate_remote_config(project_path, out_path=None):
+    remote_config = dict()
+    remote_config["REMOTE_PATH"] = project_path
+    remote_config["SPIKE_SORTING"] = dict()
+    remote_config["SPIKE_SORTING"]["COPY_RAW"] = True
+    remote_config["DEBUG"] = False
+
+    # now lets confirm that a project_config exists in the project path
+    project_config_path = os.path.join(project_path, "project_config.yaml")
+
+    if not os.path.exists(project_config_path):
+        raise Exception(f"Project config does not exist for {project_path}\n Please run `song create-config {project_path}")
+    # now load the project config to get the experiment name
+    project_config = load_yaml(project_config_path)
+    experiment_name = project_config["EXPERIMENT_NAME"]
+    remote_config["EXPERIMENT_NAME"] = experiment_name
+    print(f"Creating Remote Config for Experiment: {experiment_name}")
+
+    # now save the remote config
+    if out_path is None:
         songephys_dir = os.environ.get("SONGEPHYS_DIR")
         if not songephys_dir:
             raise Exception("SONGEPHYS_DIR env variable not set")
-        cfg_path = os.path.join(os.environ.get("SONGEPHYS_DIR"), experiment_name,"project_config.yaml")
+        out_path = os.path.join(os.environ.get("SONGEPHYS_DIR"), experiment_name)
 
-        if not os.path.exists(cfg_path):
+    remote_config_path = os.path.join(out_path, "remote_config.yaml")
+    print(f"Saving Remote Config to {remote_config_path}")
+    save_yaml(remote_config_path, remote_config)
+
+def get_project_path(experiment_name):
+    if experiment_name is None or experiment_name == ".":
+        base_dir = os.getcwd()
+    else:
+        songephys_dir = os.environ.get("SONGEPHYS_DIR")
+        if not songephys_dir:
+            raise Exception("SONGEPHYS_DIR env variable not set")
+        base_dir = os.path.join(os.environ.get("SONGEPHYS_DIR"), experiment_name)
+
+    cfg_path = os.path.join(base_dir,"project_config.yaml")
+
+    if not os.path.exists(cfg_path):
+        # in the case that you are remote, you can still load the OG project config
+        # NB: In this case the paths int he project config may not be accurate.
+        remote_cfg_path = os.path.join(base_dir,"remote_config.yaml")
+        if not os.path.exists(remote_cfg_path):
             raise  Exception("Project config does not exist for %s\n Please run `song create-config %s"%(experiment_name,experiment_name))
+        remote_cfg = load_yaml(remote_cfg_path)
+        project_path = remote_cfg["REMOTE_PATH"]
+        return project_path
+    return os.path.dirname(cfg_path)
+
+def get_config(experiment_name=None):
+    if experiment_name is None:
+        base_dir = os.getcwd()
+    else:
+        songephys_dir = os.environ.get("SONGEPHYS_DIR")
+        if not songephys_dir:
+            raise Exception("SONGEPHYS_DIR env variable not set")
+        base_dir = os.path.join(os.environ.get("SONGEPHYS_DIR"), experiment_name)
+
+    cfg_path = os.path.join(base_dir, experiment_name,"project_config.yaml")
+
+    if not os.path.exists(cfg_path):
+        # in the case that you are remote, you can still load the OG project config
+        # NB: In this case the paths int he project config may not be accurate.
+        remote_cfg_path = os.path.join(base_dir, experiment_name,"remote_config.yaml")
+        if not os.path.exists(remote_cfg_path):
+            raise  Exception("Project config does not exist for %s\n Please run `song create-config %s"%(experiment_name,experiment_name))
+        remote_cfg = load_yaml(remote_cfg_path)
+        project_path = remote_cfg["REMOTE_PATH"]
+        cfg_path = os.path.join(project_path,"project_config.yaml")
         return load_yaml(cfg_path)
+    return load_yaml(cfg_path)
