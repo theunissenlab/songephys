@@ -5,8 +5,11 @@
 
 from collections import defaultdict
 import os
+import shutil
 import time
+import gc
 
+import torch
 import luigi
 import numpy as np
 import matplotlib.pyplot as plt
@@ -23,7 +26,7 @@ from ..preprocess.ephys.detect import calculate_snippet_dimensions, extract_spik
 from ..preprocess.ephys.sort import sort, create_hierarchy
 
 from .file_setup import Rhd2Wav, Rhd2Binary, SiteConfig, SessionConfig, SessionProjectConfig, SiteProjectConfig, DefineSessions,GenerateSingleSiteMemmap, GenerateSiteMemmaps, GenerateLFP
-from .pipeline_utils import SiteParameter, SessionParameter, get_session_sites
+from .pipeline_utils import SiteParameter, SessionParameter, get_session_sites, RemoteTask
 
 
 
@@ -383,7 +386,7 @@ class PrepareSorting(luigi.Task):
 #                     if f.endswith(".rhd")]
 #         # link the rhd files to the session folder
 
-class KiloSortSorting(luigi.Task):
+class KiloSortSorting(RemoteTask):
     site_dir = SiteParameter()
     def requires(self):
         return {
@@ -425,14 +428,11 @@ class KiloSortSorting(luigi.Task):
         kilosort_run(bin_file, dir_path=self.site_dir, output_dir=out_dir,
                      probe = probe_fun(chan_names = chan_names),
                      n_channels=len(chan_names),data_dtype='int16')
-class KiloSort4Sorting(luigi.Task):
-    site_dir = SiteParameter()
+class KiloSort4Sorting(RemoteTask):
     kilosort_dir = luigi.Parameter(default='ks4_CAR')
     def requires(self):
         return {
-            "site_config": SiteConfig(self.site_dir),
-            "project_config": SiteProjectConfig(self.site_dir),
-            "full_bin_array": GenerateSingleSiteMemmap(self.site_dir)
+            "full_bin_array": GenerateSingleSiteMemmap(self.remote_site_dir)
         }
 
     def output(self):
@@ -444,18 +444,30 @@ class KiloSort4Sorting(luigi.Task):
         from pathlib import Path
         import json
 
-        site_config = self.input()["site_config"].data()
-        project_config = self.input()['project_config'].data()
+        site_config = self.site_config
+        project_config = self.project_config
         
         bin_file = Path(self.input()['full_bin_array']['bin'].path)
         bin_info = json.load(open(self.input()['full_bin_array']['info'].path,'r'))
+
+        os.makedirs(self.site_dir,exist_ok=True)
+        if self.remote_config is not None and self.remote_config['SPIKE_SORTING']['COPY_RAW']:
+            # copy the raw data to the local location
+            local_bin_path = os.path.join(self.site_dir,os.path.basename(bin_file))
+            if not os.path.exists(local_bin_path):
+                print(f"Copying {bin_file} to {local_bin_path}")
+                shutil.copy(bin_file,local_bin_path)
+            else:
+                print(f"File already exists: {local_bin_path}")
+            bin_file = local_bin_path
+        elif self.remote_config is not None and self.remote_config['SPIKE_SORTING']['COPY_RAW'] is False:
+            print("Not copying raw data due to remote config setting")
 
         probes = dict({
             "P1": 'cambridge_P1.prb', # 4 shank
             "H10": 'cambridge_H10.prb', # 2 shank
             "M16": 'microprobes_16ch.prb' # microprobes with 16 wires
         })
-        import os
         prb = kilosort.io.load_probe(os.path.join(kilosort.PROBE_DIR,probes[project_config["EPHYS"].get('PROBETYPE','H10')]))
 
         good_chans = [True for _ in prb['chanMap']]
@@ -495,9 +507,17 @@ class KiloSort4Sorting(luigi.Task):
             for key in ['kcoords','xc','yc','chanMap']:
                 prb_sh[key] = prb[key][inds]
             ks_output_dir_sh =  '%s/shank_%d'%(ks_output_dir,sh)
+            if os.path.exists(os.path.join(ks_output_dir_sh,'cluster_group.tsv')):
+                print("shank %d already sorted"%sh)
+                continue
             os.makedirs(ks_output_dir_sh,exist_ok=True)
-            ret = kilosort.run_kilosort(settings=settings, probe=prb_sh, filename=bin_file, data_dtype='int16', results_dir=ks_output_dir_sh, clear_cache=True)
+            ret = kilosort.run_kilosort(settings=settings, probe=prb_sh, filename=bin_file, data_dtype='int16', results_dir=ks_output_dir_sh)#, clear_cache=True)
             del ret 
+
+            # clear gpu cache between kilosort runs
+            gc.collect()
+            torch.cuda.empty_cache()
+
         # save this file to indicate we have finished the sorting
         with self.output().open('w') as f:
             f.write('complete')
