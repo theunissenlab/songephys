@@ -5,6 +5,7 @@ import shutil
 import sys
 import json
 import glob
+from pathlib import Path
 
 import pandas as pd
 import luigi
@@ -46,7 +47,8 @@ from .file_setup import (
     GenerateSingleSiteADCMemmap, 
     GenerateSingleSiteLFP, 
     GenerateSingleSiteAuxMemmap, 
-    GenerateSingleSiteAudioFile
+    GenerateSingleSiteAudioFile,
+    RemoteRawData
 )
 
 from ..format.io import load_yaml
@@ -867,22 +869,27 @@ class ResetUnits(RemoteTask):
             nwb_io.close()
         os.rename(export_fn, self.input()['site_nwb'].path)
 
+
 class AddKilosortUnits(RemoteTask):
+    # TODO can parallelize this by running on each shank, or by unit
     kilosort_dir = luigi.Parameter(default='ks4_final')
     overwrite = luigi.BoolParameter(default=False)
     clear_old_units = luigi.BoolParameter(default=False)
+    include_waveforms = luigi.BoolParameter(default=True)
+    n_spikes = luigi.IntParameter(default=1000)
     def requires(self):
+        requirements = {
+            'site_nwb': CreateRemoteSiteNWB(site_dir=self.site_dir, suffix=self.kilosort_dir)
+        }
         if self.clear_old_units:
-            return {
-                'site_nwb': CreateRemoteSiteNWB(site_dir=self.site_dir, suffix=self.kilosort_dir),
-                'reset': ResetUnits(site_dir=self.site_dir),
-            }
-        else:
-            return {
-                'site_nwb': CreateRemoteSiteNWB(site_dir=self.site_dir, suffix=self.kilosort_dir),
-            }
+            requirements['reset'] = ResetUnits(site_dir=self.site_dir)
+        if self.include_waveforms:
+            requirements['raw_bin'] = RemoteRawData(site_dir=self.site_dir)
+        return requirements
+    
     def output(self):
         # Force this to always run if requested
+        # TODO we should only add this if Units doesnt exist
         return luigi.LocalTarget("dummy") 
 
     def run(self):
@@ -891,11 +898,12 @@ class AddKilosortUnits(RemoteTask):
 
             if nwbfile.units is None:
                 # assert there are no units
-                nwbfile.add_unit_column(name='kilosort_dir', description='The directory where the kilosort output is stored')
-                nwbfile.add_unit_column(name='kilosort_id', description='The id of the unit in the kilosort output')
-                nwbfile.add_unit_column(name='group', description='The Kilosort Group (good, mua, noise)')
-                nwbfile.add_unit_column(name='contampct', description='The Contamination Percentage from Kilosort')
-
+                nwbfile.add_unit_column(name='kilosort_dir', description='The directory where the kilosort output is stored',data=np.array([],dtype=str))
+                nwbfile.add_unit_column(name='kilosort_id', description='The id of the unit in the kilosort output',data=np.array([],dtype=int))
+                nwbfile.add_unit_column(name='group', description='The Kilosort Group (good, mua, noise)',data=np.array([],dtype=str))
+                nwbfile.add_unit_column(name='contampct', description='The Contamination Percentage from Kilosort',data=np.array([],dtype=int))
+                nwbfile.add_unit_column(name='ks_x', description='The approx X position in um from Kilosort',data=np.array([],dtype=int))
+                nwbfile.add_unit_column(name='ks_y', description='The approx Y position in um from Kilosort',data=np.array([],dtype=int))
             # load the kilosort data
             # first check if the director exists
             ks_output_dir =  os.path.join(self.site_dir, self.kilosort_dir)
@@ -916,18 +924,24 @@ class AddKilosortUnits(RemoteTask):
                 ks_spike_times = np.load(os.path.join(ksod, 'spike_times.npy'))/sample_rate
                 ks_spike_cluster = np.load(os.path.join(ksod, 'spike_clusters.npy'))
                 ks_cluster_info = pd.read_csv(os.path.join(ksod, 'cluster_info.tsv'),delimiter='\t')
+                ks_spike_pos = np.load(os.path.join(ksod, 'spike_positions.npy'))
                 
                 for i, cluster in ks_cluster_info.iterrows():
                     if cluster['group'] != 'noise':
+                        unit_spike_pos = ks_spike_pos[ks_spike_cluster == cluster['cluster_id']]
+                        avg_spike_pos = np.mean(unit_spike_pos, axis=0)
+    
                         if (cluster['cluster_id'], ks_dir_name) not in zip(nwbfile.units['kilosort_id'], nwbfile.units['kilosort_dir']):
                             print("Adding unit %d from %s"%(cluster['cluster_id'], ks_dir_name))
                             nwbfile.add_unit(
                                 spike_times=ks_spike_times[ks_spike_cluster == cluster['cluster_id']],
-                                electrodes=[cluster.ch], # for now lets just put the main electrode
+                                electrodes=[cluster.ch],
                                 kilosort_id=cluster['cluster_id'],
                                 group=cluster['group'],
                                 contampct=cluster['ContamPct'],
-                                kilosort_dir=ks_dir_name
+                                kilosort_dir=ks_dir_name,
+                                ks_x=avg_spike_pos[0],
+                                ks_y=avg_spike_pos[1]
                             )
                         else:
                             print("Unit %d from %s already exists"%(cluster['cluster_id'], ks_dir_name))
@@ -937,12 +951,81 @@ class AddKilosortUnits(RemoteTask):
                                 nwbfile.units['spike_times'][ix] = ks_spike_times[ks_spike_cluster == cluster['cluster_id']]
                                 nwbfile.units['contampct'][ix] = cluster['ContamPct']
                                 nwbfile.units['group'][ix] = cluster['group']
+                                nwbfile.units['ks_x'][ix] = avg_spike_pos[0]
+                                nwbfile.units['ks_y'][ix] = avg_spike_pos[1]
+
             nwb_io.write(nwbfile)
 
-class AddUnitValidIntervals(RemoteTask):
+class AddUnitWaveforms(RemoteTask):
+    kilosort_dir = luigi.Parameter(default='ks4_final')
+    ms_spike = luigi.IntParameter(default=2)
+    n_spikes = luigi.IntParameter(default=1000)
+
     def requires(self):
         return {
-            'site_nwb': CreateRemoteSiteNWB(site_dir=self.site_dir),
+            'site_nwb': CreateRemoteSiteNWB(site_dir=self.site_dir, suffix=self.kilosort_dir),
+            'raw_bin': RemoteRawData(site_dir=self.site_dir)
+        }
+    def output(self):
+        return NWBAcquisitionTarget(self.input()['site_nwb'].path, 'unit_waveforms')
+
+    def run(self):
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
+            nwb = nwb_io.read()
+            all_units = nwb.units.to_dataframe()
+            
+            wf_table = DynamicTable(name="unit_waveforms", description="Precise time and metadata about TTL pulses")
+            wf_table.add_column(name="unit_id", description='time of the TTL pulse', data=np.array([],dtype=int))
+            wf_table.add_column(name="electrodes", description='electrodes of units')
+            wf_table.add_column(name="waveform_mean", description='waveform of units')
+            wf_table.add_column(name="waveform_sd", description='std of waveform of units')
+
+            # load the raw data
+            bin_file = Path(self.input()['raw_bin']['bin'].path)
+            bin_info = json.load(open(self.input()['raw_bin']['info'].path,'r'))
+            bin_memmap = np.memmap(bin_file, dtype=bin_info['dtype'], mode='r', shape=(bin_info['num_samples'], bin_info['num_channels']))
+            bin_fs = bin_info['sampling_rate']
+            # ms_spike before and after each spike
+            samp_spike = int(self.ms_spike * bin_fs / 1000)
+            memmap_sliding_window_view = np.lib.stride_tricks.sliding_window_view(bin_memmap, samp_spike * 2 + 1, axis=0)
+
+            for uid, unit in all_units.iterrows():
+                # ignore spikes that are too close to the beginning or end of the recording
+                # for generating waveform averages
+                spike_times_samples = unit['spike_times']*bin_fs - samp_spike
+                spike_times_samples = spike_times_samples.astype(int)
+
+                # sample a few spikes (n_spikes) to get the average waveform
+                spike_times_samples = spike_times_samples[np.searchsorted(spike_times_samples,0):np.searchsorted(spike_times_samples,memmap_sliding_window_view.shape[0])]
+                spike_times_samples = np.random.choice(spike_times_samples, min(len(spike_times_samples),self.n_spikes), replace=False)
+
+                waveforms = memmap_sliding_window_view[spike_times_samples,:]
+                avg_spike = np.mean(waveforms, axis=0)
+                std_spike = np.std(waveforms, axis=0)
+
+                # lets take the top 4 channels to save
+                channel_weights = np.sum(np.abs(avg_spike), axis=1)
+                top_channels = np.argsort(channel_weights)[::-1][:4]
+                avg_spike = avg_spike[top_channels,:]
+                std_spike = std_spike[top_channels,:]
+                electrodes = top_channels
+
+                wf_table.add_row(
+                    unit_id=uid,
+                    electrodes=electrodes,
+                    waveform_mean=avg_spike,
+                    waveform_sd=std_spike
+                )
+            nwb.add_acquisition(wf_table)
+            nwb_io.write(nwb)
+
+
+    
+class AddUnitValidIntervals(RemoteTask):
+    kilosort_dir = luigi.Parameter(default='ks4_final')
+    def requires(self):
+        return {
+            'site_nwb': CreateRemoteSiteNWB(site_dir=self.site_dir, suffix=self.kilosort_dir),
         }
     def output(self):
         return NWBIntervalsTarget(self.input()['site_nwb'].path, 'unit_intervals')

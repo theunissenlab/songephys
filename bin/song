@@ -210,9 +210,13 @@ def create_config(experiment_name):
 
 @click.command("create-remote-config")
 @click.argument("remote_path", type=click.Path())
-def create_remote_config(remote_path):
+@click.argument("out_path", type=click.Path(), default="")
+def create_remote_config(remote_path, out_path):
     from songephys.config import generate_remote_config
-    generate_remote_config( remote_path)
+    if out_path == "":
+        generate_remote_config(remote_path)
+    else:
+        generate_remote_config(remote_path, out_path)
 
 @click.command("list-sites")
 @click.argument("experiment_name", type=click.Path(), default=".")
@@ -453,7 +457,7 @@ def gensinglesitefiles(site_dir):
 @click.command("sort-singlesite")
 @click.argument("site_dir", type=click.Path(exists=True))
 @click.option("-d", "--dir", "_dir", type=str, default="ks4_final")
-def sortsinglesite(site_dir, _dir):
+def sortsinglesite(site_dir, _dir, **kwargs):
     import luigi
     from songephys.pipeline.preprocess_ephys import KiloSort4Sorting
     luigi.build([KiloSort4Sorting(site_dir=site_dir, kilosort_dir=_dir)], local_scheduler=True)
@@ -466,7 +470,12 @@ def gennwb(site_dir):
     luigi.build([GenerateAcquisitionNWB(site_dir=site_dir)], local_scheduler=True)
 
 
-
+@click.command('add-ripples')
+@click.argument("site_dir", type=click.Path(exists=True))
+def add_ripples(site_dir):
+    import luigi
+    from songephys.pipeline.postprocess_ripples import AgglomerateRippleEventsNWB
+    luigi.build([AgglomerateRippleEventsNWB(site_dir=site_dir)], local_scheduler=True)
 
 @click.command('add-sorted-units')
 @click.argument("site_dir", type=click.Path(exists=True))
@@ -474,9 +483,10 @@ def gennwb(site_dir):
 @click.option('--clear_old_units', is_flag=True)
 def addsortedunits(site_dir,_dir,clear_old_units):
     import luigi
-    from songephys.pipeline.nwb_utils import AddKilosortUnits, AddUnitValidIntervals
+    from songephys.pipeline.nwb_utils import AddKilosortUnits, AddUnitValidIntervals, AddUnitWaveforms
     luigi.build([AddKilosortUnits(site_dir=site_dir, kilosort_dir=_dir,clear_old_units=clear_old_units),
-                    AddUnitValidIntervals(site_dir=site_dir)], local_scheduler=True)
+                    AddUnitValidIntervals(site_dir=site_dir, kilosort_dir=_dir),
+                    AddUnitWaveforms(site_dir=site_dir, kilosort_dir=_dir)], local_scheduler=True)
 
 @click.command("run-pipeline-job")
 @click.argument("module")
@@ -629,6 +639,7 @@ cli.add_command(gensinglesitefiles)
 cli.add_command(sortsinglesite)
 cli.add_command(addsortedunits)
 cli.add_command(gennwb)
+cli.add_command(add_ripples)
 cli.add_command(gen_filelists)
 cli.add_command(read_rhd_settings)
 cli.add_command(runpipelinejob)

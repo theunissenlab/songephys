@@ -4,6 +4,7 @@ import time
 import logging
 import json
 from concurrent.futures import ThreadPoolExecutor
+import shutil
 
 import numpy as np
 import luigi
@@ -38,6 +39,7 @@ from .pipeline_utils import (
     get_session_sites,
     parse_filelist,
     session_basename,
+    RemoteTask
 )
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -1355,6 +1357,47 @@ class GenerateSingleSiteMemmap(luigi.Task):
                 multirecording, os.path.dirname(self.output()['bin'].path), data_name=os.path.basename(self.output()['bin'].path), dtype=np.int16,
                 chunksize=60000   )       
 
+class RemoteRawData(RemoteTask):
+    """
+    This task is used to get a raw data file. it will copy the file from the remote location to the local location
+    """
+    def requires(self):
+        return {
+            "full_bin_array": GenerateSingleSiteMemmap(self.remote_site_dir)
+        }
+    def output(self):
+        if self.is_remote and self.remote_config['SPIKE_SORTING']['COPY_RAW']:
+            return {
+                'bin': luigi.LocalTarget(os.path.join(self.site_dir,'raw',"%s.bin"%self.site_name)),
+                'info': luigi.LocalTarget(os.path.join(self.site_dir,'raw',"%s_info.json"%self.site_name))
+            }
+        else:
+            # we are not copying the raw data, just point to the output of GenerateSingleSiteMemmap
+            return{
+                'bin': self.input()['full_bin_array']['bin'],
+                'info': self.input()['full_bin_array']['info']
+            }
+
+    def run(self):
+        site_config = self.site_config
+
+        out_dir = os.path.join(self.site_dir,'raw')
+        os.makedirs(out_dir,exist_ok=True)
+        if self.is_remote is not None and self.remote_config['SPIKE_SORTING']['COPY_RAW']:
+            # copy the raw data to the local location
+            for key in ['bin','info']:
+                remote_path = self.input()['full_bin_array'][key].path
+                local_path = self.output()[key].path
+                if not os.path.exists(local_path):
+                    print(f"Copying {remote_path} to {local_path}")
+                    shutil.copy(remote_path,local_path)
+                else:
+                    print(f"File already exists: {local_path}")
+        else:
+            print("Not copying raw data due to remote config setting, or file already exists")
+
+
+
 class GenerateSingleSiteFiles(luigi.WrapperTask):
     """Generate all the files for a single site"""
     site_dir = SiteParameter()
@@ -1400,7 +1443,6 @@ class Rhd2Nix(luigi.Task):
 
         # Temporarily move nix file from segmentation dir to raw dir
         if os.path.exists(os.path.join(self.session_dir, "segmentation", nix_filename)):
-            import shutil
             shutil.move(os.path.join(self.session_dir, "segmentation",
                         nix_filename), os.path.join(raw_dir, nix_filename))
 

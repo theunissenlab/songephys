@@ -9,6 +9,7 @@ import shutil
 import time
 import gc
 
+from pathlib import Path
 import torch
 import luigi
 import numpy as np
@@ -25,7 +26,7 @@ from ..preprocess.ephys.filter import common_average_filter
 from ..preprocess.ephys.detect import calculate_snippet_dimensions, extract_spikes
 from ..preprocess.ephys.sort import sort, create_hierarchy
 
-from .file_setup import Rhd2Wav, Rhd2Binary, SiteConfig, SessionConfig, SessionProjectConfig, SiteProjectConfig, DefineSessions,GenerateSingleSiteMemmap, GenerateSiteMemmaps, GenerateLFP
+from .file_setup import Rhd2Wav, Rhd2Binary, SiteConfig, SessionConfig, SessionProjectConfig, SiteProjectConfig, DefineSessions,GenerateSingleSiteMemmap, GenerateSiteMemmaps, GenerateLFP, RemoteRawData
 from .pipeline_utils import SiteParameter, SessionParameter, get_session_sites, RemoteTask
 
 
@@ -428,11 +429,13 @@ class KiloSortSorting(RemoteTask):
         kilosort_run(bin_file, dir_path=self.site_dir, output_dir=out_dir,
                      probe = probe_fun(chan_names = chan_names),
                      n_channels=len(chan_names),data_dtype='int16')
+
+
 class KiloSort4Sorting(RemoteTask):
     kilosort_dir = luigi.Parameter(default='ks4_CAR')
     def requires(self):
         return {
-            "full_bin_array": GenerateSingleSiteMemmap(self.remote_site_dir)
+            "full_bin_array": RemoteRawData(site_dir = self.site_dir)
         }
 
     def output(self):
@@ -449,19 +452,6 @@ class KiloSort4Sorting(RemoteTask):
         
         bin_file = Path(self.input()['full_bin_array']['bin'].path)
         bin_info = json.load(open(self.input()['full_bin_array']['info'].path,'r'))
-
-        os.makedirs(self.site_dir,exist_ok=True)
-        if self.remote_config is not None and self.remote_config['SPIKE_SORTING']['COPY_RAW']:
-            # copy the raw data to the local location
-            local_bin_path = os.path.join(self.site_dir,os.path.basename(bin_file))
-            if not os.path.exists(local_bin_path):
-                print(f"Copying {bin_file} to {local_bin_path}")
-                shutil.copy(bin_file,local_bin_path)
-            else:
-                print(f"File already exists: {local_bin_path}")
-            bin_file = local_bin_path
-        elif self.remote_config is not None and self.remote_config['SPIKE_SORTING']['COPY_RAW'] is False:
-            print("Not copying raw data due to remote config setting")
 
         probes = dict({
             "P1": 'cambridge_P1.prb', # 4 shank
@@ -492,6 +482,7 @@ class KiloSort4Sorting(RemoteTask):
         settings['Th_universal'] = 9
         settings['dminx'] = 18.5
         settings['templates_from_data'] = True
+        #settings['cluster_downsampling'] = 40
 
         # # TODO if we keep running OOM then we should set kcoords to 1
         ks_output_dir =  os.path.dirname(self.output().path)
@@ -511,7 +502,7 @@ class KiloSort4Sorting(RemoteTask):
                 print("shank %d already sorted"%sh)
                 continue
             os.makedirs(ks_output_dir_sh,exist_ok=True)
-            ret = kilosort.run_kilosort(settings=settings, probe=prb_sh, filename=bin_file, data_dtype='int16', results_dir=ks_output_dir_sh)#, clear_cache=True)
+            ret = kilosort.run_kilosort(settings=settings, probe=prb_sh, filename=bin_file, data_dtype='int16', results_dir=ks_output_dir_sh, clear_cache=True)
             del ret 
 
             # clear gpu cache between kilosort runs

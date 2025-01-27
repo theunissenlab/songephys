@@ -103,7 +103,7 @@ class RemoteTask(BaseSiteTask):
     @property
     def remote_site_dir(self):
         base_path = self.site_dir.split("sites")[0]
-        self.site_dir = self.site_dir
+        self.site_dir = self.site_dir #TODO confirm this works as expected 
         if os.path.exists(os.path.join(base_path, "remote_config.yaml")):
             # load the remote config
             remote_cfg = load_yaml(os.path.join(base_path, "remote_config.yaml"))
@@ -120,6 +120,9 @@ class RemoteTask(BaseSiteTask):
         else:
             return None
 
+    @property
+    def site_name(self):
+        return os.path.basename(self.site_dir)
 
 
 def group_raw_files(filelist):
