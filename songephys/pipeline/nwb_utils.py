@@ -218,6 +218,7 @@ class PyoperantStimuli(TimeSeries):
         super().__init__(name=name, data=data, unit='wav', rate=float(rate), **kwargs)
         self.bird_name = bird_name
         self.rendition_id = rendition_id
+
 class NWBProcessingTarget(luigi.Target):
     def __init__(self, nwbfile, processing_module, *target_names):
         self.path = nwbfile
@@ -583,14 +584,24 @@ class AddAudioNWB(LocalTask):
         # load the audio data
         audio_info = json.load(open(self.input()['audio']['info'].path,'r'))
         audio_shape = (audio_info['num_samples'], audio_info['num_channels'])
-        audio_data = np.memmap(self.input()['audio']['bin'].path,shape=audio_shape, dtype=audio_info['dtype'], mode='r')
-        audio_ts = TimeSeries(
-            name='audio',
-            data=audio_data,
-            rate=float(audio_info['sampling_rate']),
-            description='Audio data from the site',
-            unit='mV'
-        )
+        if 'file_start_ends' in audio_info:
+            audio_data = np.zeros(audio_shape, dtype=audio_info['dtype'])
+            for idx, [start, end] in enumerate(audio_info['file_start_ends']):
+                if idx == 0:
+                    fn = self.input()['audio']['bin'].path
+                else:
+                    fn = self.input()['audio']['bin'].path.replace('.wav','-%d.wav'%idx)
+                audio_data[start:end] = np.memmap(fn,shape=(end-start, audio_info['num_channels']), dtype=audio_info['dtype'], mode='r')
+        else:
+            # single file
+            audio_data = np.memmap(self.input()['audio']['bin'].path,shape=audio_shape, dtype=audio_info['dtype'], mode='r')
+            audio_ts = TimeSeries(
+                name='audio',
+                data=audio_data,
+                rate=float(audio_info['sampling_rate']),
+                description='Audio data from the site',
+                unit='mV'
+            )
         with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
             nwbfile = nwb_io.read()
             nwbfile.add_acquisition(audio_ts)
@@ -651,6 +662,9 @@ class AddPyoperantTrials(LocalTask):
             op_trial_intervals.add_column(name="experiment_uid", description="Unique Identifier for experiment (base of filename)",data=np.array([],dtype=str))
             op_trial_intervals.add_column(name="stimuli_path", description="Path of Stimuli presented",data=np.array([],dtype=str))
             op_trial_intervals.add_column(name="stimuli_name", description="Name of Stimuli presented",data=np.array([],dtype=str))
+            op_trial_intervals.add_column(name="bird_name", description="Name of bird",data=np.array([],dtype=str))
+            op_trial_intervals.add_column(name="stim_class", description="Name of bird",data=np.array([],dtype=str))
+            op_trial_intervals.add_column(name="trial_type", description="Name of bird",data=np.array([],dtype=str))
             op_trial_intervals.add_column(name="response", description="Response made",data=np.array([],dtype=bool))
             op_trial_intervals.add_column(name="correct", description="Correct response",data=np.array([],dtype=bool))
 
@@ -662,7 +676,9 @@ class AddPyoperantTrials(LocalTask):
             pb_trial_intervals.add_column(name="experiment_uid", description="Unique Identifier for experiment (base of filename)",data=np.array([],dtype=str))
             pb_trial_intervals.add_column(name="stimuli_path", description="Path of Stimuli presented",data=np.array([],dtype=str))
             pb_trial_intervals.add_column(name="stimuli_name", description="Name of Stimuli presented",data=np.array([],dtype=str))
-
+            pb_trial_intervals.add_column(name="bird_name", description="Name of bird",data=np.array([],dtype=str))
+            pb_trial_intervals.add_column(name="stim_class", description="Name of bird",data=np.array([],dtype=str))
+            pb_trial_intervals.add_column(name="trial_type", description="Name of bird",data=np.array([],dtype=str))
 
             if len(audcode_events) == 0:
                 print("No audcode events found... skipping adding experiments")
@@ -687,6 +703,10 @@ class AddPyoperantTrials(LocalTask):
                 site_config = self.site_config
                 project_config = self.project_config
                 stim_root_dir = project_config['LOCAL_RAW_FILES']['stimuli_drive']
+                if 'stim_dir' not in site_config:
+                    stim_dir = stim_root_dir
+                else:
+                    stim_dir = os.path.join(stim_root_dir, site_config['stim_dir'])
                 pyoperant_csvs = [os.path.join(project_config['LOCAL_RAW_FILES']['pyoperant_drive'],f) for f in site_config['filelist'] if f.endswith('trialdata.csv')]
                 pyoperant_experiments = [PyoperantExperiment(x) for x in pyoperant_csvs]
 
@@ -726,14 +746,23 @@ class AddPyoperantTrials(LocalTask):
 
                             start = audcode_event.timestamp if audcode_event is not None else (exp.trial_start_time(ix) - session_start).total_seconds()
                             stim_path = trial.stimulus_name
-                            stim_name = trial.stimulus_name.split('\\')[-1]
-                            
+                            stim_path = stim_path.replace('\\','/')
+                            if 'STIM_REMAP' in self.project_config:
+                                stim_and_dir = os.path.join(stim_path.split("/")[-2], stim_path.split("/")[-1])
+                                if stim_and_dir in self.project_config['STIM_REMAP']:
+                                    stim_and_dir_new = self.project_config['STIM_REMAP'][stim_and_dir]
+                                    print("Renaming %s to %s"%(stim_path,stim_and_dir_new))
+                                    stim_path = stim_path[:-len(stim_and_dir)]
+                                    stim_path = stim_path + stim_and_dir_new
+                            stim_name = stim_path.split('/')[-1]
+                            bird_name = stim_name.split('_')[3]
+                            stim_class = stim_path.split('/')[-2]
 
                             # add the stim to the nwb file if it is not present already
                             if stim_name not in nwbfile.stimulus:
                                 bird_name = stim_name.split('_')[3]
                                 rendition_id = stim_name.strip('.wav').split('_')[-1]
-                                stim_files = glob.glob(os.path.join(stim_root_dir,'**',stim_name),recursive=True)
+                                stim_files = glob.glob(os.path.join(stim_dir,'**',stim_name),recursive=True)
                                 if len(stim_files) == 0:
                                     print("Stimulus %s not found"%stim_name)
                                     continue
@@ -761,8 +790,11 @@ class AddPyoperantTrials(LocalTask):
                                     stop_time=end,
                                     trial_num=ix,
                                     experiment_uid=exp.uid,
-                                    stimuli_path=trial.stimulus_name,
-                                    stimuli_name=trial.stimulus_name.split('\\')[-1],
+                                    stimuli_path=stim_path,
+                                    stimuli_name=stim_name,
+                                    bird_name=bird_name,
+                                    stim_class=stim_class,
+                                    trial_type=exp.experiment_type,
                                     response=trial.response,
                                     correct=trial.correct,
                                     timeseries=all_time_series
@@ -774,8 +806,11 @@ class AddPyoperantTrials(LocalTask):
                                     stop_time=end,
                                     trial_num=ix,
                                     experiment_uid=exp.uid,
-                                    stimuli_path=trial.stimulus_name,
-                                    stimuli_name=trial.stimulus_name.split('\\')[-1],
+                                    stimuli_path=stim_path,
+                                    stimuli_name=stim_name,
+                                    bird_name=bird_name,
+                                    stim_class=stim_class,
+                                    trial_type=exp.experiment_type,
                                     timeseries=all_time_series
                                 )
                 
@@ -819,7 +854,8 @@ class GenerateAcquisitionNWB(luigi.WrapperTask):
             'lfp': AddLFPNWB(site_dir=self.site_dir),
             'motion': AddMotionNWB(site_dir=self.site_dir),
             'audio': AddAudioNWB(site_dir=self.site_dir),
-            'operant': AddPyoperantTrials(site_dir=self.site_dir)
+            'operant': AddPyoperantTrials(site_dir=self.site_dir),
+            'spectrograms': AddStimSpectrogramsNWB(site_dir=self.site_dir),
         }
     
 
@@ -901,7 +937,6 @@ class AddKilosortUnits(RemoteTask):
                 nwbfile.add_unit_column(name='kilosort_dir', description='The directory where the kilosort output is stored',data=np.array([],dtype=str))
                 nwbfile.add_unit_column(name='kilosort_id', description='The id of the unit in the kilosort output',data=np.array([],dtype=int))
                 nwbfile.add_unit_column(name='group', description='The Kilosort Group (good, mua, noise)',data=np.array([],dtype=str))
-                nwbfile.add_unit_column(name='contampct', description='The Contamination Percentage from Kilosort',data=np.array([],dtype=int))
                 nwbfile.add_unit_column(name='ks_x', description='The approx X position in um from Kilosort',data=np.array([],dtype=int))
                 nwbfile.add_unit_column(name='ks_y', description='The approx Y position in um from Kilosort',data=np.array([],dtype=int))
             # load the kilosort data
@@ -938,7 +973,6 @@ class AddKilosortUnits(RemoteTask):
                                 electrodes=[cluster.ch],
                                 kilosort_id=cluster['cluster_id'],
                                 group=cluster['group'],
-                                contampct=cluster['ContamPct'],
                                 kilosort_dir=ks_dir_name,
                                 ks_x=avg_spike_pos[0],
                                 ks_y=avg_spike_pos[1]
@@ -949,7 +983,6 @@ class AddKilosortUnits(RemoteTask):
                                 print("Overwriting")
                                 ix = (nwbfile.units['kilosort_id'] == cluster['cluster_id']) & (nwbfile.units['kilosort_dir'] == ks_dir_name)
                                 nwbfile.units['spike_times'][ix] = ks_spike_times[ks_spike_cluster == cluster['cluster_id']]
-                                nwbfile.units['contampct'][ix] = cluster['ContamPct']
                                 nwbfile.units['group'][ix] = cluster['group']
                                 nwbfile.units['ks_x'][ix] = avg_spike_pos[0]
                                 nwbfile.units['ks_y'][ix] = avg_spike_pos[1]
@@ -1076,7 +1109,7 @@ class AddUnitValidIntervals(RemoteTask):
                 active_mean = np.mean(active_rates[active == 1])
                 active_std = np.std(active_rates[active == 1])
                 # reject active bins that are less than 1 std 
-                active = active * (active_rates > active_mean - active_std)
+                active = active * (active_rates > active_mean - 2.5*active_std)
 
                 # calculate contiguous active periods
                 if np.all(active == 1):
@@ -1093,7 +1126,7 @@ class AddUnitValidIntervals(RemoteTask):
                         active_periods.append((active_bins[start], active_bins[-1]))
                 if len(active_periods) == 0:
                     print("Unit %d has no active periods"%unit.kilosort_id)
-                    return []
+                    continue
                 # go through the active periods, and if the inactive period between two active periods is less than 5minutes, then merge them
                 agglomerated_active_periods = [active_periods[0]]
                 for i in range(1, len(active_periods)):

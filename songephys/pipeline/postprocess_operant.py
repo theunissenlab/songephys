@@ -19,7 +19,7 @@ from scipy.stats import zscore
 from .file_setup import SiteProjectConfig, SiteConfig, GenerateSingleSiteOperantCSV, GenerateSingleSitePlaybackCSV
 from .pipeline_utils import SiteParameter, BaseTask
 from .preprocess_sound import MergeOperantCSV, MergePlaybacksCSV
-from .preprocess_ephys import KiloSort4Sorting,GenerateSiteLFP, KiloSortSorting
+from .preprocess_ephys import KiloSort4Sorting, KiloSortSorting#,GenerateSiteLFP, KiloSortSorting
 from ..plot_utils import plot_pecking_test_data, color_by_reward
 
 """
@@ -2145,7 +2145,7 @@ class GenOperantLFPCoherence(AnalysisTask):
     def requires(self):
         return {
             "playbacks": GenBehaviorDB(site_dir=self.site_dir,analysis_dir=self.analysis_dir,ksversion=self.ksversion),
-            "lfp": GenerateSiteLFP(site_dir=self.site_dir,highpass_freq=self.highpass_freq)
+            #"lfp": GenerateSiteLFP(site_dir=self.site_dir,highpass_freq=self.highpass_freq) #TODO: need to point this to GenerateSingleSiteLFP
         }
     def output(self):
         return luigi.LocalTarget(os.path.join(self.get_analysis_dir(),"data","coherence_LFP_%d.pkl"%(self.window_size)))

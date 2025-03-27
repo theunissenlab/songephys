@@ -81,6 +81,14 @@ class BaseSiteTask(BaseTask):
             return load_yaml(os.path.join(remote_cfg["REMOTE_PATH"], "project_config.yaml"))
         return load_yaml(os.path.join(base_path, "project_config.yaml"))
         
+    @property
+    def stim_dir(self):
+        # get the base Stim dir from the project config
+        base_stim_dir = self.project_config['LOCAL_RAW_FILES']['stimuli_drive']
+        if 'stim_dir' not in self.site_config:
+            return base_stim_dir
+        return os.path.join(base_stim_dir, self.site_config['stim_dir'])
+        
     def prerun_check(self):
         return True
 

@@ -455,19 +455,21 @@ def gensinglesitefiles(site_dir):
     luigi.build([GenerateSingleSiteFiles(site_dir=site_dir)], local_scheduler=True)
 
 @click.command("sort-singlesite")
-@click.argument("site_dir", type=click.Path(exists=True))
+@click.argument("site_dir", type=click.Path())
 @click.option("-d", "--dir", "_dir", type=str, default="ks4_final")
 def sortsinglesite(site_dir, _dir, **kwargs):
     import luigi
     from songephys.pipeline.preprocess_ephys import KiloSort4Sorting
+    if not os.path.exists(site_dir):
+        os.makedirs(site_dir, exist_ok=True)
     luigi.build([KiloSort4Sorting(site_dir=site_dir, kilosort_dir=_dir)], local_scheduler=True)
 
 @click.command("gen-nwb")
 @click.argument("site_dir", type=click.Path(exists=True))
 def gennwb(site_dir):
     import luigi
-    from songephys.pipeline.nwb_utils import GenerateAcquisitionNWB
-    luigi.build([GenerateAcquisitionNWB(site_dir=site_dir)], local_scheduler=True)
+    from songephys.pipeline.postprocess_stimuli import GenerateBaseNWB
+    luigi.build([GenerateBaseNWB(site_dir=site_dir)], local_scheduler=True)
 
 
 @click.command('add-ripples')
@@ -512,71 +514,188 @@ def unittest(_dir, verbose):
         testsuite = unittest.TestLoader().loadTestsFromName(_dir)
     unittest.TextTestRunner(verbosity=verbose).run(testsuite)
 
-@click.command("gen-filelists")
-@click.argument("experiment_name")
-def gen_filelists(experiment_name, pyoperant_days=[]):
-    import glob, os
-    import datetime, pandas
-    import numpy as np
-    from songephys.config import get_config
-    project_cfg = get_config(experiment_name)
+# def gen_filelists(experiment_name, pyoperant_days=[]):
+#     import glob, os
+#     import datetime, pandas
+#     import numpy as np
+#     from songephys.config import get_config
+#     project_cfg = get_config(experiment_name)
 
-    pyop_dir = project_cfg['LOCAL_RAW_FILES']['pyoperant_drive']
-    rhd_dir = project_cfg['LOCAL_RAW_FILES']['rhd_drive']
-    all_pyop_files = glob.glob(os.path.join(pyop_dir,'*_trialdata.csv'))
-    all_rhd_files = glob.glob(os.path.join(rhd_dir,"*/*.rhd"))
-    file_lists = dict()
-    for pyop_file in all_pyop_files:
-        exp_name = pyop_file.split('_trialdata')[0]
-        file_lists[exp_name] = []
-        df = pandas.read_csv(pyop_file)
-        if(len(df) == 0):
-            print("-------------------------")
-            print("%s is EMPTY"%exp_name)
-            print("------------------------")
+#     pyop_dir = project_cfg['LOCAL_RAW_FILES']['pyoperant_drive']
+#     rhd_dir = project_cfg['LOCAL_RAW_FILES']['rhd_drive']
+#     all_pyop_files = glob.glob(os.path.join(pyop_dir,'*_trialdata.csv'))
+#     all_rhd_files = glob.glob(os.path.join(rhd_dir,"*/*.rhd"))
+#     file_lists = dict()
+#     for pyop_file in all_pyop_files:
+#         exp_name = pyop_file.split('_trialdata')[0]
+#         file_lists[exp_name] = []
+#         df = pandas.read_csv(pyop_file)
+#         if(len(df) == 0):
+#             print("-------------------------")
+#             print("%s is EMPTY"%exp_name)
+#             print("------------------------")
+#             continue
+#         start_date = datetime.datetime.strptime(exp_name.split('_')[-1],'%Y%m%d%H%M%S')
+#         end_date = datetime.datetime.fromisoformat(df['time'].iloc[-1]) + datetime.timedelta(0,15)
+#         print("---------------------------------------")
+#         print(exp_name)
+#         print("Files:")
+#         print(os.path.relpath(exp_name+"_events.log",pyop_dir))
+#         print(os.path.relpath(exp_name+"_trialdata.csv",pyop_dir))
+#         # get individual rhd recordings
+#         # TODO Make this code work, to do this, we need to know how long each pyoperant file is
+#         #       This should be possible by loading the csv and getting the datetime for the final entry.
+#         #experiments = np.unique([os.path.dirname(x) for x in all_rhd_files])
+#         experiments = np.unique([os.path.dirname(f) for f in all_rhd_files])
+#         experiments_used = dict()
+#         exp_filelists = dict()
+#         for f in all_rhd_files:
+#             experiment = os.path.basename(os.path.dirname(f))
+#             exp_start = datetime.datetime.strptime(experiment.split('__')[-1],'%y%m%d_%H%M%S')
+#             rhd_name = os.path.basename(f).split('.rhd')[0]
+#             rhd_start = datetime.datetime.strptime(rhd_name.split('__')[-1],'%y%m%d_%H%M%S')
+#             rhd_end = rhd_start + datetime.timedelta(0,0,0,0,30)
+#             if (exp_start < start_date) and (rhd_start < end_date) and (rhd_end > start_date):
+#                 #file_lists[exp_name].append(f)
+#                 #print(f)
+#                 if experiment not in exp_filelists:
+#                     exp_filelists[experiment] = []
+#                 exp_filelists[experiment].append(os.path.relpath(f,rhd_dir))
+#                 #print(os.path.relpath(f,rhd_dir))
+#                 if experiment in experiments_used:
+#                     experiments_used[experiment] = min(experiments_used[experiment],rhd_start)
+#                 else:
+#                     experiments_used[experiment] = rhd_start
+#         cur_latest = None
+#         for exp in experiments_used:
+#             exp_filelists[exp].append(os.path.join(rhd_dir,exp,'settings.xml'))
+#             if cur_latest is None:
+#                 cur_latest = exp
+#             else:
+#                 if experiments_used[exp] > experiments_used[cur_latest]:
+#                     cur_latest = exp
+#         if cur_latest is not None:
+#             for f in exp_filelists[cur_latest]:
+#                 print(f)
+
+# helper functions for gen_filelists
+from neo.rawio import IntanRawIO
+import datetime
+import pandas as pd
+import glob
+
+def get_start_end(rhd_file):
+    # start is from the filename
+    date_string = rhd_file.split('__')[-1].split('.rhd')[0]
+    start_time = datetime.datetime.strptime(date_string, "%y%m%d_%H%M%S")
+    in_io = IntanRawIO(rhd_file,ignore_integrity_checks=True)
+    in_io._parse_header()
+    end = start_time + datetime.timedelta(seconds=int(in_io._max_sigs_length/30000 + 1))
+    return (start_time, end)
+def get_recording_start_end(rhd_folder, base_folder):
+    rhds = glob.glob(os.path.join(base_folder,rhd_folder,"*.rhd"))
+    rhds_trunc = ['/'.join([rhd_folder,os.path.basename(x)]) for x in rhds]
+    rec_start = None
+    rec_end = None
+    for rhd in rhds:
+        s,e = get_start_end(rhd)
+        if rec_start is None or s < rec_start:
+            rec_start = s
+        if rec_end is None or e > rec_end:
+            rec_end = e
+    return rec_start, rec_end, rhds_trunc
+def get_pyop_start_end(trialdata_csv):
+    date_string = trialdata_csv.split('_')[-2]
+    start_time = datetime.datetime.strptime(date_string, "%Y%m%d%H%M%S")
+    df = pd.read_csv(trialdata_csv)
+    if len(df) == 0:
+        return None
+    end_time = datetime.datetime.fromisoformat(df['time'].iloc[-1])
+    return start_time, end_time
+
+
+@click.command("gen-filelists")
+@click.argument("data_dir", type=click.Path(), default=os.getcwd())
+def gen_filelists(data_dir=None):
+    # Generate all filelists for a given data directory
+    # data dir should be on Condor/Data and contain the rhd folders
+    # base_folder = '/mnt/condor/Data/OperantEphys/HpiRed7670F'
+    if data_dir is None:
+        data_dir = os.getcwd()
+    if not os.path.exists(data_dir):
+        print("Data directory %s does not exist"%data_dir)
+        return
+    bird = os.path.basename(data_dir)
+    # first find all rhd folders
+    rhd_start= "%s__"%bird
+    rhd_folders = [os.path.basename(x) for x in glob.glob(os.path.join(data_dir,rhd_start+"*"))]
+
+    operant_csvs = glob.glob(os.path.join(data_dir,'OperantExperiments','*_trialdata.csv'))
+    playback_csvs = glob.glob(os.path.join(data_dir,'PlaybackExperiments','*_trialdata.csv'))
+
+    experiments = dict()
+    unused_csvs = []
+    for rhd_folder in rhd_folders:
+        st,end,rhds = get_recording_start_end(rhd_folder,data_dir)
+        experiments[rhd_folder] = dict()
+        experiments[rhd_folder]['start'] = st
+        experiments[rhd_folder]['end'] = end
+        experiments[rhd_folder]['rhds'] = rhds
+        experiments[rhd_folder]['operant'] = []
+        experiments[rhd_folder]['playback'] = []
+        experiments[rhd_folder]['settings'] = '/'.join([rhd_folder,'settings.xml'])
+        print("Recording %s"%rhd_folder)
+        print("Start: %s"%st)
+        print("End: %s"%end)
+
+    for csv in operant_csvs:
+        ret = get_pyop_start_end(csv)
+        if ret is None:
             continue
-        start_date = datetime.datetime.strptime(exp_name.split('_')[-1],'%Y%m%d%H%M%S')
-        end_date = datetime.datetime.fromisoformat(df['time'].iloc[-1]) + datetime.timedelta(0,15)
-        print("---------------------------------------")
-        print(exp_name)
-        print("Files:")
-        print(os.path.relpath(exp_name+"_events.log",pyop_dir))
-        print(os.path.relpath(exp_name+"_trialdata.csv",pyop_dir))
-        # get individual rhd recordings
-        # TODO Make this code work, to do this, we need to know how long each pyoperant file is
-        #       This should be possible by loading the csv and getting the datetime for the final entry.
-        #experiments = np.unique([os.path.dirname(x) for x in all_rhd_files])
-        experiments = np.unique([os.path.dirname(f) for f in all_rhd_files])
-        experiments_used = dict()
-        exp_filelists = dict()
-        for f in all_rhd_files:
-            experiment = os.path.basename(os.path.dirname(f))
-            exp_start = datetime.datetime.strptime(experiment.split('__')[-1],'%y%m%d_%H%M%S')
-            rhd_name = os.path.basename(f).split('.rhd')[0]
-            rhd_start = datetime.datetime.strptime(rhd_name.split('__')[-1],'%y%m%d_%H%M%S')
-            rhd_end = rhd_start + datetime.timedelta(0,0,0,0,30)
-            if (exp_start < start_date) and (rhd_start < end_date) and (rhd_end > start_date):
-                #file_lists[exp_name].append(f)
-                #print(f)
-                if experiment not in exp_filelists:
-                    exp_filelists[experiment] = []
-                exp_filelists[experiment].append(os.path.relpath(f,rhd_dir))
-                #print(os.path.relpath(f,rhd_dir))
-                if experiment in experiments_used:
-                    experiments_used[experiment] = min(experiments_used[experiment],rhd_start)
-                else:
-                    experiments_used[experiment] = rhd_start
-        cur_latest = None
-        for exp in experiments_used:
-            exp_filelists[exp].append(os.path.join(rhd_dir,exp,'settings.xml'))
-            if cur_latest is None:
-                cur_latest = exp
-            else:
-                if experiments_used[exp] > experiments_used[cur_latest]:
-                    cur_latest = exp
-        if cur_latest is not None:
-            for f in exp_filelists[cur_latest]:
-                print(f)
+        s,e = ret
+        added = False
+        for exp in experiments:
+            if s > experiments[exp]['start'] and s < experiments[exp]['end']:
+                experiments[exp]['operant'].append('/'.join(['OperantExperiments',os.path.basename(csv).split('_trialdata')[0]]))
+                added=True
+                break
+        if not added:
+            unused_csvs.append([csv,e-s])
+    for csv in playback_csvs:
+        ret = get_pyop_start_end(csv)
+        if ret is None:
+            continue
+        s,e = ret
+        added=False
+        for exp in experiments:
+            if s > experiments[exp]['start'] and e < experiments[exp]['end']:
+                experiments[exp]['playback'].append('/'.join(['PlaybackExperiments',os.path.basename(csv).split('_trialdata')[0]]))
+                added=True
+                break
+        if not added:
+            unused_csvs.append([csv,e-s])
+    if len(unused_csvs) > 0:
+        print("-----------------------")
+        print("There are unused csvs, this is usually fine, but you want to make sure they are not important")
+        print("Unused csvs:")
+        for csv, dur in unused_csvs:
+            print("%s \t Duration: %s"%(csv, dur))
+        print("-----------------------")
+
+    for experiment in experiments:
+        lines = []
+        lines.append(experiments[experiment]['settings'])
+        lines.extend(experiments[experiment]['rhds'])
+        for pyop in experiments[experiment]['playback'] + experiments[experiment]['operant']:
+            lines.append(pyop+'_trialdata.csv')
+            lines.append(pyop+'_events.log')
+            lines.append(pyop+'_config.yaml')
+        os.makedirs(os.path.join(data_dir,'filelists'),exist_ok=True)
+        with open(os.path.join(data_dir,'filelists','%s.txt'%experiment),'w') as f:
+            for line in lines:
+                f.write(line+'\n')
+        print(experiment)
+        
     
 
 def parse_settings_file(settings_path):

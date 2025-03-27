@@ -800,8 +800,6 @@ class GenerateSingleSiteAudioFile(luigi.Task):
         info = get_recording_info(multirecording_f)
 
         self.output()['info'].makedirs()
-        with open(self.output()['info'].path, 'w') as f:
-            json.dump(info, f)
 
         # save to wav file if it doesnt exist
         if not os.path.exists(self.output()['bin'].path):
@@ -823,12 +821,14 @@ class GenerateSingleSiteAudioFile(luigi.Task):
             print(f'dtype: {dtype}')
 
             # if N is bigger than 2**32, we need to split the wav files
+            file_start_ends = []
             if 2*N*c > 2**32:
                 n_wav = int(np.ceil(2*N*c / 2**32))
                 n_per_file = int(np.ceil(N / n_wav))
                 for i in range(n_wav):
                     start_frame = i * n_per_file
                     end_frame = min((i + 1) * n_per_file, N)
+                    file_start_ends.append((start_frame, end_frame))
                     if i > 0:
                         fn = f"audio_{os.path.basename(self.site_dir)}-{i}.wav"
                     else:
@@ -906,6 +906,10 @@ class GenerateSingleSiteAudioFile(luigi.Task):
                 print('='*40)
 
                 del(y)  # Close memmap after copying
+        if len(file_start_ends) > 0:
+            info['file_start_ends'] = file_start_ends
+        with open(self.output()['info'].path, 'w') as f:
+            json.dump(info, f)
 
 
 
