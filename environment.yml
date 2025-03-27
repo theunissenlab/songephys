@@ -1,4 +1,4 @@
-name: conda_se
+name: song
 channels:
   - conda-forge
   - defaults
