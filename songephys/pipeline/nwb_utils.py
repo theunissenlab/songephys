@@ -595,13 +595,13 @@ class AddAudioNWB(LocalTask):
         else:
             # single file
             audio_data = np.memmap(self.input()['audio']['bin'].path,shape=audio_shape, dtype=audio_info['dtype'], mode='r')
-            audio_ts = TimeSeries(
-                name='audio',
-                data=audio_data,
-                rate=float(audio_info['sampling_rate']),
-                description='Audio data from the site',
-                unit='mV'
-            )
+        audio_ts = TimeSeries(
+            name='audio',
+            data=audio_data,
+            rate=float(audio_info['sampling_rate']),
+            description='Audio data from the site',
+            unit='mV'
+        )
         with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
             nwbfile = nwb_io.read()
             nwbfile.add_acquisition(audio_ts)
