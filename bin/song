@@ -466,10 +466,11 @@ def sortsinglesite(site_dir, _dir, **kwargs):
 
 @click.command("gen-nwb")
 @click.argument("site_dir", type=click.Path(exists=True))
-def gennwb(site_dir):
+@click.argument("add_spectrograms", type=bool, default=False)
+def gennwb(site_dir, add_spectrograms):
     import luigi
     from songephys.pipeline.postprocess_stimuli import GenerateBaseNWB
-    luigi.build([GenerateBaseNWB(site_dir=site_dir)], local_scheduler=True)
+    luigi.build([GenerateBaseNWB(site_dir=site_dir, add_spectrogram_info=add_spectrograms)], local_scheduler=True)
 
 
 @click.command('add-ripples')

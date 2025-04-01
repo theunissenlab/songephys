@@ -291,7 +291,7 @@ def process_stim_dir(stim_dir, wavs_to_include=None):
             #print("Milbrook len %d"%len(rend_ids))
             nrends = len(rend_ids)
         else:
-            stim_type = 'Operant'
+            stim_type = 'Operant' #SO_STIM_3_BIRD_REND.wav
             if len(rend_str) == 4:
                 nrends = 2
                 rend_ids = [int(rend_str[:2]), int(rend_str[2:])]
@@ -661,13 +661,24 @@ class AddStimuliInfoNWB(LocalTask):
         
 class GenerateBaseNWB(luigi.WrapperTask):
     site_dir = SiteParameter()
+    add_spectrogram_info = luigi.BoolParameter(default=False)
     def requires(self):
-        return {
-            'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
-            'digital': AddDigitalEventsNWB(site_dir=self.site_dir),
-            'lfp': AddLFPNWB(site_dir=self.site_dir),
-            'motion': AddMotionNWB(site_dir=self.site_dir),
-            'audio': AddAudioNWB(site_dir=self.site_dir),
-            'operant': AddPyoperantTrials(site_dir=self.site_dir),
-            'spectrograms': AddStimSpectrogramsNWB(site_dir=self.site_dir),
-        }
+        if self.add_spectrogram_info:
+            return {
+                'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
+                'digital': AddDigitalEventsNWB(site_dir=self.site_dir),
+                'lfp': AddLFPNWB(site_dir=self.site_dir),
+                'motion': AddMotionNWB(site_dir=self.site_dir),
+                'audio': AddAudioNWB(site_dir=self.site_dir),
+                'operant': AddPyoperantTrials(site_dir=self.site_dir),
+                'spectrograms': AddStimSpectrogramsNWB(site_dir=self.site_dir),
+            }
+        else:
+            return {
+                'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
+                'digital': AddDigitalEventsNWB(site_dir=self.site_dir),
+                'lfp': AddLFPNWB(site_dir=self.site_dir),
+                'motion': AddMotionNWB(site_dir=self.site_dir),
+                'audio': AddAudioNWB(site_dir=self.site_dir),
+                'operant': AddPyoperantTrials(site_dir=self.site_dir),
+            }
