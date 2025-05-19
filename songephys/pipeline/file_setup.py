@@ -739,7 +739,7 @@ class GenerateSingleSiteLFP(luigi.Task):
 
         # concatenate the recording extractors in a single one
         multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
-        if site_config['bad_channels'] != []:
+        if 'bad_channels' in site_config and site_config['bad_channels'] != []:
             multirecording = multirecording.remove_channels(['A-%03d'%x for x in site_config['bad_channels']])
         # add a band pass filter
         hp_freq = 1
@@ -759,7 +759,7 @@ class GenerateSingleSiteLFP(luigi.Task):
         if not self.output()['bin'].exists():
             filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
                 recording_lfp, os.path.dirname(self.output()['bin'].path), data_name=os.path.basename(self.output()['bin'].path), dtype=np.int16,
-                chunksize=60000   )
+                chunksize=30000   )
 class GenerateSingleSiteAudioFile(luigi.Task):
     site_dir = SiteParameter()
     def requires(self):
@@ -1343,7 +1343,7 @@ class GenerateSingleSiteMemmap(luigi.Task):
         # lets try a bandpass instead of highpass
         multirecording = RemoveJumps(multirecording, threshold=6000) # about 1.1 mV if you jump up and down by that much within 1 same you are removed
         multirecording = bandpass_filter(multirecording, freq_min=300, freq_max=8000)
-        if site_config['bad_channels'] != []:
+        if 'bad_channels' in site_config and site_config['bad_channels'] != []:
             multirecording = multirecording.remove_channels(['A-%03d'%x for x in site_config['bad_channels']])
         # inter_sample_shift = [time_shifts[x] for x in multirecording.get_channel_ids()]
         # multirecording = phase_shift(multirecording,inter_sample_shift=inter_sample_shift)
@@ -1359,7 +1359,7 @@ class GenerateSingleSiteMemmap(luigi.Task):
         if not self.output()['bin'].exists():
             filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
                 multirecording, os.path.dirname(self.output()['bin'].path), data_name=os.path.basename(self.output()['bin'].path), dtype=np.int16,
-                chunksize=60000   )       
+                chunksize=30000   )       
 
 class RemoteRawData(RemoteTask):
     """
