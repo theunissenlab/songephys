@@ -115,7 +115,7 @@ class BaseDownloader(object):
                                "Skipping...".format(pyoperant_file))
                 continue
 
-            download_dest = os.path.join(save_to, pyoperant_file)
+            download_dest = os.path.join(save_to, os.path.basename(pyoperant_file))
             self.download_file(csv_file, download_dest)
             downloaded.append(download_dest)
 
@@ -191,7 +191,7 @@ class BaseDownloader(object):
                                "Skipping...".format(pyoperant_file))
                 continue
 
-            self.download_file(csv_file, os.path.join(raw_dir, pyoperant_file))
+            self.download_file(csv_file, os.path.join(raw_dir, os.path.basename(pyoperant_file)))
 
         if pyoperant_files:
             self.download_stim_dirs(pyoperant_files, experiment_name, raw_dir, stimuli_dir)
@@ -207,7 +207,7 @@ class BaseDownloader(object):
                                "Skipping...".format(event_file))
                 continue
 
-            self.download_file(log_file, os.path.join(raw_dir, event_file))
+            self.download_file(log_file, os.path.join(raw_dir, os.path.basename(event_file)))
 
         self.close()
 

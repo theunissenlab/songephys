@@ -504,6 +504,7 @@ class AddStimSpectrogramsNWB(LocalTask):
                 )
             
             # lets store the spectrograms of the full stimuli
+            data_interfaces = []
             for ix, row in stim_rend_info_df.iterrows():
                 stim_name = row.stim_name
                 spectro = row.tfrep
@@ -517,8 +518,9 @@ class AddStimSpectrogramsNWB(LocalTask):
                     timestamps=spectro_time,
                     unit='dB'
                 )  
-                nwbfile.processing['stimuli_spectrograms'].add_data_interface(ts)
-            
+                data_interfaces.append(ts)
+            nwbfile.processing['stimuli_spectrograms'].add(data_interfaces)
+            print("Now there are %d spec data_interfaces"%len(nwbfile.processing['stimuli_spectrograms'].data_interfaces))
 
             
             # now lets find the onsets and offsets
@@ -540,6 +542,7 @@ class AddStimSpectrogramsNWB(LocalTask):
             all_onoff_df.drop(columns=['spec'], inplace=True)
             all_onoff_table = DynamicTable.from_dataframe(all_onoff_df, name='rend_onsets_offsets')
             nwbfile.processing['stimuli_info'].add(all_onoff_table)
+            print("Added %d spec data_interfaces"%len(nwbfile.processing['stimuli_spectrograms'].data_interfaces))
             nwb_io.write(nwbfile)
 
 

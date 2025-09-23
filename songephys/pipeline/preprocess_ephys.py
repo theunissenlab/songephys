@@ -433,6 +433,7 @@ class KiloSortSorting(RemoteTask):
 
 class KiloSort4Sorting(RemoteTask):
     kilosort_dir = luigi.Parameter(default='ks4_CAR')
+    by_shank=luigi.BoolParameter(default=False)
     def requires(self):
         return {
             "full_bin_array": RemoteRawData(site_dir = self.site_dir)
@@ -472,42 +473,47 @@ class KiloSort4Sorting(RemoteTask):
 
         settings = kilosort.DEFAULT_SETTINGS.copy()
         settings['n_chan_bin'] = bin_info['num_channels']
-        settings['nearest_templates'] = 100
-        settings['nearest_chans'] = 10
-
         settings['nblocks'] = 1
         # Batch size should be larger
-        settings['batch_size'] = 30000*4 # 4s of data
+        settings['batch_size'] = 30000*6 # 4s of data
         # Reduce Th_universal by 1 or 2 at a time to detect more units
-        settings['Th_universal'] = 9
+        settings['Th_universal'] = 7
         settings['dminx'] = 18.5
         settings['templates_from_data'] = True
+        settings['nearest_templates'] = min(prb['n_chan'], 100)
+        settings['nearest_chans'] = min(prb['n_chan'], 8)
         #settings['cluster_downsampling'] = 40
 
         # # TODO if we keep running OOM then we should set kcoords to 1
         ks_output_dir =  os.path.dirname(self.output().path)
-        # kilosort.run_kilosort(settings=settings, probe=prb, filename=bin_file, data_dtype='int16', results_dir=ks_output_dir, clear_cache=True)
-
-        # lets do each shank individually
-        for sh in np.unique(prb['kcoords']):
-            prb_sh = dict()
-            prb_kc = prb['kcoords']
-            inds = prb_kc == sh
-            prb_sh['n_chan'] = sum(inds)
-            inds = np.logical_and(good_chans,inds)
+        if not self.by_shank:
             for key in ['kcoords','xc','yc','chanMap']:
-                prb_sh[key] = prb[key][inds]
-            ks_output_dir_sh =  '%s/shank_%d'%(ks_output_dir,sh)
-            if os.path.exists(os.path.join(ks_output_dir_sh,'cluster_group.tsv')):
-                print("shank %d already sorted"%sh)
-                continue
-            os.makedirs(ks_output_dir_sh,exist_ok=True)
-            ret = kilosort.run_kilosort(settings=settings, probe=prb_sh, filename=bin_file, data_dtype='int16', results_dir=ks_output_dir_sh, clear_cache=True)
-            del ret 
+                prb[key] = prb[key][good_chans]
+            kilosort.run_kilosort(settings=settings, probe=prb, filename=bin_file, data_dtype='int16', results_dir=ks_output_dir, clear_cache=True)
+        else:
+            # lets do each shank individually
+            for sh in np.unique(prb['kcoords']):
+                prb_sh = dict()
+                prb_kc = prb['kcoords']
+                inds = prb_kc == sh
+                prb_sh['n_chan'] = sum(inds)
+                settings['nearest_templates'] = min(prb_sh['n_chan'], 100)
+                settings['nearest_chans'] = min(prb_sh['n_chan'], 8)
 
-            # clear gpu cache between kilosort runs
-            gc.collect()
-            torch.cuda.empty_cache()
+                inds = np.logical_and(good_chans,inds)
+                for key in ['kcoords','xc','yc','chanMap']:
+                    prb_sh[key] = prb[key][inds]
+                ks_output_dir_sh =  '%s/shank_%d'%(ks_output_dir,sh)
+                if os.path.exists(os.path.join(ks_output_dir_sh,'cluster_group.tsv')):
+                    print("shank %d already sorted"%sh)
+                    continue
+                os.makedirs(ks_output_dir_sh,exist_ok=True)
+                ret = kilosort.run_kilosort(settings=settings, probe=prb_sh, filename=bin_file, data_dtype='int16', results_dir=ks_output_dir_sh, clear_cache=True)
+                del ret 
+
+                # clear gpu cache between kilosort runs
+                gc.collect()
+                torch.cuda.empty_cache()
 
         # save this file to indicate we have finished the sorting
         with self.output().open('w') as f:
