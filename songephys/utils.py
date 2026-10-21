@@ -83,3 +83,36 @@ def estimate_time_remaining(started_at, fraction_complete):
     else:
         est_total_time = np.inf
     return time_elapsed, est_total_time - time_elapsed
+
+
+def pulse_edges(trace, invert=None):
+    """Rising and falling edges of the pulses in a binary (digital) trace.
+
+    Indices follow np.diff convention: an edge between samples i and i+1 is
+    reported as i. A pulse already high at the start of the trace (falling edge
+    before the first rising edge) is dropped; a pulse still high at the end is
+    closed at len(trace).
+
+    Params
+    ======
+    trace (array): binary trace (bool or 0/1 ints)
+    invert (bool or None): treat the line as active-low. If None, a trace that is
+        high more than half the time is assumed to be active-low.
+
+    Returns
+    =======
+    rising, falling (np.ndarray): matched edge indices
+    """
+    x = np.asarray(trace).astype(bool)
+    if invert is None:
+        invert = x.mean() > .5
+    if invert:
+        x = ~x
+    d = np.diff(x.astype(np.int8))
+    rising = np.flatnonzero(d == 1)
+    falling = np.flatnonzero(d == -1)
+    if len(falling) and (len(rising) == 0 or falling[0] < rising[0]):
+        falling = falling[1:]
+    if len(rising) > len(falling):
+        falling = np.append(falling, len(x))
+    return rising, falling

@@ -1,0 +1,45 @@
+# songephys Neuropixels config for Choc57. Used by:
+#   song npx-sort    /home/lathomas/Projects/NCAF/Choc57/Choc57_config.yaml [-s SESSION]
+#   song npx-gen-nwb /home/lathomas/Projects/NCAF/Choc57/Choc57_config.yaml [-s SESSION]
+# Anything not set here falls back to songephys/npx/config.py:DEFAULTS.
+bird: Choc57
+raw_dir: /home/Data/Choc57                 # SpikeGLX raw runs (Choc57_d1.1_g0/...)
+processed_dir: /home/Data/Choc57_ecephys   # CatGT -dest; KS output goes inside
+nwb_dir: /home/lathomas/Projects/NCAF/nwb
+
+session_description: NCAF closed-loop Neuropixels recording
+timezone: America/New_York   # rig clock (SpikeGLX fileCreateTime is local time)
+
+subject:
+  subject_id: Choc57
+  sex: M
+  date_of_birth: 2026-06-24
+  species: Taeniopygia guttata
+
+probe:
+  location: unknown          # TODO brain area
+  ml_mm: -1.5                # 1.5 mm left
+  ap_mm: 5.1                 # ~5.1 mm anterior (posterior-most shank)
+  depth_mm: 5.5              # ~5.5 mm, probe tip
+  posterior_shank: 1         # KS shank label 1 (first in channel map) is posterior
+
+ni:
+  analog: {0: audio, 1: feedback_copy}
+  # bit numbers are 0-indexed within the NI digital word (XD0)
+  digital_lines: {0: sync, 1: trigger, 3: feedback, 4: sound_threshold}
+  syllable_code_lines: [5, 6]
+
+sync:
+  master: nidq
+  method: segmentwise
+
+# NCAF live outputs are read from {raw_dir}/{run}_g{gate}/ncaf_outs (set ncaf_dir per session to override)
+sessions:
+  Choc57_d1.1:
+    gate: '0'
+    triggers: start,end
+    probes: [0]
+  Choc57_d1.2:
+    gate: '0'
+    triggers: start,end
+    probes: [0]

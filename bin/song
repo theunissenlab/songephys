@@ -524,6 +524,55 @@ def addsortedunits(site_dir,_dir,clear_old_units):
                     AddUnitValidIntervals(site_dir=site_dir, kilosort_dir=_dir),
                     AddUnitWaveforms(site_dir=site_dir, kilosort_dir=_dir)], local_scheduler=True)
 
+def _npx_sessions(config, sessions):
+    from songephys.npx.config import BirdConfig
+    return list(sessions) if sessions else BirdConfig(config).sessions
+
+
+@click.command("npx-sort", help="Run CatGT, Kilosort 4 and NI-clock alignment for Neuropixels sessions in a bird config")
+@click.argument("config", type=click.Path(exists=True))
+@click.option("-s", "--session", "sessions", multiple=True, help="session(s) in the config (default: all)")
+def npx_sort(config, sessions):
+    import luigi
+    from songephys.npx.sort import SortSession
+    config = os.path.abspath(config)
+    luigi.build([SortSession(config=config, session=s) for s in _npx_sessions(config, sessions)], local_scheduler=True)
+
+
+@click.command("npx-gen-nwb", help="Build NWB files (NI signals, syllables, NCAF, units) for Neuropixels sessions")
+@click.argument("config", type=click.Path(exists=True))
+@click.option("-s", "--session", "sessions", multiple=True, help="session(s) in the config (default: all)")
+@click.option("--no-units", is_flag=True, help="skip adding sorted units (and the NCAF tables, which link to units)")
+def npx_gen_nwb(config, sessions, no_units):
+    import luigi
+    from songephys.npx.nwb import GenerateNPXNWB, AddNPXSortedUnits
+    config = os.path.abspath(config)
+    tasks = []
+    for s in _npx_sessions(config, sessions):
+        tasks.append(GenerateNPXNWB(config=config, session=s))
+        if not no_units:
+            tasks.append(AddNPXSortedUnits(config=config, session=s))
+    luigi.build(tasks, local_scheduler=True)
+
+
+@click.command("npx-add-units", help="Add (or replace) sorted units in existing Neuropixels NWB files")
+@click.argument("config", type=click.Path(exists=True))
+@click.option("-s", "--session", "sessions", multiple=True, help="session(s) in the config (default: all)")
+@click.option("--clear-old-units", is_flag=True, help="remove existing units, waveforms, unit intervals and NCAF tables first")
+def npx_add_units(config, sessions, clear_old_units):
+    import luigi
+    from songephys.npx.config import BirdConfig
+    from songephys.npx.nwb import AddNPXSortedUnits, clear_units
+    config = os.path.abspath(config)
+    cfg = BirdConfig(config)
+    sessions = _npx_sessions(config, sessions)
+    if clear_old_units:
+        for s in sessions:
+            if os.path.exists(cfg.nwb_path(s)):
+                clear_units(str(cfg.nwb_path(s)))
+    luigi.build([AddNPXSortedUnits(config=config, session=s) for s in sessions], local_scheduler=True)
+
+
 @click.command("run-pipeline-job")
 @click.argument("module")
 @click.argument("job_name")
@@ -613,7 +662,6 @@ def unittest(_dir, verbose):
 #                 print(f)
 
 # helper functions for gen_filelists
-from neo.rawio import IntanRawIO
 import datetime
 import pandas as pd
 import glob
@@ -622,6 +670,7 @@ def get_start_end(rhd_file):
     # start is from the filename
     date_string = rhd_file.split('__')[-1].split('.rhd')[0]
     start_time = datetime.datetime.strptime(date_string, "%y%m%d_%H%M%S")
+    from neo.rawio import IntanRawIO
     in_io = IntanRawIO(rhd_file,ignore_integrity_checks=True)
     in_io._parse_header()
     end = start_time + datetime.timedelta(seconds=int(in_io._max_sigs_length/30000 + 1))
@@ -797,6 +846,9 @@ cli.add_command(gen_filelists)
 cli.add_command(read_rhd_settings)
 cli.add_command(runpipelinejob)
 cli.add_command(update_filelist)
+cli.add_command(npx_sort)
+cli.add_command(npx_gen_nwb)
+cli.add_command(npx_add_units)
 # cli.add_command(rhd)
 
 if __name__ == "__main__":

@@ -52,6 +52,9 @@ from .file_setup import (
 )
 
 from ..format.io import load_yaml
+from ..utils import pulse_edges
+from ..analysis.unit_intervals import compute_unit_valid_intervals, recording_duration
+from .targets import NWBTarget, NWBAcquisitionTarget, NWBIntervalsTarget, NWBProcessingTarget
 
 def get_rhd_start_from_fn(rhd_file):
     # start is from the filename
@@ -135,125 +138,14 @@ class PyoperantExperiment(Experiment):
 
     def trial_end_time(self, trial_num):
         return self.trial_start_time(trial_num) + self.trial_duration(trial_num)
-        
-    
-
-class NWBTarget(luigi.Target):
-    def __init__(self, nwbfile, *target_names):
-        self.path = nwbfile
-        self.target_names = target_names
-    def exists(self):
-        if not os.path.exists(self.path):
-            return False
-        io = NWBHDF5IO(self.path, 'r')
-        nwbfile = io.read()
-        children = [x.name for x in nwbfile.all_children()]
-        io.close()
-        return all([x in children for x in self.target_names])
-    
-class NWBAcquisitionTarget(luigi.Target):
-    def __init__(self, nwbfile, *target_names):
-        self.path = nwbfile
-        self.target_names = target_names
-    def exists(self):
-        if not os.path.exists(self.path):
-            return False
-        io = NWBHDF5IO(self.path, 'r')
-        nwbfile = io.read()
-        exists = all([x in nwbfile.acquisition for x in self.target_names])
-        io.close()
-        return exists
-    
-    def data(self):
-        io = NWBHDF5IO(self.path, 'r')
-        nwbfile = io.read()
-        return dict({
-            x: nwbfile.acquisition[x] for x in self.target_names
-        })
-    
-    def delete(self):
-        io = NWBHDF5IO(self.path, 'r+')
-        nwbfile = io.read()
-        for x in self.target_names:
-            try:
-                nwbfile.acquisition.pop(x)
-            except KeyError:
-                pass
-        io.write(nwbfile)
-        io.close()
 
 
-class NWBIntervalsTarget(luigi.Target):
-    def __init__(self, nwbfile, *target_names):
-        self.path = nwbfile
-        self.target_names = target_names
-    def exists(self):
-        if not os.path.exists(self.path):
-            return False
-        io = NWBHDF5IO(self.path, 'r')
-        nwbfile = io.read()
-        exists = all([x in nwbfile.intervals for x in self.target_names])
-        io.close()
-        return exists
-    
-    def data(self):
-        io = NWBHDF5IO(self.path, 'r')
-        nwbfile = io.read()
-        return dict({
-            x: nwbfile.intervals[x] for x in self.target_names
-        })
-    
-    def delete(self):
-        io = NWBHDF5IO(self.path, 'r+')
-        nwbfile = io.read()
-        for x in self.target_names:
-            try:
-                nwbfile.intervals.pop(x)
-            except KeyError:
-                pass
-        io.write(nwbfile)
-        io.close()
+
 class PyoperantStimuli(TimeSeries):
     def __init__(self, name, data, rate, bird_name,rendition_id, **kwargs):
         super().__init__(name=name, data=data, unit='wav', rate=float(rate), **kwargs)
         self.bird_name = bird_name
         self.rendition_id = rendition_id
-
-class NWBProcessingTarget(luigi.Target):
-    def __init__(self, nwbfile, processing_module, *target_names):
-        self.path = nwbfile
-        self.processing_module = processing_module
-        self.target_names = target_names
-    
-    def exists(self):
-        if not os.path.exists(self.path):
-            return False
-        io = NWBHDF5IO(self.path, 'r')
-        nwbfile = io.read()
-        if self.processing_module not in nwbfile.processing:
-            io.close()
-            return False
-        exists = all([x in nwbfile.processing[self.processing_module].data_interfaces for x in self.target_names])
-        io.close()
-        return exists
-    
-    def data(self):
-        io = NWBHDF5IO(self.path, 'r')
-        nwbfile = io.read()
-        return dict({
-            x: nwbfile.processing[self.processing_module].data_interfaces[x] for x in self.target_names
-        })
-    
-    def delete(self):
-        io = NWBHDF5IO(self.path, 'r+')
-        nwbfile = io.read()
-        for x in self.target_names:
-            try:
-                nwbfile.processing[self.processing_module].data_interfaces.pop(x)
-            except KeyError:
-                pass
-        io.write(nwbfile)
-        io.close()
 
 class CreateSiteNWB(LocalTask):
     def requires(self):
@@ -405,26 +297,8 @@ class AddDigitalEventsNWB(LocalTask):
                         )
                 else:
                     # Otherwise add it to our ttls table
-                    # if data is mostly ones then flip it
-                    if dig_data.mean() > .5:
-                        dig_data = ~dig_data
-                    # now find the rising and falling edges
-                    rising = np.where(np.diff(dig_data) == 1)[0]
-                    falling = np.where(np.diff(dig_data) == -1)[0]
-                    if len(rising) != len(falling) and len(rising) > 0:
-                        # it has to be off by one. we can figure out how to fix it with a few tests
-                        # if the first rising is after the first falling then we need to remove the first falling
-                        if len(falling) == 0:
-                            assert(len(rising) == 1)
-                            falling = [len(dig_data)]
-                            break
-                        if rising[0] > falling[0]:
-                            falling = falling[1:]
-                            assert(len(rising) == len(falling))
-                        # if the last falling is before the last rising then we need to add a falling at the end that is the total duration
-                        if rising[-1] < falling[-1]:
-                            falling = np.append(falling, len(dig_data))
-                            assert(len(rising) == len(falling))              
+                    # (lines that are mostly high are treated as active-low)
+                    rising, falling = pulse_edges(dig_data)
                     for r, f in zip(rising, falling):
                         ttls_table.add_row(
                             timestamp=r/fs,
@@ -454,27 +328,8 @@ class AddDigitalEventsNWB(LocalTask):
                         )
                 else:
                     # Otherwise add it to our ttls table
-                    # if data is mostly ones then flip it
-                    dig_data = digital_memmap[:,i].astype(np.int8)
-                    if digital_memmap[:,i].mean() > .5:
-                        dig_data = ~dig_data
-                    # now find the rising and falling edges
-                    rising = np.where(np.diff(dig_data) == 1)[0]
-                    falling = np.where(np.diff(dig_data) == -1)[0]
-                    if len(rising) != len(falling) and len(rising) > 0:
-                        # it has to be off by one. we can figure out how to fix it with a few tests
-                        # if the first rising is after the first falling then we need to remove the first falling
-                        if len(falling) == 0:
-                            assert(len(rising) == 1)
-                            falling = [len(dig_data)]
-                        else:
-                            if rising[0] > falling[0]:
-                                falling = falling[1:]
-                                assert(len(rising) == len(falling))
-                            # if the last falling is before the last rising then we need to add a falling at the end that is the total duration
-                            if rising[-1] > falling[-1]:
-                                falling = np.append(falling, len(dig_data))
-                                assert(len(rising) == len(falling))              
+                    # (lines that are mostly high are treated as active-low)
+                    rising, falling = pulse_edges(digital_memmap[:,i])
                     for r, f in zip(rising, falling):
                         ttls_table.add_row(
                             timestamp=r/fs,
@@ -1077,67 +932,15 @@ class AddUnitValidIntervals(RemoteTask):
             unit_intervals.add_column(name='unit_id', description='The id of the unit in the nwb file that this interval corresponds to',data=np.array([],dtype=int))
 
 
+            # Get total recording time for this nwb file
+            tot_time = recording_duration(nwb)
             for uid, unit in all_units.iterrows():
-                # lets make a psth for this unit
                 spike_times = nwb.units['spike_times'][uid]
-
-                # Get total recording time for this nwb file rounded to the nearest second
-                tot_time = int(nwb.acquisition['LFP'].data.shape[0] / nwb.acquisition['LFP'].rate)
-
-                # bin the spikes by 5
-                t_bin = 3
-                bins = np.arange(0, tot_time, t_bin)
-                spike_counts, _ = np.histogram(spike_times, bins=bins)
-                # smoothed = ndimage.gaussian_filter1d(spike_counts, 2)
-
-                # take a sliding window of 30 seconds and determine if the rate is significantly nonzero using a t test
-                window = 30 // t_bin
-                step = 15 // t_bin
-                active = []
-                pvals = []
-                active_rates = []
-                active_bins = [0]
-                for i in range(0, len(spike_counts) - window, step):
-                    t, p = stats.ttest_1samp(spike_counts[i:i+window], 0)
-                    active_rates.append(np.mean(spike_counts[i:i+window]))
-                    active_bins.append(i*t_bin)
-                    active.append(p < 0.2)
-                    pvals.append(p)
-                # plot the active periods
-                active = np.array(active, dtype=int)
-                active_rates = np.log10(np.array(active_rates))
-                active_mean = np.mean(active_rates[active == 1])
-                active_std = np.std(active_rates[active == 1])
-                # reject active bins that are less than 1 std 
-                active = active * (active_rates > active_mean - 2.5*active_std)
-
-                # calculate contiguous active periods
-                if np.all(active == 1):
-                    active_periods = [(active_bins[0], active_bins[len(active)])]
-                else:
-                    active_periods = []
-                    start = 0
-                    for i in range(1, len(active)):
-                        if active[i] == 1 and active[i-1] == 0:
-                            start = i
-                        if active[i] == 0 and active[i-1] == 1:
-                            active_periods.append((active_bins[start], active_bins[i+1]))
-                    if active[-1] == 1:
-                        active_periods.append((active_bins[start], active_bins[-1]))
+                active_periods = compute_unit_valid_intervals(spike_times, tot_time)
                 if len(active_periods) == 0:
                     print("Unit %d has no active periods"%unit.kilosort_id)
                     continue
-                # go through the active periods, and if the inactive period between two active periods is less than 5minutes, then merge them
-                agglomerated_active_periods = [active_periods[0]]
-                for i in range(1, len(active_periods)):
-                    # check if the inactive period is less than 3 minutes
-                    if active_periods[i][0] - agglomerated_active_periods[-1][1] < 180:
-                        agglomerated_active_periods[-1] = (agglomerated_active_periods[-1][0], active_periods[i][1])
-                    else:
-                        agglomerated_active_periods.append(active_periods[i])
-                # now remove any active periods that are less than 5 minutes
-                agglomerated_active_periods = [x for x in agglomerated_active_periods if x[1] - x[0] > 300]
-                for start, stop in agglomerated_active_periods:
+                for start, stop in active_periods:
                     unit_intervals.add_interval(
                         start_time=float(start),
                         stop_time=float(stop),
