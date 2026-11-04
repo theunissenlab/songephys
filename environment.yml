@@ -17,3 +17,4 @@ dependencies:
       - soundsig
       - scipy==1.9.3
       - spikeinterface
+      - soundsig

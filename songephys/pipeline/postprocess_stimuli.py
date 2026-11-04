@@ -37,7 +37,6 @@ from .nwb_utils import (
     AddLFPNWB,
 )
 # this is hard coded for now..
-mbr_rends = pd.read_csv('/mnt/condor/Data/OperantEphys/XXXBlu121XF/Stimuli/Milbrook2018Renditions.csv')
 
 
 
@@ -231,6 +230,7 @@ def process_stim_dir(stim_dir, wavs_to_include=None):
         print("All wavs included: %s"%all_wavs_included)
         assert(all_wavs_included)
 
+    mbr_rends = pd.read_csv('/mnt/condor/Data/OperantEphys/XXXBlu121XF/Stimuli/Milbrook2018Renditions.csv')
     for wav in wavs:
         relpath = wav.relative_to(stim_dir)
         bird_folder_name = relpath.parts[0]
@@ -665,23 +665,22 @@ class AddStimuliInfoNWB(LocalTask):
 class GenerateBaseNWB(luigi.WrapperTask):
     site_dir = SiteParameter()
     add_spectrogram_info = luigi.BoolParameter(default=False)
+    audcode_channel = luigi.IntParameter(default=-1)
+    add_operant = luigi.BoolParameter(default=False)
+    add_motion = luigi.BoolParameter(default=False)
+    
     def requires(self):
+        tasks = {
+                'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
+                'digital': AddDigitalEventsNWB(site_dir=self.site_dir, audcode_channel=self.audcode_channel),
+                'lfp': AddLFPNWB(site_dir=self.site_dir),
+                'audio': AddAudioNWB(site_dir=self.site_dir)
+        }
+        if self.add_operant:
+            tasks['operant'] = AddPyoperantTrials(site_dir=self.site_dir)
+        if self.add_motion:
+            tasks['motion'] = AddMotionNWB(site_dir=self.site_dir)
         if self.add_spectrogram_info:
-            return {
-                'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
-                'digital': AddDigitalEventsNWB(site_dir=self.site_dir),
-                'lfp': AddLFPNWB(site_dir=self.site_dir),
-                'motion': AddMotionNWB(site_dir=self.site_dir),
-                'audio': AddAudioNWB(site_dir=self.site_dir),
-                'operant': AddPyoperantTrials(site_dir=self.site_dir),
-                'spectrograms': AddStimSpectrogramsNWB(site_dir=self.site_dir),
-            }
-        else:
-            return {
-                'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
-                'digital': AddDigitalEventsNWB(site_dir=self.site_dir),
-                'lfp': AddLFPNWB(site_dir=self.site_dir),
-                'motion': AddMotionNWB(site_dir=self.site_dir),
-                'audio': AddAudioNWB(site_dir=self.site_dir),
-                'operant': AddPyoperantTrials(site_dir=self.site_dir),
-            }
+            tasks['spectrograms'] = AddStimSpectrogramsNWB(site_dir=self.site_dir)
+        return tasks
+        

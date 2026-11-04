@@ -16,7 +16,8 @@ from neo.io import NixIO, IntanIO, NWBIO
 from neo.rawio import IntanRawIO
 from spikeinterface.extractors import read_intan
 from spikeinterface.core import ConcatenateSegmentRecording, BinaryRecordingExtractor
-from spikeinterface.preprocessing import highpass_filter, bandpass_filter, resample, phase_shift, common_reference, blank_staturation
+from spikeinterface.preprocessing import highpass_filter, bandpass_filter, resample, phase_shift, common_reference
+from spikeinterface.preprocessing import unsigned_to_signed
 
 from ..format.download import downloaders
 from ..format.io import load_yaml, save_yaml
@@ -130,7 +131,11 @@ class RemoveJumpsSegment(BasePreprocessorSegment):
         traces = self.parent_recording_segment.get_traces(start_frame, end_frame, channel_indices)
         for i in range(traces.shape[1]):
             trace = traces[:, i]
-            trace_int16=(trace-32768).astype(np.int16)
+            # traces arrive already signed (unsigned_to_signed runs upstream), so
+            # no 32768 offset here -- applying it twice wraps and, under numpy 2,
+            # raises OverflowError since 32768 does not fit in int16.
+            # astype() copies, which matters: the -= below must not touch `traces`.
+            trace_int16=trace.astype(np.int16)
             trace_int16 -= np.int16(np.mean(trace_int16))
             trace_diff = np.diff(np.abs(trace_int16))
             # find all jumps up
@@ -711,6 +716,8 @@ class CheckSiteRHDs(luigi.Task):
 class GenerateSingleSiteLFP(luigi.Task):
     site_dir = SiteParameter()
     lfp_sample_rate = luigi.IntParameter(default=1000)
+    filter_margin_ms = luigi.FloatParameter(default=1000.0)
+    bin_chunksize = luigi.IntParameter(default=6000)
     def requires(self):
         return {
             "site_config": SiteConfig(self.site_dir), 
@@ -739,12 +746,13 @@ class GenerateSingleSiteLFP(luigi.Task):
 
         # concatenate the recording extractors in a single one
         multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
+        multirecording = unsigned_to_signed(multirecording)
         if 'bad_channels' in site_config and site_config['bad_channels'] != []:
             multirecording = multirecording.remove_channels(['A-%03d'%x for x in site_config['bad_channels']])
         # add a band pass filter
         hp_freq = 1
         lp_freq = 300
-        multirecording_f = bandpass_filter(multirecording, freq_min=hp_freq, freq_max=lp_freq)
+        multirecording_f = bandpass_filter(multirecording, freq_min=hp_freq, freq_max=lp_freq,ignore_low_freq_error=True, margin_ms=self.filter_margin_ms)
         # downsample to 1 kHz
         recording_lfp = resample(multirecording_f, resample_rate=self.lfp_sample_rate)
 
@@ -759,7 +767,7 @@ class GenerateSingleSiteLFP(luigi.Task):
         if not self.output()['bin'].exists():
             filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
                 recording_lfp, os.path.dirname(self.output()['bin'].path), data_name=os.path.basename(self.output()['bin'].path), dtype=np.int16,
-                chunksize=30000   )
+                chunksize=self.bin_chunksize, max_workers=2  )
 class GenerateSingleSiteAudioFile(luigi.Task):
     site_dir = SiteParameter()
     def requires(self):
@@ -792,6 +800,7 @@ class GenerateSingleSiteAudioFile(luigi.Task):
 
         # concatenate the recording extractors in a single one
         multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
+        multirecording = unsigned_to_signed(multirecording)
 
         # add a high pass filter
         multirecording_f = bandpass_filter(multirecording, freq_min=200, freq_max=8000)
@@ -1141,6 +1150,37 @@ class GenerateSingleSitePlaybackCSV(luigi.Task):
         #             event_df['event_name'].extend([event_type]*len(event_on_times))
         # event_df = pd.DataFrame(event_df)
         # event_df.to_csv(self.output()["events"].path, index=False)
+
+class GenerateSingleSiteGLabCSV(luigi.Task):
+    site_dir = SiteParameter()
+    def requires(self):
+        return {
+            "site_config": SiteConfig(self.site_dir),
+            'project_config': SiteProjectConfig(self.site_dir),
+            "dig_memmap": GenerateSingleSiteDigitalMemmap(self.site_dir)
+        }
+
+    def output(self):
+        return {
+            "playbacks": luigi.LocalTarget(os.path.join(self.site_dir, "playback_segments_v2.csv")),
+        }
+    
+    def run(self):
+        site_config = self.input()["site_config"].data()
+        project_cfg = self.input()["project_config"].data()
+
+        logger.info("Loading digital data from {}".format(self.input()["dig_memmap"].path))
+        dig_info = json.load(open(self.input()['dig_memmap']['info'].path, 'r'))
+        fs = dig_info['sampling_rate']
+        n_samples = dig_info['num_samples']
+        n_chan = dig_info['num_channels']
+        dig_dtype = dig_info['dtype']
+        #dig_trace = np.fromfile(self.input()["dig_memmap"].path, dtype='uint16')
+        dig_trace = np.memmap(self.input()["dig_memmap"].path, dtype=dig_dtype, shape=(n_samples, n_chan), mode='r')
+
+        
+        
+
 class GenerateSingleSiteDigitalMemmap(luigi.Task):
     """
     Generate numpy binary arrays of digital signals.
@@ -1275,6 +1315,8 @@ class GenerateSingleSiteAuxMemmap(luigi.Task):
         
         # concatenate the recording extractors in a single one
         multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
+        # Auxiliary channels are unipolar ADC readings (e.g. accelerometer), not
+        # bipolar neural signals, so they stay unsigned to match dtype=np.uint16 below.
         # TODO could add a filter and downsample here
         # then save to binary
         # now save info
@@ -1329,7 +1371,7 @@ class GenerateSingleSiteMemmap(luigi.Task):
 
         # concatenate the recording extractors in a single one
         multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
-
+        multirecording = unsigned_to_signed(multirecording)
         # according to INTAN: 
         # Each sampling cycle is separated into 35 time slices
         # in the first 32 time slices, the data from each channel is sampled in sequence

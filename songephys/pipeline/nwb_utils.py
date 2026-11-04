@@ -291,9 +291,10 @@ class CreateSiteNWB(LocalTask):
         probes = dict({
             "P1": 'cambridge_neurotech_assy_236_P1.prb', # 4 shank
             "H10": 'cambridge_H10.prb', # 2 shank
-            "M16": 'microprobes_16ch.json' # microprobes with 16 wires
+            "M16": 'microprobes_16ch.json', # microprobes with 16 wires
+            "H15": 'cambridge_H15.json' # 2 shank
         })
-        probe_name = probes[project_config["EPHYS"].get('PROBETYPE','H10')]
+        probe_name = probes[project_config["EPHYS"].get('PROBETYPE','H15')]
         prb = kilosort.io.load_probe(os.path.join(kilosort.PROBE_DIR,probe_name))
 
         # first make the device
@@ -339,6 +340,7 @@ class CreateSiteNWB(LocalTask):
 
         
 class AddDigitalEventsNWB(LocalTask):
+    audcode_channel = luigi.IntParameter(default=0)
     def requires(self):
         self.prerun_check()
         return {
@@ -347,7 +349,7 @@ class AddDigitalEventsNWB(LocalTask):
         }
 
     def output(self):
-        return NWBAcquisitionTarget(self.input()['site_nwb'].path, 'audcode_events', 'ttl_events')
+        return NWBAcquisitionTarget(self.input()['site_nwb'].path, 'ttl_events')
     
     def run(self):
         site_config = self.site_config
@@ -366,15 +368,18 @@ class AddDigitalEventsNWB(LocalTask):
         ttls_table.add_column(name="ttl_type", description='type of the TTL pulse', data=np.array([],dtype=int))
         ttls_table.add_column(name='ttl_name', description='name of the TTL pulse', data=np.array([],dtype=str))
         ttls_table.add_column(name="duration", description='duration of the TTL pulse', data=np.array([],dtype=float))  
-
-        audcode_table = DynamicTable(name="audcode_events", description="Precise time and metadata about stimuli played")
-        audcode_table.add_column(name="timestamp", description='time of the TTL pulse', data=np.array([],dtype=float))
-        audcode_table.add_column(name="code", description='stimuli code',data=np.array([],dtype=str))
-        audcode_table.add_column(name="object", description='object name', data=np.array([],dtype=str))
-        audcode_table.add_column(name="action", description='action name', data=np.array([],dtype=str))
-        audcode_table.add_column(name="repetition", description='repetition number', data=np.array([],dtype=int))
-        audcode_table.add_column(name="trial", description='trial number',  data=np.array([],dtype=int))
-        audcode_table.add_column(name="md5", description='md5 hash of the stimulus file', data=np.array([],dtype=str))
+        if self.audcode_channel >= 0:
+            # if no audcode channel dont add this
+            audcode_table = DynamicTable(name="audcode_events", description="Precise time and metadata about stimuli played")
+            audcode_table.add_column(name="timestamp", description='time of the TTL pulse', data=np.array([],dtype=float))
+            audcode_table.add_column(name="code", description='stimuli code',data=np.array([],dtype=str))
+            audcode_table.add_column(name="object", description='object name', data=np.array([],dtype=str))
+            audcode_table.add_column(name="action", description='action name', data=np.array([],dtype=str))
+            audcode_table.add_column(name="repetition", description='repetition number', data=np.array([],dtype=int))
+            audcode_table.add_column(name="trial", description='trial number',  data=np.array([],dtype=int))
+            audcode_table.add_column(name="md5", description='md5 hash of the stimulus file', data=np.array([],dtype=str))
+        else:
+            print("Not adding audcode events table because audcode_channel is set to -1")
         
         # now load the digital memmap and fill in the ttl table and events table
         digital_memmap_info = json.load(open(self.input()['site_digital_memmap']['info'].path, 'r'))
@@ -389,20 +394,21 @@ class AddDigitalEventsNWB(LocalTask):
             # NB: np.unpackbits does this for 8 bit unsigned ints. This works for us as long as we are not using more than 8 channels
             for i in range(num_chans):
                 dig_data = np.not_equal(np.bitwise_and(dig_trace, (1<<i)),0).astype(np.int8)
-                if i == 0:
+                if i == self.audcode_channel:
                     # 0 is auditory codes usually
                     stimulus_codes = convert_raw_digital_to_metadata(dig_data,fs)
                     for stim in stimulus_codes:
                         t, metadata = stim
-                        audcode_table.add_row(
-                            timestamp=t/fs,
-                            code=metadata['code'],
-                            object=metadata['object'],
-                            action=metadata['action'],
-                            repetition=metadata['repetition'],
-                            trial=metadata['trial'],
-                            md5=metadata['md5']
-                        )
+                        if self.audcode_channel >= 0:
+                            audcode_table.add_row(
+                                timestamp=t/fs,
+                                code=metadata['code'],
+                                object=metadata['object'],
+                                action=metadata['action'],
+                                repetition=metadata['repetition'],
+                                trial=metadata['trial'],
+                                md5=metadata['md5']
+                            )
                 else:
                     # Otherwise add it to our ttls table
                     # if data is mostly ones then flip it
@@ -439,13 +445,14 @@ class AddDigitalEventsNWB(LocalTask):
             digital_memmap = np.memmap(self.input()['site_digital_memmap']['bin'].path, dtype='uint16', mode='r', shape=(num_samples, num_chans))
             # now we can just iterate over the channels
             for i, chan in enumerate(digital_channel_names):
-                if i == 0: # audcode chan
+                if i == self.audcode_channel: # audcode chan
                     stimulus_codes = convert_raw_digital_to_metadata(digital_memmap[:,i].astype(np.int8),fs)
                     for stim in stimulus_codes:
                         t, metadata = stim
-                        audcode_table.add_row(
-                            timestamp=t/fs,
-                            code=metadata['code'],
+                        if self.audcode_channel >= 0:
+                            audcode_table.add_row(
+                                timestamp=t/fs,
+                                code=metadata['code'],
                             object=metadata['object'],
                             action=metadata['action'],
                             repetition=metadata['repetition'],
@@ -486,7 +493,8 @@ class AddDigitalEventsNWB(LocalTask):
             nwbfile = nwb_io.read()
             # add the tables to the nwbfile
             nwbfile.add_acquisition(ttls_table)
-            nwbfile.add_acquisition(audcode_table)
+            if self.audcode_channel >= 0:
+                nwbfile.add_acquisition(audcode_table)
             nwb_io.write(nwbfile)
 
 class AddLFPNWB(LocalTask):
@@ -987,6 +995,55 @@ class AddKilosortUnits(RemoteTask):
                                 nwbfile.units['ks_x'][ix] = avg_spike_pos[0]
                                 nwbfile.units['ks_y'][ix] = avg_spike_pos[1]
 
+            nwb_io.write(nwbfile)
+
+class AddExperiments(RemoteTask):
+    experiment_fn = luigi.Parameter(default='experiments.csv')
+    def requires(self):
+        return {
+            'site_nwb': CreateRemoteSiteNWB(site_dir=self.site_dir),
+            'audio': AddAudioNWB(site_dir=self.site_dir),
+        }
+    def output(self):
+        return NWBIntervalsTarget(self.input()['site_nwb'].path, 'experiments')
+    def run(self):
+        # We will read the experiments.csv file and add it to the nwb file as a TimeIntervals table
+        # The rows are: Start Time, End Time, Name, Notes
+        # Note that Start Time and End Time are Times, so we need to convert them to seconds since the start of the session
+        experiments_csv = os.path.join(self.site_dir, self.experiment_fn)
+        if not os.path.exists(experiments_csv):
+            raise ValueError("Experiments file not found: %s"%experiments_csv)
+        experiments_df = pd.read_csv(experiments_csv)
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
+            nwbfile = nwb_io.read()
+            experiments_table = TimeIntervals(
+                name="experiments",
+                description="Experiments conducted on this site"
+            )
+            experiments_table.add_column(name='experiment_name', description='Name of the experiment',data=np.array([],dtype=str))
+            experiments_table.add_column(name='notes', description='Notes about the experiment',data=np.array([],dtype=str))
+            session_start_time = nwbfile.session_start_time.replace(tzinfo=None)
+            session_end_time = session_start_time + timedelta(seconds=nwbfile.acquisition['audio'].data.shape[0] / nwbfile.acquisition['audio'].rate)
+            for i, row in experiments_df.iterrows():
+                start_time_txt = row['Start Time']
+                if start_time_txt == "START":
+                    row['Start Time'] = session_start_time
+                else:
+                    row['Start Time'] = datetime.combine(session_start_time.date(), datetime.strptime(row['Start Time'], "%H:%M").time())   
+                end_time_txt = row['End Time']
+                if end_time_txt == "END":
+                    row['End Time'] = session_end_time
+                else:
+                    row['End Time'] = datetime.combine(session_start_time.date(), datetime.strptime(row['End Time'], "%H:%M").time())
+
+                experiments_table.add_interval(
+                    start_time=row['Start Time'],
+                    stop_time=row['End Time'],
+                    experiment_name=row['Name'],
+                    notes=row['Notes'],
+                    timeseries=[c for c in nwbfile.all_children() if isinstance(c, TimeSeries)]
+                )
+            nwbfile.add_time_intervals(experiments_table)
             nwb_io.write(nwbfile)
 
 class AddUnitWaveforms(RemoteTask):

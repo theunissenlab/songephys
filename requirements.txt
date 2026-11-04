@@ -22,3 +22,8 @@ wavio>=0.0.4
 soundfile
 PyYAML>=5.1
 click
+isosplit5
+soundsig
+neo
+wavemap
+spikeinterface

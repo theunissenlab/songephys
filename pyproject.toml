@@ -20,6 +20,9 @@ classifiers = [
 ]
 dynamic = ["dependencies"]
 
+[project.scripts]
+song = "songephys.cli:cli"
+
 [project.urls]
 "Homepage" = "https://github.com/theunissenlab/songephys"
 "Bug Tracker" = "https://github.com/theunissenlab/songephys/issues"

@@ -457,9 +457,11 @@ class KiloSort4Sorting(RemoteTask):
         probes = dict({
             "P1": 'cambridge_P1.prb', # 4 shank
             "H10": 'cambridge_H10.prb', # 2 shank
-            "M16": 'microprobes_16ch.prb' # microprobes with 16 wires
+            "M16": 'microprobes_16ch.prb', # microprobes with 16 wires
+            'H15': 'cambridge_H15.json' # 2 shank
         })
-        prb = kilosort.io.load_probe(os.path.join(kilosort.PROBE_DIR,probes[project_config["EPHYS"].get('PROBETYPE','H10')]))
+        print("loading probe file for probe type %s"%project_config["EPHYS"].get('PROBE','H10'))
+        prb = kilosort.io.load_probe(os.path.join(kilosort.PROBE_DIR,probes[project_config["EPHYS"].get('PROBE','H10')]))
 
         good_chans = [True for _ in prb['chanMap']]
         if 'bad_channels' in site_config and site_config['bad_channels'] != []:
@@ -489,7 +491,7 @@ class KiloSort4Sorting(RemoteTask):
         if not self.by_shank:
             for key in ['kcoords','xc','yc','chanMap']:
                 prb[key] = prb[key][good_chans]
-            kilosort.run_kilosort(settings=settings, probe=prb, filename=bin_file, data_dtype='int16', results_dir=ks_output_dir, clear_cache=True)
+            kilosort.run_kilosort(settings=settings, probe=prb, filename=bin_file, data_dtype='int16', results_dir=ks_output_dir)#, clear_cache=True)
         else:
             # lets do each shank individually
             for sh in np.unique(prb['kcoords']):
