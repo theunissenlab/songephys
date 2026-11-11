@@ -4,6 +4,8 @@
 import datetime
 import os
 
+from .intan_dat import recording_name
+
 
 def timestamp_from_intan_filename(filename):
     """Read datetime from filename into timestamp
@@ -13,11 +15,15 @@ def timestamp_from_intan_filename(filename):
 
     Convert it to
     12/21/2017 at 00:11:22
+
+    For "One File Per Signal Type" recordings, pass the path to the
+    recording's info.rhd (or the recording folder); the timestamp is then
+    read from the folder name, e.g. RedGre7107M__171221_001122/info.rhd
     """
     if not (2000 <= datetime.datetime.now().year < 2100):
         raise FutureWarning("You are in the wrong century for this function.")
 
-    basename = os.path.splitext(os.path.basename(filename))[0]
+    basename = recording_name(filename)
     date, time = basename.split("_")[-2:]
     return datetime.datetime(
         year=2000 + int(date[:2]),

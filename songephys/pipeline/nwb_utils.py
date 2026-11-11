@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from uuid import uuid4
 import os
+import re
 import shutil
 import sys
 import json
@@ -48,14 +49,25 @@ from .file_setup import (
     GenerateSingleSiteLFP, 
     GenerateSingleSiteAuxMemmap, 
     GenerateSingleSiteAudioFile,
-    RemoteRawData
+    RemoteRawData,
+    DetectStimEvents,
+)
+# get_digital_channel_bits and ttl_on_off moved to stim_artifact (file_setup needs
+# them too and cannot import this module); re-exported here for existing callers
+from ..preprocess.ephys.stim_artifact import (
+    get_digital_channel_bits,
+    ttl_on_off,
+    load_stim_events,
+    stim_nwb_rows,
 )
 
 from ..format.io import load_yaml
+from .truncation import get_site_tmax
+from ..format.intan_dat import recording_name
 
 def get_rhd_start_from_fn(rhd_file):
-    # start is from the filename
-    date_string = rhd_file.split('__')[-1].split('.rhd')[0]
+    # start is from the filename (or the folder name for .dat recordings, FOLDER/info.rhd)
+    date_string = recording_name(rhd_file).split('__')[-1]
     start_time = datetime.strptime(date_string, "%y%m%d_%H%M%S")
     return start_time
 
@@ -288,14 +300,10 @@ class CreateSiteNWB(LocalTask):
 
         # first load the probe file
         # handle the probe file
-        probes = dict({
-            "P1": 'cambridge_neurotech_assy_236_P1.prb', # 4 shank
-            "H10": 'cambridge_H10.prb', # 2 shank
-            "M16": 'microprobes_16ch.json', # microprobes with 16 wires
-            "H15": 'cambridge_H15.json' # 2 shank
-        })
-        probe_name = probes[project_config["EPHYS"].get('PROBETYPE','H15')]
-        prb = kilosort.io.load_probe(os.path.join(kilosort.PROBE_DIR,probe_name))
+        # site_config probe <- project EPHYS PROBE (see preprocess/ephys/probes.py)
+        from ..preprocess.ephys.probes import load_site_probe
+        prb, _, probe_path = load_site_probe(site_config, project_config, default='H15')
+        probe_name = os.path.basename(probe_path)
 
         # first make the device
         device = nwbfile.create_device(name=probe_name, manufacturer='Cambridge Neurotech')
@@ -363,7 +371,16 @@ class AddDigitalEventsNWB(LocalTask):
             digital_channel_names = ['AUDCODE', 'TTL', 'BUTTON', 'FEEDER', 'SEED', 'HOUSE']
 
         # now make the ttls table
-        ttls_table = DynamicTable(name="ttl_events", description="Precise time and metadata about TTL pulses")
+        ttls_description = "Precise time and metadata about TTL pulses"
+        channel_metadata = site_config.get('channel_metadata') or dict()
+        digital_metadata = [(native, md) for native, md in channel_metadata.items() if native.startswith('DIGITAL-IN')]
+        if len(digital_metadata):
+            # descriptions of each digital line, from the recording's channels.csv
+            ttls_description += ". Channels: " + "; ".join(
+                "%s = %s%s" % (native, md.get('name') or 'unnamed',
+                               " (%s)" % md['description'] if md.get('description') else "")
+                for native, md in digital_metadata)
+        ttls_table = DynamicTable(name="ttl_events", description=ttls_description)
         ttls_table.add_column(name="timestamp", description='time of the TTL pulse', data=np.array([],dtype=float))
         ttls_table.add_column(name="ttl_type", description='type of the TTL pulse', data=np.array([],dtype=int))
         ttls_table.add_column(name='ttl_name', description='name of the TTL pulse', data=np.array([],dtype=str))
@@ -384,111 +401,53 @@ class AddDigitalEventsNWB(LocalTask):
         # now load the digital memmap and fill in the ttl table and events table
         digital_memmap_info = json.load(open(self.input()['site_digital_memmap']['info'].path, 'r'))
         fs = digital_memmap_info['sampling_rate']
+        num_samples = digital_memmap_info['num_samples']
+        num_chans = digital_memmap_info['num_channels']
 
-        if digital_memmap_info['num_channels'] == 1:
-            # if digital memmap is only one channel then we need to deinterleave them, if not then it is done for us
+        # Build a list of (ttl_type, name, function returning the 0/1 trace) for each digital channel
+        if num_chans == 1:
+            # the digital memmap is the packed uint16 word (bit i = DIGITAL-IN-(i+1)), so unpack it.
+            # ttl_type is the bit index, so audcode_channel refers to a bit too.
             dig_trace = np.memmap(self.input()['site_digital_memmap']['bin'].path, dtype='uint16', mode='r')
-            num_chans = int(np.log2(np.max(dig_trace)))
-
-            #dig_trace = multirecording.get_traces().flatten()
-            # NB: np.unpackbits does this for 8 bit unsigned ints. This works for us as long as we are not using more than 8 channels
-            for i in range(num_chans):
-                dig_data = np.not_equal(np.bitwise_and(dig_trace, (1<<i)),0).astype(np.int8)
-                if i == self.audcode_channel:
-                    # 0 is auditory codes usually
-                    stimulus_codes = convert_raw_digital_to_metadata(dig_data,fs)
-                    for stim in stimulus_codes:
-                        t, metadata = stim
-                        if self.audcode_channel >= 0:
-                            audcode_table.add_row(
-                                timestamp=t/fs,
-                                code=metadata['code'],
-                                object=metadata['object'],
-                                action=metadata['action'],
-                                repetition=metadata['repetition'],
-                                trial=metadata['trial'],
-                                md5=metadata['md5']
-                            )
-                else:
-                    # Otherwise add it to our ttls table
-                    # if data is mostly ones then flip it
-                    if dig_data.mean() > .5:
-                        dig_data = ~dig_data
-                    # now find the rising and falling edges
-                    rising = np.where(np.diff(dig_data) == 1)[0]
-                    falling = np.where(np.diff(dig_data) == -1)[0]
-                    if len(rising) != len(falling) and len(rising) > 0:
-                        # it has to be off by one. we can figure out how to fix it with a few tests
-                        # if the first rising is after the first falling then we need to remove the first falling
-                        if len(falling) == 0:
-                            assert(len(rising) == 1)
-                            falling = [len(dig_data)]
-                            break
-                        if rising[0] > falling[0]:
-                            falling = falling[1:]
-                            assert(len(rising) == len(falling))
-                        # if the last falling is before the last rising then we need to add a falling at the end that is the total duration
-                        if rising[-1] < falling[-1]:
-                            falling = np.append(falling, len(dig_data))
-                            assert(len(rising) == len(falling))              
-                    for r, f in zip(rising, falling):
-                        ttls_table.add_row(
-                            timestamp=r/fs,
-                            ttl_type=i,
-                            ttl_name=digital_channel_names[i],
-                            duration=(f-r)/fs
-                        )
+            def unpack(bit):
+                return lambda: np.not_equal(np.bitwise_and(dig_trace, 1 << bit), 0).astype(np.int8)
+            digital_channels = [(bit, name, unpack(bit)) for bit, name in
+                                get_digital_channel_bits(site_config, digital_channel_names)]
         else:
-            num_samples = digital_memmap_info['num_samples']
-            num_chans = digital_memmap_info['num_channels']
+            # one column per enabled digital channel, already de-interleaved
             # TODO maybe get dtype too
             digital_memmap = np.memmap(self.input()['site_digital_memmap']['bin'].path, dtype='uint16', mode='r', shape=(num_samples, num_chans))
-            # now we can just iterate over the channels
-            for i, chan in enumerate(digital_channel_names):
-                if i == self.audcode_channel: # audcode chan
-                    stimulus_codes = convert_raw_digital_to_metadata(digital_memmap[:,i].astype(np.int8),fs)
-                    for stim in stimulus_codes:
-                        t, metadata = stim
-                        if self.audcode_channel >= 0:
-                            audcode_table.add_row(
-                                timestamp=t/fs,
-                                code=metadata['code'],
-                            object=metadata['object'],
-                            action=metadata['action'],
-                            repetition=metadata['repetition'],
-                            trial=metadata['trial'],
-                            md5=metadata['md5']
-                        )
-                else:
-                    # Otherwise add it to our ttls table
-                    # if data is mostly ones then flip it
-                    dig_data = digital_memmap[:,i].astype(np.int8)
-                    if digital_memmap[:,i].mean() > .5:
-                        dig_data = ~dig_data
-                    # now find the rising and falling edges
-                    rising = np.where(np.diff(dig_data) == 1)[0]
-                    falling = np.where(np.diff(dig_data) == -1)[0]
-                    if len(rising) != len(falling) and len(rising) > 0:
-                        # it has to be off by one. we can figure out how to fix it with a few tests
-                        # if the first rising is after the first falling then we need to remove the first falling
-                        if len(falling) == 0:
-                            assert(len(rising) == 1)
-                            falling = [len(dig_data)]
-                        else:
-                            if rising[0] > falling[0]:
-                                falling = falling[1:]
-                                assert(len(rising) == len(falling))
-                            # if the last falling is before the last rising then we need to add a falling at the end that is the total duration
-                            if rising[-1] > falling[-1]:
-                                falling = np.append(falling, len(dig_data))
-                                assert(len(rising) == len(falling))              
-                    for r, f in zip(rising, falling):
-                        ttls_table.add_row(
-                            timestamp=r/fs,
-                            ttl_type=i,
-                            ttl_name=chan,
-                            duration=(f-r)/fs
-                        )
+            def column(i):
+                return lambda: (digital_memmap[:, i] != 0).astype(np.int8)
+            digital_channels = [(i, name, column(i)) for i, name in enumerate(digital_channel_names[:num_chans])]
+
+        for ttl_type, name, get_trace in digital_channels:
+            dig_data = get_trace()
+            if ttl_type == self.audcode_channel:
+                # 0 is auditory codes usually
+                stimulus_codes = convert_raw_digital_to_metadata(dig_data,fs)
+                for t, metadata in stimulus_codes:
+                    audcode_table.add_row(
+                        timestamp=t/fs,
+                        code=metadata['code'],
+                        object=metadata['object'],
+                        action=metadata['action'],
+                        repetition=metadata['repetition'],
+                        trial=metadata['trial'],
+                        md5=metadata['md5']
+                    )
+            else:
+                # Otherwise add it to our ttls table
+                rising, falling = ttl_on_off(dig_data)
+                print("%s (ttl_type %d): %d pulses" % (name, ttl_type, len(rising)))
+                for r, f in zip(rising, falling):
+                    ttls_table.add_row(
+                        timestamp=r/fs,
+                        ttl_type=ttl_type,
+                        ttl_name=name,
+                        duration=(f-r)/fs
+                    )
+            del dig_data
         with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
             nwbfile = nwb_io.read()
             # add the tables to the nwbfile
@@ -718,15 +677,22 @@ class AddPyoperantTrials(LocalTask):
                 pyoperant_csvs = [os.path.join(project_config['LOCAL_RAW_FILES']['pyoperant_drive'],f) for f in site_config['filelist'] if f.endswith('trialdata.csv')]
                 pyoperant_experiments = [PyoperantExperiment(x) for x in pyoperant_csvs]
 
-                
+                # a truncated site (site_config tmax) has no data after tmax: drop
+                # experiments/trials that start after it and clip stop times to it
+                tmax = get_site_tmax(site_config)
+                clip = (lambda t: min(t, tmax)) if tmax is not None else (lambda t: t)
 
                 # now we need to match the trial blocks with the operant experiments
                 for exp in pyoperant_experiments:
+                    exp_start = (exp.experiment_start_time - session_start).total_seconds()
+                    if tmax is not None and exp_start >= tmax:
+                        print("Experiment %s starts after site tmax (%.1f s); skipped" % (exp.uid, tmax))
+                        continue
                     if exp.ntrials > 0:
                         # add the top level interval
                         pyoperant_experiments_intervals.add_interval(
-                            start_time=(exp.experiment_start_time - session_start).total_seconds(),
-                            stop_time=(exp.experiment_end_time - session_start).total_seconds(),
+                            start_time=exp_start,
+                            stop_time=clip((exp.experiment_end_time - session_start).total_seconds()),
                             experiment_type=exp.experiment_type,
                             uid=exp.uid,
                             timeseries=all_time_series
@@ -753,6 +719,8 @@ class AddPyoperantTrials(LocalTask):
                                 audcode_event = None
 
                             start = audcode_event.timestamp if audcode_event is not None else (exp.trial_start_time(ix) - session_start).total_seconds()
+                            if tmax is not None and start >= tmax:
+                                continue
                             stim_path = trial.stimulus_name
                             stim_path = stim_path.replace('\\','/')
                             if 'STIM_REMAP' in self.project_config:
@@ -792,7 +760,7 @@ class AddPyoperantTrials(LocalTask):
 
 
                             if exp.experiment_type == 'operant':
-                                end = (start + exp.trial_duration(ix).total_seconds())
+                                end = clip(start + exp.trial_duration(ix).total_seconds())
                                 op_trial_intervals.add_interval(
                                     start_time=start,
                                     stop_time=end,
@@ -808,7 +776,7 @@ class AddPyoperantTrials(LocalTask):
                                     timeseries=all_time_series
                                 )
                             else:
-                                end = (start + (nwbfile.stimulus[stim_name].data.shape[0] / nwbfile.stimulus[stim_name].rate))
+                                end = clip(start + (nwbfile.stimulus[stim_name].data.shape[0] / nwbfile.stimulus[stim_name].rate))
                                 pb_trial_intervals.add_interval(
                                     start_time=start,
                                     stop_time=end,
@@ -853,12 +821,102 @@ class AddStimuliNWB(LocalTask):
                 )
             nwb_io.write(nwbfile)
 
+class AddStimEventsNWB(LocalTask):
+    """Add electrical stimulation pulses, bouts and blanked windows to the NWB
+
+    Writes (from DetectStimEvents; empty tables if stimulation removal is off):
+      intervals['stim_pulses']  one row per TTL: delivered, artefact score, blank window, bout, polarity, current
+      intervals['stim_bouts']   one row per bout: pulse counts, rate, polarity, current, notes
+      invalid_times             one interval per blanked window, tagged 'stim_blank'
+    Polarity / current / notes come from site_config['stim_bouts'].
+    The raw TTL edges are also in acquisition['ttl_events'] (AddDigitalEventsNWB).
+    """
+    def requires(self):
+        self.prerun_check()
+        return {
+            'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
+            'stim_events': DetectStimEvents(site_dir=self.site_dir),
+        }
+
+    def output(self):
+        return NWBIntervalsTarget(self.input()['site_nwb'].path, 'stim_pulses', 'stim_bouts')
+
+    def run(self):
+        events = load_stim_events(self.input()['stim_events'].path)
+        channel = str(events['config']['digital_channel'])
+        pulse_rows, bout_rows, blanks = stim_nwb_rows(
+            events, self.site_config.get('stim_bouts'), channel_name=channel)
+
+        cfg = events['config']
+        pulses = TimeIntervals(
+            name="stim_pulses",
+            description=("Electrical stimulation pulses, one per TTL edge on %s (start/stop = TTL rise/fall). "
+                         "delivered: a stimulation artefact followed the TTL (score > %s); False means the TTL "
+                         "fired but no current reached the tissue (e.g. stimulator off). Delivered pulses "
+                         "were blanked from %s ms before to %s ms after the TTL in the spike-band data used "
+                         "for sorting (LFP is not blanked). polarity/current_ua from site_config stim_bouts."
+                         % (channel, cfg['delivered_threshold'], cfg['ms_before'], cfg['ms_after'])))
+        for name, desc, dtype in [
+                ("delivered", "stimulation artefact detected after the TTL", bool),
+                ("artifact_score", "median over channels of the largest jump within 1 ms of the TTL / noise", float),
+                ("artifact_peak_uv", "median over channels of the peak deviation within 1 ms of the TTL (uV)", float),
+                ("blanked", "pulse blanked in the spike-band data", bool),
+                ("blank_start", "start of the blanked window (s), NaN if not blanked", float),
+                ("blank_stop", "end of the blanked window (s), NaN if not blanked", float),
+                ("bout", "bout index (pulses separated by > %s s start a new bout)" % cfg['bout_gap_s'], int),
+                ("polarity", "stimulation polarity from site_config stim_bouts ('unknown' if not given)", str),
+                ("current_ua", "stimulation current in uA from site_config stim_bouts (NaN if not given)", float),
+                ("ttl_channel", "digital input carrying the stim TTL", str)]:
+            pulses.add_column(name=name, description=desc, data=np.array([], dtype=dtype))
+        for r in pulse_rows:
+            pulses.add_interval(**r)
+
+        bouts = TimeIntervals(name="stim_bouts", description="Bouts of electrical stimulation pulses (see stim_pulses)")
+        for name, desc, dtype in [
+                ("bout", "bout index, matches stim_pulses.bout", int),
+                ("n_pulses", "number of TTL pulses", int),
+                ("n_delivered", "number of pulses with a stimulation artefact", int),
+                ("rate_hz", "pulse rate (Hz)", float),
+                ("polarity", "stimulation polarity from site_config stim_bouts", str),
+                ("current_ua", "stimulation current in uA from site_config stim_bouts", float),
+                ("notes", "notes from site_config stim_bouts", str)]:
+            bouts.add_column(name=name, description=desc, data=np.array([], dtype=dtype))
+        for r in bout_rows:
+            bouts.add_interval(**r)
+
+        with NWBHDF5IO(self.input()['site_nwb'].path, 'r+') as nwb_io:
+            nwbfile = nwb_io.read()
+            nwbfile.add_time_intervals(pulses)
+            nwbfile.add_time_intervals(bouts)
+            # blanked windows -> invalid_times (skip ones already there from a previous run)
+            inv = nwbfile.invalid_times
+            use_tags = inv is None or 'tags' in inv.colnames
+            existing = set()
+            if inv is not None and len(inv) and use_tags:
+                df = inv.to_dataframe()
+                existing = {(round(s, 6), round(e, 6)) for s, e, t in zip(df.start_time, df.stop_time, df.tags)
+                            if 'stim_blank' in list(t)}
+            if blanks and not use_tags:
+                print("invalid_times has no tags column; adding stim blank windows without the 'stim_blank' tag")
+            for s, e in blanks:
+                if (round(s, 6), round(e, 6)) in existing:
+                    continue
+                if use_tags:
+                    nwbfile.add_invalid_time_interval(start_time=s, stop_time=e, tags=['stim_blank'])
+                else:
+                    nwbfile.add_invalid_time_interval(start_time=s, stop_time=e)
+            nwb_io.write(nwbfile)
+        print("Added %d stim pulses (%d delivered), %d bouts, %d blanked windows to the NWB" % (
+            len(pulse_rows), sum(r['delivered'] for r in pulse_rows), len(bout_rows), len(blanks)))
+
+
 class GenerateAcquisitionNWB(luigi.WrapperTask):
     site_dir = SiteParameter()
     def requires(self):
         return {
             'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
             'digital': AddDigitalEventsNWB(site_dir=self.site_dir),
+            'stim': AddStimEventsNWB(site_dir=self.site_dir),
             'lfp': AddLFPNWB(site_dir=self.site_dir),
             'motion': AddMotionNWB(site_dir=self.site_dir),
             'audio': AddAudioNWB(site_dir=self.site_dir),

@@ -22,7 +22,37 @@ from spikeinterface.preprocessing import unsigned_to_signed
 from ..format.download import downloaders
 from ..format.io import load_yaml, save_yaml
 from ..format.wav import get_wavfile_data_from_neo,get_raw_data_from_neo
+from ..format.intan_dat import read_intan_dat, is_intan_dat_path, check_dat_timestamps_continuous
+from .truncation import get_site_tmax, truncate_recordings
+from ..format.intan_utils import timestamp_from_intan_filename
+from ..format.binary_writer import write_recording_binary
 from .targets import YamlTarget
+from ..preprocess.ephys.stim_artifact import (
+    get_stim_artifact_config,
+    get_digital_channel_bits,
+    resolve_digital_bit,
+    find_ttl_edges,
+    score_artifacts,
+    build_stim_events,
+    empty_stim_events,
+    save_stim_events,
+    load_stim_events,
+    stim_events_summary,
+    merge_windows,
+    extend_windows,
+    pairs_outside_windows,
+    make_bandpass_sos,
+    blank_and_filter_chunk,
+    needs_stim_tails,
+)
+from ..preprocess.ephys.stim_tail import (
+    fit_stim_tails,
+    save_stim_tails,
+    load_stim_tails,
+    empty_stim_tails,
+    stim_tails_summary,
+    tail_blank_filter_chunk,
+)
 from ..preprocess.sound.playback_utils import convert_raw_digital_to_metadata, convert_pyoperant_operant_csvs, _get_stim_dirs, convert_pyoperant_playback_csvs
 from ..preprocess.sound.detect import (
     update_operant_db,
@@ -56,9 +86,13 @@ def get_recording_info(recording):
     return info
 
 def get_sorted_rhd_files(rhd_files):
-    """Sort the rhd files in the order they were recorded"""
-    # sort the rhd files by the timestamp in the filename
-    rhd_files = sorted(rhd_files, key=lambda x: int(x.split("_")[-1].split(".")[0]))
+    """Sort the rhd files in the order they were recorded
+
+    Works for both .rhd files (Bird__YYMMDD_HHMMSS.rhd) and one-file-per-signal-type
+    recordings, which are listed by their header (Bird__YYMMDD_HHMMSS/info.rhd)
+    """
+    # sort by the timestamp in the filename (or folder name for dat recordings)
+    rhd_files = sorted(rhd_files, key=timestamp_from_intan_filename)
     return rhd_files
 
 from pathlib import Path
@@ -107,28 +141,97 @@ class FastIntanRecordingExtractor(NeoBaseRecordingExtractor):
         neo_kwargs = {"filename": str(file_path)}
         return neo_kwargs
 
+
+def load_intan_recording(file_path, stream_name):
+    """Load one stream of an Intan recording as a SpikeInterface recording
+
+    file_path can be a traditional .rhd file, or the info.rhd (or folder) of a
+    recording saved in the "One File Per Signal Type" (.dat) format.
+    """
+    if is_intan_dat_path(file_path):
+        return read_intan_dat(file_path, stream_name=stream_name)
+    return FastIntanRecordingExtractor(file_path, stream_name=stream_name, ignore_integrity_checks=True)
+
+
+def get_site_intan_files(site_config, project_cfg):
+    """Full paths of the Intan recordings in a site's filelist, in recording order
+
+    .rhd files and dat recordings (listed as FOLDER/info.rhd) are both included
+    """
+    rhd_dir = project_cfg['LOCAL_RAW_FILES']['rhd_drive']
+    rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
+    return [os.path.join(rhd_dir, f) for f in get_sorted_rhd_files(rhd_files)]
+
+
+def load_site_recording(site_config, project_cfg, stream_name):
+    """Load a stream from every Intan recording in the site and concatenate them
+
+    If the site config has ``tmax`` (seconds, or "H:MM:SS"), everything after it
+    is dropped (see songephys.pipeline.truncation).
+    """
+    all_intan_io = []
+    for rhd_file in get_site_intan_files(site_config, project_cfg):
+        print(rhd_file)
+        all_intan_io.append(load_intan_recording(rhd_file, stream_name))
+    tmax = get_site_tmax(site_config)
+    if tmax is not None:
+        total = sum(r.get_total_duration() for r in all_intan_io)
+        all_intan_io = truncate_recordings(all_intan_io, tmax)
+        if not all_intan_io:
+            raise ValueError("site tmax %.3f s leaves no data" % tmax)
+        print("Truncating %s at tmax = %.3f s (recording is %.3f s)" % (stream_name, tmax, total))
+    # concatenate the recording extractors in a single one
+    return ConcatenateSegmentRecording(recording_list=all_intan_io)
+
+
+def ensure_signed(recording):
+    """Convert to signed ints if needed
+
+    .rhd amplifier/ADC data is uint16 offset by 32768, whereas amplifier data
+    from .dat files is already int16. unsigned_to_signed raises on signed input.
+    """
+    if np.dtype(recording.get_dtype()).kind == "u":
+        return unsigned_to_signed(recording)
+    return recording
+
 from spikeinterface.preprocessing.basepreprocessor import BasePreprocessor, BasePreprocessorSegment
 class RemoveJumps(BasePreprocessor):
-    def __init__(self, recording, threshold):
+    """Interpolate over brief up-and-back-down jumps
+
+    exclude_windows : optional (N, 2) absolute [start, stop) sample windows
+        (single-segment recordings) where jumps are left alone, e.g. around
+        stimulation pulses that StimBlankBandpass blanks afterwards.
+    """
+    def __init__(self, recording, threshold, exclude_windows=None):
         BasePreprocessor.__init__(self, recording)
-        self._kwargs = dict(recording=recording, threshold=threshold)
+        if exclude_windows is not None and len(exclude_windows):
+            if recording.get_num_segments() != 1:
+                raise ValueError("RemoveJumps exclude_windows needs a single-segment recording")
+            exclude_windows = merge_windows(exclude_windows)
+        else:
+            exclude_windows = None
+        self._kwargs = dict(recording=recording, threshold=threshold,
+                            exclude_windows=None if exclude_windows is None else exclude_windows.tolist())
         self.threshold = threshold
+        self.exclude_windows = exclude_windows
         for parent_segment in recording._recording_segments:
             preprocessor_segment = self._make_preprocessor_segment(parent_segment)
             self.add_recording_segment(preprocessor_segment)
 
     def _make_preprocessor_segment(self, parent_segment):
-        return RemoveJumpsSegment(parent_segment, self.threshold)
+        return RemoveJumpsSegment(parent_segment, self.threshold, self.exclude_windows)
 
 
 
 class RemoveJumpsSegment(BasePreprocessorSegment):
-    def __init__(self, parent_recording_segment, threshold):
+    def __init__(self, parent_recording_segment, threshold, exclude_windows=None):
         BasePreprocessorSegment.__init__(self, parent_recording_segment)
         self.threshold = threshold
+        self.exclude_windows = exclude_windows
 
     def get_traces(self, start_frame=None, end_frame=None, channel_indices=None):
         traces = self.parent_recording_segment.get_traces(start_frame, end_frame, channel_indices)
+        offset = 0 if start_frame is None else int(start_frame)
         for i in range(traces.shape[1]):
             trace = traces[:, i]
             # traces arrive already signed (unsigned_to_signed runs upstream), so
@@ -183,11 +286,88 @@ class RemoveJumpsSegment(BasePreprocessorSegment):
                 paired_jumps_down.append(jump_down)
 
             assert(len(paired_jumps) == len(paired_jumps_down))
+            # leave stimulation windows alone (they are blanked downstream)
+            paired_jumps, paired_jumps_down = pairs_outside_windows(
+                paired_jumps, paired_jumps_down, offset, self.exclude_windows)
             for jump in zip(paired_jumps, paired_jumps_down):
                 # interpolate between the two points
                 trace[(jump[0]+1):(jump[1]+1)] = trace[jump[0]]/2 + trace[jump[1] + 1]/2
             traces[:, i] = trace
         return traces
+
+
+class StimBlankBandpass(BasePreprocessor):
+    """Blank stimulation windows and band-pass the data between them
+
+    Replaces ``bandpass_filter`` when stimulation pulses are present. Each
+    clean piece between blank windows is filtered on its own (Butterworth,
+    zero-phase, like SpikeInterface's bandpass_filter), so the filter never
+    runs across an artefact. Blanked samples are 0. Away from the windows the
+    output matches bandpass_filter up to chunk-edge effects.
+
+    Parameters
+    ----------
+    recording : single-segment recording (raw, signed)
+    windows : (N, 2) absolute [start, stop) sample windows to blank
+    freq_min, freq_max, filter_order : band-pass settings
+    margin_ms : extra data read on each side of a chunk
+    dtype : output dtype, default the recording's (like bandpass_filter)
+    tails_path : optional stim tails file (FitStimTails): per-channel blank windows
+        for the fitted pulses and fitted tails to subtract before filtering
+    post_blank_ms : with tails, also zero each fitted pulse's output up to this many
+        ms after the pulse, after filtering (stim_artifact blank_after_filter_ms)
+    """
+    def __init__(self, recording, windows, freq_min=300.0, freq_max=8000.0,
+                 filter_order=5, margin_ms=50.0, dtype=None, tails_path=None, post_blank_ms=0.0):
+        if recording.get_num_segments() != 1:
+            raise ValueError("StimBlankBandpass needs a single-segment recording")
+        dtype = np.dtype(dtype or recording.get_dtype())
+        BasePreprocessor.__init__(self, recording, dtype=dtype)
+        fs = recording.get_sampling_frequency()
+        windows = merge_windows(windows)
+        self._kwargs = dict(recording=recording, windows=windows.tolist(), freq_min=freq_min,
+                            freq_max=freq_max, filter_order=filter_order, margin_ms=margin_ms,
+                            dtype=dtype.str, tails_path=tails_path, post_blank_ms=post_blank_ms)
+        tails = None
+        if tails_path is not None:
+            tails = load_stim_tails(tails_path)
+            if tails['blank_stop'].shape[1] not in (0, recording.get_num_channels()):
+                raise ValueError("Stim tails were fitted on %d channels, recording has %d" % (
+                    tails['blank_stop'].shape[1], recording.get_num_channels()))
+            if len(tails['onset']) == 0:
+                tails = None
+        sos = make_bandpass_sos(fs, freq_min, freq_max, filter_order)
+        margin = int(round(margin_ms * fs / 1e3))
+        post_blank_n = int(round(float(post_blank_ms or 0) * fs / 1e3))
+        for parent_segment in recording._recording_segments:
+            self.add_recording_segment(StimBlankBandpassSegment(
+                parent_segment, windows, sos, margin, dtype, tails, recording.get_num_channels(), post_blank_n))
+
+
+class StimBlankBandpassSegment(BasePreprocessorSegment):
+    def __init__(self, parent_recording_segment, windows, sos, margin, dtype, tails=None, n_channels=None,
+                 post_blank_n=0):
+        BasePreprocessorSegment.__init__(self, parent_recording_segment)
+        self.windows, self.sos, self.margin, self.dtype = windows, sos, margin, dtype
+        self.tails, self.n_channels, self.post_blank_n = tails, n_channels, post_blank_n
+
+    def get_traces(self, start_frame=None, end_frame=None, channel_indices=None):
+        n = self.get_num_samples()
+        start = 0 if start_frame is None else int(start_frame)
+        stop = n if end_frame is None else int(end_frame)
+        read = lambda a, b: self.parent_recording_segment.get_traces(a, b, channel_indices)
+        if self.tails is None:
+            out = blank_and_filter_chunk(read, n, start, stop, self.windows, self.sos, self.margin)
+        else:
+            chans = np.arange(self.n_channels)
+            if channel_indices is not None:
+                chans = chans[channel_indices]
+            out = tail_blank_filter_chunk(read, n, start, stop, self.windows, self.tails, chans,
+                                          self.sos, self.margin, post_blank_n=self.post_blank_n)
+        if self.dtype.kind in "iu":
+            info = np.iinfo(self.dtype)
+            out = np.clip(np.round(out), info.min, info.max)
+        return out.astype(self.dtype)
 
 
 
@@ -706,6 +886,13 @@ class CheckSiteRHDs(luigi.Task):
         for rhd_file in sorted_rhds:
             print("Testing file: ", rhd_file)
             rhd_file = os.path.join(rhd_dir, rhd_file)
+            if is_intan_dat_path(rhd_file):
+                # one-file-per-signal-type recording: check time.dat directly
+                is_continuous, num_gaps = check_dat_timestamps_continuous(rhd_file)
+                if not is_continuous:
+                    logger.warning("%s has %d timestamp discontinuities" % (rhd_file, num_gaps))
+                continuous_timestamps = continuous_timestamps and is_continuous
+                continue
             rhd = IntanRawIO(rhd_file,ignore_integrity_checks=False)
             rhd._parse_header()
             rhd._assert_timestamp_continuity() # This will raise an error if timestamps are not continuous
@@ -717,7 +904,12 @@ class GenerateSingleSiteLFP(luigi.Task):
     site_dir = SiteParameter()
     lfp_sample_rate = luigi.IntParameter(default=1000)
     filter_margin_ms = luigi.FloatParameter(default=1000.0)
-    bin_chunksize = luigi.IntParameter(default=6000)
+    # chunk length in LFP samples (15 s at 1 kHz); each chunk also reads
+    # filter_margin_ms of raw data on both sides
+    bin_chunksize = luigi.IntParameter(default=15000)
+    # chunks computed in parallel (filter + resample is CPU-bound, ~3 s per chunk;
+    # measured ~0.15 GB of memory per chunk)
+    max_workers = luigi.IntParameter(default=16)
     def requires(self):
         return {
             "site_config": SiteConfig(self.site_dir), 
@@ -731,22 +923,9 @@ class GenerateSingleSiteLFP(luigi.Task):
     def run(self):
         site_config = self.input()["site_config"].data()
         project_cfg = self.input()["project_config"].data()
-        rhd_dir = project_cfg['LOCAL_RAW_FILES']['rhd_drive']
-
-        # get rhd files in order
-        rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
-        sorted_rhds = get_sorted_rhd_files(rhd_files)
-
-        all_intan_io = []
-        # iterate through rhd files and load the digital events
-        for rhd_file in sorted_rhds:
-            rhd_file = os.path.join(rhd_dir, rhd_file)
-            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='RHD2000 amplifier channel', ignore_integrity_checks=True)
-            all_intan_io.append(rhd)
-
-        # concatenate the recording extractors in a single one
-        multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
-        multirecording = unsigned_to_signed(multirecording)
+        # load and concatenate the recordings (.rhd files or .dat folders) in order
+        multirecording = load_site_recording(site_config, project_cfg, 'RHD2000 amplifier channel')
+        multirecording = ensure_signed(multirecording)
         if 'bad_channels' in site_config and site_config['bad_channels'] != []:
             multirecording = multirecording.remove_channels(['A-%03d'%x for x in site_config['bad_channels']])
         # add a band pass filter
@@ -763,11 +942,12 @@ class GenerateSingleSiteLFP(luigi.Task):
         with open(self.output()['info'].path, 'w') as f:
             json.dump(info, f)
 
-        # then save to binary if it doesnt exist
+        # then save to binary if it doesnt exist (threaded writer; written to
+        # <bin>.partial and renamed when complete, so an interrupted run leaves no
+        # full-size file behind)
         if not self.output()['bin'].exists():
-            filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
-                recording_lfp, os.path.dirname(self.output()['bin'].path), data_name=os.path.basename(self.output()['bin'].path), dtype=np.int16,
-                chunksize=self.bin_chunksize, max_workers=2  )
+            write_recording_binary(recording_lfp, self.output()['bin'].path, dtype=np.int16,
+                                   chunksize=self.bin_chunksize, max_workers=self.max_workers)
 class GenerateSingleSiteAudioFile(luigi.Task):
     site_dir = SiteParameter()
     def requires(self):
@@ -784,23 +964,9 @@ class GenerateSingleSiteAudioFile(luigi.Task):
     def run(self):
         site_config = self.input()["site_config"].data()
         project_cfg = self.input()["project_config"].data()
-        rhd_dir = project_cfg['LOCAL_RAW_FILES']['rhd_drive']
-
-        # get rhd files in order
-        rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
-        sorted_rhds = get_sorted_rhd_files(rhd_files)
-
-        all_intan_io = []
-        # iterate through rhd files and load the digital events
-        for rhd_file in sorted_rhds:
-            print(rhd_file)
-            rhd_file = os.path.join(rhd_dir, rhd_file)
-            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='USB board ADC input channel', ignore_integrity_checks=True)
-            all_intan_io.append(rhd)
-
-        # concatenate the recording extractors in a single one
-        multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
-        multirecording = unsigned_to_signed(multirecording)
+        # load and concatenate the recordings (.rhd files or .dat folders) in order
+        multirecording = load_site_recording(site_config, project_cfg, 'USB board ADC input channel')
+        multirecording = ensure_signed(multirecording)
 
         # add a high pass filter
         multirecording_f = bandpass_filter(multirecording, freq_min=200, freq_max=8000)
@@ -946,7 +1112,7 @@ class GenerateSingleSiteOperantCSV(luigi.Task):
         dig_trace = np.memmap(self.input()["dig_memmap"].path, dtype='uint16', mode='r')
         #dig_trace = multirecording.get_traces().flatten()
         fs = 30000 #TODO get this from the recording
-        num_chans = int(np.log2(np.max(dig_trace)))
+        num_chans = int(np.max(dig_trace)).bit_length()  # highest set bit + 1
         traces = dict()
         # NB: np.unpackbits does this for 8 bit unsigned ints. This works for us as long as we are not using more than 8 channels
         for i in range(num_chans):
@@ -1060,7 +1226,7 @@ class GenerateSingleSitePlaybackCSV(luigi.Task):
         dig_trace = np.memmap(self.input()["dig_memmap"].path, dtype='uint16', mode='r')
         #dig_trace = multirecording.get_traces().flatten()
         fs = 30000 #TODO get this from the recording
-        num_chans = int(np.log2(np.max(dig_trace)))
+        num_chans = int(np.max(dig_trace)).bit_length()  # highest set bit + 1
         traces = dict()
         # NB: np.unpackbits does this for 8 bit unsigned ints. This works for us as long as we are not using more than 8 channels
         for i in range(num_chans):
@@ -1201,21 +1367,8 @@ class GenerateSingleSiteDigitalMemmap(luigi.Task):
     def run(self):
         site_config = self.input()["site_config"].data()
         project_cfg = self.input()["project_config"].data()
-        rhd_dir = project_cfg['LOCAL_RAW_FILES']['rhd_drive']
-
-        # get rhd files in order
-        rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
-        sorted_rhds = get_sorted_rhd_files(rhd_files)
-
-        all_intan_io = []
-        # iterate through rhd files and load the digital events
-        for rhd_file in sorted_rhds:
-            rhd_file = os.path.join(rhd_dir, rhd_file)
-            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='USB board digital input channel', ignore_integrity_checks=True)
-            all_intan_io.append(rhd)
-        
-        # concatenate the recording extractors in a single one
-        multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
+        # load and concatenate the recordings (.rhd files or .dat folders) in order
+        multirecording = load_site_recording(site_config, project_cfg, 'USB board digital input channel')
 
         # now save info
         info = get_recording_info(multirecording)
@@ -1228,6 +1381,162 @@ class GenerateSingleSiteDigitalMemmap(luigi.Task):
             filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
                 multirecording, os.path.dirname(self.output()['bin'].path), data_name=os.path.basename(self.output()['bin'].path), dtype=np.uint16,
                 chunksize=120000   )
+
+
+class DetectStimEvents(luigi.Task):
+    """Find electrical stimulation pulses and whether current was delivered
+
+    Reads the stim TTL (one edge per pulse) from the site's digital memmap and,
+    for each pulse, scores the amplifier signal for a stimulation artefact, so
+    pulses whose TTL fired with the stimulator off are marked delivered=False.
+    Also groups pulses into bouts and computes the windows to blank.
+
+    Settings: STIM_ARTIFACT in the project config, stim_artifact in the site
+    config (see songephys.preprocess.ephys.stim_artifact). When disabled this
+    writes an empty event list, so downstream tasks can always require it.
+    Changing the settings needs this output (and anything built from it,
+    e.g. the ephys .bin) to be deleted and regenerated.
+
+    Output: raw/stim_events_<site>.json
+    """
+    site_dir = SiteParameter()
+
+    def _enabled(self):
+        try:
+            site_config = SiteConfig(self.site_dir).output().data()
+            project_cfg = SiteProjectConfig(self.site_dir).output().data()
+        except Exception:
+            return False
+        return get_stim_artifact_config(site_config, project_cfg)["enabled"]
+
+    def requires(self):
+        reqs = {
+            "site_config": SiteConfig(self.site_dir),
+            "project_config": SiteProjectConfig(self.site_dir),
+        }
+        if self._enabled():
+            reqs["dig_memmap"] = GenerateSingleSiteDigitalMemmap(self.site_dir)
+        return reqs
+
+    def output(self):
+        return luigi.LocalTarget(os.path.join(
+            self.site_dir, 'raw', "stim_events_%s.json" % os.path.basename(self.site_dir)))
+
+    def run(self):
+        site_config = self.input()["site_config"].data()
+        project_cfg = self.input()["project_config"].data()
+        cfg = get_stim_artifact_config(site_config, project_cfg)
+        self.output().makedirs()
+        if not cfg["enabled"] or "dig_memmap" not in self.input():
+            save_stim_events(self.output().path, empty_stim_events(cfg))
+            return
+
+        # --- TTL edges from the digital memmap ---
+        dig = self.input()["dig_memmap"]
+        dig_info = json.load(open(dig['info'].path, 'r'))
+        fs = float(dig_info['sampling_rate'])
+        n = int(dig_info['num_samples'])
+        if dig_info['num_channels'] == 1:
+            # packed uint16 word, bit i = DIGITAL-IN-(i+1)
+            bit = resolve_digital_bit(cfg['digital_channel'], site_config)
+            dig_mm = np.memmap(dig['bin'].path, dtype='uint16', mode='r')
+            read_dig = lambda a, b: dig_mm[a:b]
+            edge_bit = bit
+        else:
+            # one column per enabled digital channel, in digital_channel_names order
+            target = str(cfg['digital_channel']).strip().lower()
+            target_bit = None
+            try:
+                target_bit = resolve_digital_bit(cfg['digital_channel'], site_config)
+            except ValueError:
+                pass
+            names = site_config.get('digital_channel_names') or []
+            col =[i for i, (b, nm) in enumerate(get_digital_channel_bits(site_config))
+                   if str(nm).strip().lower() == target or b == target_bit]
+            if not col or col[0] >= dig_info['num_channels']:
+                raise ValueError("Stim digital channel %r not found in %s" % (cfg['digital_channel'], names))
+            dig_mm = np.memmap(dig['bin'].path, dtype='uint16', mode='r', shape=(n, dig_info['num_channels']))
+            read_dig = lambda a, b: dig_mm[a:b, col[0]]
+            bit, edge_bit = target_bit, None
+        rising, falling = find_ttl_edges(read_dig, n, bit=edge_bit)
+
+        # --- was current delivered? score the amplifier signal at each TTL ---
+        recording = ensure_signed(load_site_recording(site_config, project_cfg, 'RHD2000 amplifier channel'))
+        if recording.get_num_samples(segment_index=0) != n:
+            raise ValueError("Digital (%d) and amplifier (%d) sample counts differ" % (
+                n, recording.get_num_samples(segment_index=0)))
+        gains = recording.get_channel_gains()
+        gain_uv = float(np.median(gains)) if gains is not None else 0.195
+        read_amp = lambda a, b: recording.get_traces(start_frame=a, end_frame=b, segment_index=0)
+        offset = int(round(cfg['offset_ms'] * fs / 1e3))
+        score, peak_uv = score_artifacts(read_amp, rising + offset, fs, n, gain_uv=gain_uv)
+
+        events = build_stim_events(rising, falling, fs, n, cfg, score, peak_uv, digital_bit=bit)
+        save_stim_events(self.output().path, events)
+        summary = stim_events_summary(events)
+        logger.info(summary)
+        print(summary)
+
+
+class FitStimTails(luigi.Task):
+    """Per-channel blank ends and stimulation tail fits (see preprocess/ephys/stim_tail.py)
+
+    Runs when stim_artifact has ``adaptive_blank`` or ``subtract_tail`` on; otherwise
+    writes an empty file so GenerateSingleSiteMemmap can always require it. For each
+    delivered pulse and channel it finds where the fast artefact ends and fits
+    exponentials + offset to the following ``tail_fit_ms`` of raw data.
+
+    Output: raw/stim_tails_<site>.npz
+    """
+    site_dir = SiteParameter()
+
+    def requires(self):
+        return {
+            "site_config": SiteConfig(self.site_dir),
+            "project_config": SiteProjectConfig(self.site_dir),
+            "stim_events": DetectStimEvents(self.site_dir),
+        }
+
+    def output(self):
+        return luigi.LocalTarget(os.path.join(
+            self.site_dir, 'raw', "stim_tails_%s.npz" % os.path.basename(self.site_dir)))
+
+    def run(self):
+        site_config = self.input()["site_config"].data()
+        project_cfg = self.input()["project_config"].data()
+        cfg = get_stim_artifact_config(site_config, project_cfg)
+        events = load_stim_events(self.input()["stim_events"].path)
+        self.output().makedirs()
+        ev = events.get('events') or {}
+        delivered = np.asarray(ev.get('delivered', []), dtype=bool)
+        if not needs_stim_tails(cfg) or not delivered.any():
+            save_stim_tails(self.output().path, empty_stim_tails())
+            return
+        recording = ensure_signed(load_site_recording(site_config, project_cfg, 'RHD2000 amplifier channel'))
+        fs = recording.get_sampling_frequency()
+        n = recording.get_num_samples(segment_index=0)
+        if events['num_samples'] != n or events['sampling_rate'] != fs:
+            raise ValueError("Stim events were detected on a recording of a different length/rate; "
+                             "delete %s and rerun" % self.input()['stim_events'].path)
+        offset = int(round(cfg['offset_ms'] * fs / 1e3))
+        idx = np.nonzero(delivered)[0]
+        onsets = np.asarray(ev['start_frame'], dtype=np.int64)[idx] + offset
+        bouts = np.asarray(ev.get('bout', [0] * len(delivered)), dtype=np.int64)[idx]
+        read = lambda a, b: recording.get_traces(start_frame=a, end_frame=b, segment_index=0)
+        print("Fitting stimulation tails: %d pulses x %d channels (adaptive_blank=%s, subtract_tail=%s)" % (
+            len(onsets), recording.get_num_channels(), cfg['adaptive_blank'], cfg['subtract_tail']))
+        tmp = self.output().path[:-4] + '_blocks.tmp.npy'
+        tails = fit_stim_tails(read, n, recording.get_num_channels(), fs, onsets, bouts, cfg, tmp,
+                               workers=cfg['tail_workers'] or None)
+        tails['event_index'] = idx.astype(np.int64)
+        tails['channel_ids'] = np.asarray([str(c) for c in recording.get_channel_ids()])
+        out = self.output().path
+        save_stim_tails(out[:-4] + '.partial.npz', tails)
+        os.replace(out[:-4] + '.partial.npz', out)
+        summary = stim_tails_summary(tails)
+        logger.info(summary)
+        print(summary)
+
 
 class GenerateSingleSiteADCMemmap(luigi.Task):
     site_dir = SiteParameter()
@@ -1245,22 +1554,8 @@ class GenerateSingleSiteADCMemmap(luigi.Task):
     def run(self):
         site_config = self.input()["site_config"].data()
         project_cfg = self.input()["project_config"].data()
-        rhd_dir = project_cfg['LOCAL_RAW_FILES']['rhd_drive']
-
-        # get rhd files in order
-        rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
-        sorted_rhds = get_sorted_rhd_files(rhd_files)
-
-        all_intan_io = []
-        # iterate through rhd files and load the digital events
-        for rhd_file in sorted_rhds:
-            print(rhd_file)
-            rhd_file = os.path.join(rhd_dir, rhd_file)
-            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='USB board ADC input channel', ignore_integrity_checks=True)
-            all_intan_io.append(rhd)
-
-        # concatenate the recording extractors in a single one
-        multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
+        # load and concatenate the recordings (.rhd files or .dat folders) in order
+        multirecording = load_site_recording(site_config, project_cfg, 'USB board ADC input channel')
 
         # add a high pass filter
         multirecording_f = bandpass_filter(multirecording, freq_min=200, freq_max=8000)
@@ -1300,21 +1595,8 @@ class GenerateSingleSiteAuxMemmap(luigi.Task):
     def run(self):
         site_config = self.input()["site_config"].data()
         project_cfg = self.input()["project_config"].data()
-        rhd_dir = project_cfg['LOCAL_RAW_FILES']['rhd_drive']
-
-        # get rhd files in order
-        rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
-        sorted_rhds = get_sorted_rhd_files(rhd_files)
-
-        all_intan_io = []
-        # iterate through rhd files and load the digital events
-        for rhd_file in sorted_rhds:
-            rhd_file = os.path.join(rhd_dir, rhd_file)
-            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='RHD2000 auxiliary input channel', ignore_integrity_checks=True)
-            all_intan_io.append(rhd)
-        
-        # concatenate the recording extractors in a single one
-        multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
+        # load and concatenate the recordings (.rhd files or .dat folders) in order
+        multirecording = load_site_recording(site_config, project_cfg, 'RHD2000 auxiliary input channel')
         # Auxiliary channels are unipolar ADC readings (e.g. accelerometer), not
         # bipolar neural signals, so they stay unsigned to match dtype=np.uint16 below.
         # TODO could add a filter and downsample here
@@ -1343,10 +1625,12 @@ class GenerateSingleSiteMemmap(luigi.Task):
 
     def requires(self):
         return {
-            "site_config": SiteConfig(self.site_dir), 
-            "project_config": SiteProjectConfig(self.site_dir)
+            "site_config": SiteConfig(self.site_dir),
+            "project_config": SiteProjectConfig(self.site_dir),
+            "stim_events": DetectStimEvents(self.site_dir),
+            "stim_tails": FitStimTails(self.site_dir),
         }
-    
+
     def output(self):
         return {
             'bin':luigi.LocalTarget(os.path.join(self.site_dir, 'raw', "%s.bin"%os.path.basename(self.site_dir))),
@@ -1356,22 +1640,9 @@ class GenerateSingleSiteMemmap(luigi.Task):
     def run(self):
         site_config = self.input()["site_config"].data()
         project_cfg = self.input()["project_config"].data()
-        rhd_dir = project_cfg['LOCAL_RAW_FILES']['rhd_drive']
-
-        # get rhd files in order
-        rhd_files = [f for f in site_config['filelist'] if f.endswith('.rhd')]
-        sorted_rhds = get_sorted_rhd_files(rhd_files)
-
-        all_intan_io = []
-        # iterate through rhd files and load the digital events
-        for rhd_file in sorted_rhds:
-            rhd_file = os.path.join(rhd_dir, rhd_file)
-            rhd = FastIntanRecordingExtractor(rhd_file, stream_name='RHD2000 amplifier channel', ignore_integrity_checks=True)
-            all_intan_io.append(rhd)
-
-        # concatenate the recording extractors in a single one
-        multirecording = ConcatenateSegmentRecording(recording_list=all_intan_io)
-        multirecording = unsigned_to_signed(multirecording)
+        # load and concatenate the recordings (.rhd files or .dat folders) in order
+        multirecording = load_site_recording(site_config, project_cfg, 'RHD2000 amplifier channel')
+        multirecording = ensure_signed(multirecording)
         # according to INTAN: 
         # Each sampling cycle is separated into 35 time slices
         # in the first 32 time slices, the data from each channel is sampled in sequence
@@ -1382,9 +1653,60 @@ class GenerateSingleSiteMemmap(luigi.Task):
             time_shifts['A-%03d'%i] = time_bins[i]
             time_shifts['A-%03d'%(i+32)] = time_bins[i]
         
-        # lets try a bandpass instead of highpass
-        multirecording = RemoveJumps(multirecording, threshold=6000) # about 1.1 mV if you jump up and down by that much within 1 same you are removed
-        multirecording = bandpass_filter(multirecording, freq_min=300, freq_max=8000)
+        # electrical stimulation: blank each pulse and filter the data between pulses
+        # separately, so the band-pass never runs across an artefact
+        stim_events = load_stim_events(self.input()['stim_events'].path)
+        blank = np.asarray(stim_events['blank_windows'], dtype=np.int64).reshape(-1, 2)
+        stim_info = dict(enabled=stim_events['enabled'], n_events=len(stim_events['events']['start_frame']),
+                         n_delivered=int(np.sum(stim_events['events']['delivered'])), n_blank_windows=len(blank))
+        if len(blank):
+            fs = multirecording.get_sampling_frequency()
+            if stim_events['num_samples'] != multirecording.get_num_samples(segment_index=0) or stim_events['sampling_rate'] != fs:
+                raise ValueError("Stim events were detected on a recording of a different length/rate; "
+                                 "delete %s and rerun" % self.input()['stim_events'].path)
+            scfg = stim_events['config']
+            stim_info.update({k: scfg[k] for k in ('ms_before', 'ms_after', 'offset_ms', 'blank_undelivered',
+                                                     'freq_min', 'freq_max', 'filter_order', 'margin_ms')})
+            # per-channel blanks / tail subtraction for the pulses FitStimTails handled
+            tails_path = self.input()['stim_tails'].path
+            tails = load_stim_tails(tails_path)
+            jumps_blank = blank
+            if len(tails['onset']):
+                if tails['n_samples'] != multirecording.get_num_samples(segment_index=0):
+                    raise ValueError("Stim tails were fitted on a recording of a different length; "
+                                     "delete %s and rerun" % tails_path)
+                ev = stim_events['events']
+                fitted = np.zeros(len(ev['start_frame']), bool)
+                fitted[tails['event_index']] = True
+                keep = np.asarray(ev['blanked'], bool) & ~fitted
+                blank = np.stack([np.asarray(ev['blank_start_frame'])[keep],
+                                  np.asarray(ev['blank_stop_frame'])[keep]], 1).astype(np.int64).reshape(-1, 2)
+                post_blank_ms = float(get_stim_artifact_config(site_config, project_cfg)['blank_after_filter_ms'])
+                post_n = int(round(post_blank_ms * fs / 1e3))
+                widest = np.stack([tails['blank_start'],
+                                   np.maximum(tails['blank_stop'].max(1), tails['onset'] + post_n)], 1)
+                jumps_blank = merge_windows(np.concatenate([blank, widest]))
+                tcfg = tails['config']
+                stim_info.update(adaptive_blank=tcfg.get('adaptive_blank'), subtract_tail=tcfg.get('subtract_tail'),
+                                 tail_n_exp=tcfg.get('tail_n_exp'), tail_fit_ms=tcfg.get('tail_fit_ms'),
+                                 blank_after_filter_ms=post_blank_ms,
+                                 n_fitted_pulses=int(len(tails['onset'])),
+                                 tail_summary=stim_tails_summary(tails))
+                print(stim_tails_summary(tails))
+                if post_blank_ms > 0:
+                    print("Zeroing %.2f ms after each fitted pulse after filtering" % post_blank_ms)
+            else:
+                tails_path = None
+                post_blank_ms = 0.0
+            jumps_exclude = extend_windows(jumps_blank, after=int(round(scfg['remove_jumps_extra_ms'] * fs / 1e3)))
+            multirecording = RemoveJumps(multirecording, threshold=6000, exclude_windows=jumps_exclude)
+            multirecording = StimBlankBandpass(multirecording, blank, freq_min=scfg['freq_min'], freq_max=scfg['freq_max'],
+                                               filter_order=scfg['filter_order'], margin_ms=scfg['margin_ms'],
+                                               tails_path=tails_path, post_blank_ms=post_blank_ms)
+        else:
+            # lets try a bandpass instead of highpass
+            multirecording = RemoveJumps(multirecording, threshold=6000) # about 1.1 mV if you jump up and down by that much within 1 same you are removed
+            multirecording = bandpass_filter(multirecording, freq_min=300, freq_max=8000)
         if 'bad_channels' in site_config and site_config['bad_channels'] != []:
             multirecording = multirecording.remove_channels(['A-%03d'%x for x in site_config['bad_channels']])
         # inter_sample_shift = [time_shifts[x] for x in multirecording.get_channel_ids()]
@@ -1393,15 +1715,16 @@ class GenerateSingleSiteMemmap(luigi.Task):
 
         # now save info
         info = get_recording_info(multirecording)
+        info['stim_artifact'] = stim_info
 
         self.output()['info'].makedirs()
         with open(self.output()['info'].path, 'w') as f:
             json.dump(info, f)
         # then save to binary if the file does not exist
+        # (written to <bin>.partial and renamed when complete; replaces
+        # kilosort.io.spikeinterface_to_binary, which was ~5x slower here)
         if not self.output()['bin'].exists():
-            filename, N, c, s, fs, probe_path = kilosort.io.spikeinterface_to_binary(
-                multirecording, os.path.dirname(self.output()['bin'].path), data_name=os.path.basename(self.output()['bin'].path), dtype=np.int16,
-                chunksize=30000   )       
+            write_recording_binary(multirecording, self.output()['bin'].path, dtype=np.int16, chunksize=30000)
 
 class RemoteRawData(RemoteTask):
     """

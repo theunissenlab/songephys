@@ -1,5 +1,11 @@
 #!/usr/bin/env python
 import os
+import sys
+
+# Thread limits must be set before numpy/scipy/torch/sklearn are imported (this
+# module imports pandas, hence numpy, further down). See sortsinglesite.
+if len(sys.argv) > 1 and sys.argv[1] == "sort-singlesite":
+    os.environ.setdefault("OMP_NUM_THREADS", "7")
 
 import pprint
 import click
@@ -338,7 +344,28 @@ def create_site(site_dir, auto, ml, depth, bad_channels):
                 }
             )
         config_data['digital_channel_names'] = electrode_config['Digital']
+        config_data['digital_channel_bits'] = electrode_config['DigitalBits']
         config_data['analog_channel_names'] = electrode_config['Analog']
+
+        # optional channels.csv in the recording folder with names/descriptions for each line
+        channels_csv = os.path.join(os.path.dirname(xml_file), CHANNELS_FILENAME)
+        if os.path.exists(channels_csv):
+            print("Loading channel names from %s" % channels_csv)
+            channel_metadata = load_channel_metadata(channels_csv)
+            enabled_natives = set(electrode_config['DigitalNative'] + electrode_config['AnalogNative'])
+            for native in channel_metadata:
+                if native not in enabled_natives:
+                    click.echo("WARNING: %s is in %s but is not enabled in %s" % (native, channels_csv, xml_file))
+            config_data['digital_channel_names'] = apply_channel_metadata(
+                electrode_config['DigitalNative'], electrode_config['Digital'], channel_metadata)
+            config_data['analog_channel_names'] = apply_channel_metadata(
+                electrode_config['AnalogNative'], electrode_config['Analog'], channel_metadata)
+            config_data['channel_metadata'] = channel_metadata
+            for native, name in zip(electrode_config['DigitalNative'] + electrode_config['AnalogNative'],
+                                    config_data['digital_channel_names'] + config_data['analog_channel_names']):
+                print("  %s -> %s" % (native, name))
+        else:
+            print("No %s found next to %s, using Intan channel names" % (CHANNELS_FILENAME, xml_file))
     else:
         if auto:
             click.echo("Auto mode, no settings file found, exiting")
@@ -480,17 +507,44 @@ def download_site(site_dir):
 def gensinglesitefiles(site_dir):
     import luigi
     from songephys.pipeline.file_setup import GenerateSingleSiteFiles
+    _check_tmax(site_dir)
     luigi.build([GenerateSingleSiteFiles(site_dir=site_dir)], local_scheduler=True)
+
+
+def _check_tmax(site_dir):
+    """Stop if the site has a tmax but outputs made before it are still around."""
+    from songephys.format.io import load_yaml
+    from songephys.pipeline.truncation import check_site_outputs_respect_tmax, get_site_tmax
+    cfg_path = os.path.join(site_dir, "site_config.yaml")
+    if not os.path.exists(cfg_path):
+        return
+    site_config = load_yaml(cfg_path)
+    check_site_outputs_respect_tmax(site_dir, site_config)
+    tmax = get_site_tmax(site_config)
+    if tmax is not None:
+        print("Site is truncated at tmax = %.3f s" % tmax)
 
 @click.command("sort-singlesite")
 @click.argument("site_dir", type=click.Path())
 @click.option("-d", "--dir", "_dir", type=str, default="ks4_final")
 def sortsinglesite(site_dir, _dir, **kwargs):
+    # Kilosort's "universal templates from data" step runs scikit-learn KMeans; on
+    # many-core Windows machines with the default OpenMP thread count this balloons
+    # to >100 GB of memory and crashes (see MouseLand/Kilosort#866). The limit only
+    # takes effect if set before numpy/torch/sklearn are imported, so it is set at
+    # the top of this module when the command is sort-singlesite (this repeat only
+    # covers other ways of calling the function). An existing value is respected.
+    os.environ.setdefault("OMP_NUM_THREADS", "7")
+    print("OMP_NUM_THREADS=%s" % os.environ["OMP_NUM_THREADS"])
     import luigi
-    from songephys.pipeline.preprocess_ephys import KiloSort4Sorting
+    from songephys.pipeline.preprocess_ephys import ExportSortEvents
     if not os.path.exists(site_dir):
         os.makedirs(site_dir, exist_ok=True)
-    luigi.build([KiloSort4Sorting(site_dir=site_dir, kilosort_dir=_dir)], local_scheduler=True)
+    _check_tmax(site_dir)
+    # ExportSortEvents requires the sort (KiloSort4Sorting), then writes events.csv next to
+    # it. On a sort that has already finished (its 'complete' file exists) Kilosort is
+    # skipped and only events.csv is written.
+    luigi.build([ExportSortEvents(site_dir=site_dir, kilosort_dir=_dir)], local_scheduler=True)
 
 @click.command("gen-nwb")
 @click.argument("site_dir", type=click.Path(exists=True))
@@ -498,6 +552,7 @@ def sortsinglesite(site_dir, _dir, **kwargs):
 def gennwb(site_dir, add_spectrograms):
     import luigi
     from songephys.pipeline.postprocess_stimuli import GenerateBaseNWB
+    _check_tmax(site_dir)
     print("Generating NWB for site: {} with add_spectrograms: {}".format(site_dir, add_spectrograms))
     luigi.build([GenerateBaseNWB(site_dir=site_dir, add_spectrogram_info=add_spectrograms)], local_scheduler=True)
 
@@ -549,15 +604,26 @@ import pandas as pd
 import glob
 
 def get_start_end(rhd_file):
-    from neo.rawio import IntanRawIO
-    date_string = rhd_file.split('__')[-1].split('.rhd')[0]
+    from songephys.format.intan_dat import (
+        is_intan_dat_path, recording_name, read_rhd_header, get_dat_num_samples)
+    date_string = recording_name(rhd_file).split('__')[-1]
     start_time = datetime.datetime.strptime(date_string, "%y%m%d_%H%M%S")
-    in_io = IntanRawIO(rhd_file,ignore_integrity_checks=True)
-    in_io._parse_header()
-    end = start_time + datetime.timedelta(seconds=int(in_io._max_sigs_length/30000 + 1))
+    if is_intan_dat_path(rhd_file):
+        # one-file-per-signal-type recording (info.rhd + *.dat)
+        fs = read_rhd_header(rhd_file)['sample_rate']
+        n_samples = get_dat_num_samples(rhd_file)
+    else:
+        from neo.rawio import IntanRawIO
+        in_io = IntanRawIO(rhd_file,ignore_integrity_checks=True)
+        in_io._parse_header()
+        fs = 30000
+        n_samples = in_io._max_sigs_length
+    end = start_time + datetime.timedelta(seconds=int(n_samples/fs + 1))
     return (start_time, end)
 
 def get_recording_start_end(rhd_folder, base_folder):
+    # either a folder of .rhd files, or a "one file per signal type" folder
+    # with info.rhd + .dat files (in which case info.rhd is the only .rhd)
     rhds = glob.glob(os.path.join(base_folder,rhd_folder,"*.rhd"))
     rhds_trunc = ['/'.join([rhd_folder,os.path.basename(x)]) for x in rhds]
     rec_start = None
@@ -668,6 +734,10 @@ def parse_settings_file(settings_path):
         "Digital": [],
         "AUX": []
     })
+    # bit of each enabled digital input in the packed digital word (DIGITAL-IN-09 -> bit 8)
+    digital_bits = []
+    # Intan native names (e.g. ANALOG-IN-2, DIGITAL-IN-09), parallel to "Analog"/"Digital"
+    native_names = {"Analog": [], "Digital": []}
     for child in tree.getroot():
         if child.tag == "SignalGroup":
             if child.attrib['Prefix'] in ['A','B','C','D']:
@@ -683,18 +753,59 @@ def parse_settings_file(settings_path):
                 for chan in child:
                     if chan.attrib['Enabled'] == 'True':
                         enabled_channels['Analog'].append(chan.attrib['CustomChannelName'])
+                        native_names['Analog'].append(chan.attrib.get('NativeChannelName', chan.attrib['CustomChannelName']))
                 continue
             elif child.attrib['Prefix'] == 'DIGITAL-IN':
                 for chan in child:
                     if chan.attrib['Enabled'] == 'True':
                         enabled_channels['Digital'].append(chan.attrib['CustomChannelName'])
+                        native_name = chan.attrib.get('NativeChannelName', chan.attrib['CustomChannelName'])
+                        native_names['Digital'].append(native_name)
+                        digital_bits.append(int(native_name.split('-')[-1]) - 1)
                 continue
             elif child.attrib['Prefix'] == 'DIGITAL-OUT':
                 continue
     for chan_type in enabled_channels.keys():
         print("Number of %s channels:\t %d"%(chan_type,len(enabled_channels[chan_type])))
     print(enabled_channels)
+    enabled_channels['DigitalBits'] = digital_bits
+    enabled_channels['AnalogNative'] = native_names['Analog']
+    enabled_channels['DigitalNative'] = native_names['Digital']
     return enabled_channels
+
+
+CHANNELS_FILENAME = "channels.csv"
+
+def load_channel_metadata(channels_csv):
+    """Read a recording's channels.csv, keyed by Intan native channel name
+
+    channels.csv lives in the recording folder (next to settings.xml / info.rhd)
+    and has the columns: intan_channel,name,type,ni_line,description
+    where intan_channel is the Intan native name, e.g. ANALOG-IN-2 or DIGITAL-IN-09.
+    Returns {native_name: {"name": ..., "type": ..., "ni_line": ..., "description": ...}}
+    """
+    import csv
+    metadata = dict()
+    # utf-8-sig so files saved from Excel (with a BOM) still work
+    with open(channels_csv, newline='', encoding='utf-8-sig') as f:
+        for row in csv.DictReader(f):
+            row = {(k or '').strip().lower(): (v or '').strip() for k, v in row.items()}
+            native = row.get('intan_channel', '').upper()
+            if not native:
+                continue
+            if native in metadata:
+                raise ValueError("%s is listed twice in %s" % (native, channels_csv))
+            metadata[native] = {k: row.get(k, '') for k in ['name', 'type', 'ni_line', 'description']}
+    return metadata
+
+
+def apply_channel_metadata(native_names, current_names, metadata):
+    """Replace channel names with the names from channels.csv where one is given"""
+    names = []
+    for native, current in zip(native_names, current_names):
+        name = metadata.get(native.upper(), {}).get('name', '')
+        names.append(name if name else current)
+    return names
 
 @click.command("read-rhd-settings")
 @click.argument("settings_path")

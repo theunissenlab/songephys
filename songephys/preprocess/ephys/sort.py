@@ -7,7 +7,10 @@ from sklearn.neighbors import LocalOutlierFactor
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
 from sklearn.mixture import GaussianMixture, BayesianGaussianMixture
 from sklearn.neighbors import KNeighborsClassifier
-from suss.core import SpikeDataset
+try:
+    from suss.core import SpikeDataset
+except Exception as e:
+    print("NO suss")
 
 import umap
 import networkx as nx

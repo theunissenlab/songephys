@@ -16,8 +16,11 @@ import numpy as np
 import matplotlib.pyplot as plt
 from soundsig.sound import spectrogram
 from soundsig.signal import bandpass_filter, resample
-from suss.core import SpikeDataset
-import suss.io
+try:
+    from suss.core import SpikeDataset
+    import suss.io
+except Exception as e:
+    print("No Suss")
 
 from .targets import YamlTarget
 from ..format.io import load_yaml, save_yaml
@@ -27,6 +30,7 @@ from ..preprocess.ephys.detect import calculate_snippet_dimensions, extract_spik
 from ..preprocess.ephys.sort import sort, create_hierarchy
 
 from .file_setup import Rhd2Wav, Rhd2Binary, SiteConfig, SessionConfig, SessionProjectConfig, SiteProjectConfig, DefineSessions,GenerateSingleSiteMemmap, GenerateSiteMemmaps, GenerateLFP, RemoteRawData
+from .file_setup import DetectStimEvents, GenerateSingleSiteDigitalMemmap
 from .pipeline_utils import SiteParameter, SessionParameter, get_session_sites, RemoteTask
 
 
@@ -425,7 +429,8 @@ class KiloSortSorting(RemoteTask):
         bad_chans = site_config.get('bad_channels',dict()).get('ephys.wav',dict()).get('RHD2000 amplifier channel',[])
         chan_names = np.array(chan_names)[~np.in1d(chan_names,bad_chans)]
         out_dir = os.path.join(self.site_dir,'kilosort_output')
-        probe_fun = probes[project_config["EPHYS"].get('PROBETYPE','H10')]
+        from ..preprocess.ephys.probes import get_probe_name
+        probe_fun = probes[get_probe_name(site_config, project_config, default='H10')]
         kilosort_run(bin_file, dir_path=self.site_dir, output_dir=out_dir,
                      probe = probe_fun(chan_names = chan_names),
                      n_channels=len(chan_names),data_dtype='int16')
@@ -454,14 +459,9 @@ class KiloSort4Sorting(RemoteTask):
         bin_file = Path(self.input()['full_bin_array']['bin'].path)
         bin_info = json.load(open(self.input()['full_bin_array']['info'].path,'r'))
 
-        probes = dict({
-            "P1": 'cambridge_P1.prb', # 4 shank
-            "H10": 'cambridge_H10.prb', # 2 shank
-            "M16": 'microprobes_16ch.prb', # microprobes with 16 wires
-            'H15': 'cambridge_H15.json' # 2 shank
-        })
-        print("loading probe file for probe type %s"%project_config["EPHYS"].get('PROBE','H10'))
-        prb = kilosort.io.load_probe(os.path.join(kilosort.PROBE_DIR,probes[project_config["EPHYS"].get('PROBE','H10')]))
+        # site_config probe <- project EPHYS PROBE (see preprocess/ephys/probes.py)
+        from ..preprocess.ephys.probes import load_site_probe
+        prb, _, _ = load_site_probe(site_config, project_config, default='H10')
 
         good_chans = [True for _ in prb['chanMap']]
         if 'bad_channels' in site_config and site_config['bad_channels'] != []:
@@ -473,18 +473,14 @@ class KiloSort4Sorting(RemoteTask):
         print(sum(good_chans),bin_info['num_channels'])
         assert(sum(good_chans) == bin_info['num_channels'])
 
-        settings = kilosort.DEFAULT_SETTINGS.copy()
-        settings['n_chan_bin'] = bin_info['num_channels']
-        settings['nblocks'] = 1
-        # Batch size should be larger
-        settings['batch_size'] = 30000*6 # 4s of data
-        # Reduce Th_universal by 1 or 2 at a time to detect more units
-        settings['Th_universal'] = 7
-        settings['dminx'] = 18.5
-        settings['templates_from_data'] = True
-        settings['nearest_templates'] = min(prb['n_chan'], 100)
-        settings['nearest_chans'] = min(prb['n_chan'], 8)
-        #settings['cluster_downsampling'] = 40
+        # songephys defaults <- project KILOSORT <- site_config kilosort
+        # (see songephys/preprocess/ephys/kilosort_settings.py)
+        from ..preprocess.ephys.kilosort_settings import build_kilosort_settings, describe_overrides
+        settings = build_kilosort_settings(
+            kilosort.DEFAULT_SETTINGS, bin_info['num_channels'], prb['n_chan'],
+            site_config=site_config, project_config=project_config)
+        print("Kilosort settings that differ from Kilosort's defaults:\n  " +
+              "\n  ".join(describe_overrides(kilosort.DEFAULT_SETTINGS, settings)))
 
         # # TODO if we keep running OOM then we should set kcoords to 1
         ks_output_dir =  os.path.dirname(self.output().path)
@@ -499,8 +495,9 @@ class KiloSort4Sorting(RemoteTask):
                 prb_kc = prb['kcoords']
                 inds = prb_kc == sh
                 prb_sh['n_chan'] = sum(inds)
-                settings['nearest_templates'] = min(prb_sh['n_chan'], 100)
-                settings['nearest_chans'] = min(prb_sh['n_chan'], 8)
+                settings = build_kilosort_settings(
+                    kilosort.DEFAULT_SETTINGS, bin_info['num_channels'], prb_sh['n_chan'],
+                    site_config=site_config, project_config=project_config)
 
                 inds = np.logical_and(good_chans,inds)
                 for key in ['kcoords','xc','yc','chanMap']:
@@ -520,8 +517,53 @@ class KiloSort4Sorting(RemoteTask):
         # save this file to indicate we have finished the sorting
         with self.output().open('w') as f:
             f.write('complete')
-        
-                
+
+
+class ExportSortEvents(RemoteTask):
+    """Write the site's task events next to a Kilosort sort, as events.csv
+
+    One row per event (stim pulses with delivered/bout/polarity, and each named
+    digital input: feedback, target, song, syllable with its code, ...), with
+    time_s and sample in the same time base as the sort's spike_times. See
+    songephys.postprocess.events_table. Also written into shank_* subfolders when
+    the sort was run by shank. The phy EventAlignedView plugin reads this file.
+    """
+    kilosort_dir = luigi.Parameter(default='ks4_CAR')
+
+    def requires(self):
+        return {
+            'sort': KiloSort4Sorting(site_dir=self.site_dir, kilosort_dir=self.kilosort_dir),
+            'stim_events': DetectStimEvents(self.site_dir),
+            'digital': GenerateSingleSiteDigitalMemmap(self.site_dir),
+        }
+
+    def output(self):
+        return luigi.LocalTarget(os.path.join(self.site_dir, self.kilosort_dir, 'events.csv'))
+
+    def run(self):
+        import json
+        from ..preprocess.ephys.stim_artifact import load_stim_events
+        from ..postprocess.events_table import build_events_table, stim_bit_from_config
+        site_config = self.site_config
+        dig = self.input()['digital']
+        info = json.load(open(dig['info'].path, 'r'))
+        n, fs = int(info['num_samples']), float(info['sampling_rate'])
+        if info['num_channels'] != 1:
+            raise ValueError("ExportSortEvents expects the packed (1-column) digital memmap")
+        dig_mm = np.memmap(dig['bin'].path, dtype='uint16', mode='r')
+        stim_events = load_stim_events(self.input()['stim_events'].path)
+        df = build_events_table(lambda a, b: dig_mm[a:b], n, fs, site_config, stim_events,
+                                stim_bit_from_config(stim_events, site_config))
+        ks_dir = os.path.dirname(self.output().path)
+        targets = [self.output().path] + [
+            os.path.join(ks_dir, d, 'events.csv') for d in sorted(os.listdir(ks_dir))
+            if d.startswith('shank_') and os.path.isdir(os.path.join(ks_dir, d))]
+        for path in targets[1:] + targets[:1]:          # the main file last (it marks completion)
+            df.to_csv(path + '.partial', index=False)
+            os.replace(path + '.partial', path)
+        counts = df.event.value_counts().to_dict()
+        print("Wrote %d events to %s: %s" % (len(df), self.output().path, counts))
+
 
 class ManualSorting(luigi.Task):
     site_dir = SiteParameter()

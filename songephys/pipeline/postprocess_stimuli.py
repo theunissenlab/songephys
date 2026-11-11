@@ -31,6 +31,7 @@ from .nwb_utils import (
     NWBProcessingTarget,
     CreateSiteNWB,
     AddDigitalEventsNWB,
+    AddStimEventsNWB,
     AddMotionNWB,
     AddAudioNWB,
     AddPyoperantTrials,
@@ -673,6 +674,8 @@ class GenerateBaseNWB(luigi.WrapperTask):
         tasks = {
                 'site_nwb': CreateSiteNWB(site_dir=self.site_dir),
                 'digital': AddDigitalEventsNWB(site_dir=self.site_dir, audcode_channel=self.audcode_channel),
+                # electrical stimulation pulses/bouts (empty tables if stim handling is off)
+                'stim': AddStimEventsNWB(site_dir=self.site_dir),
                 'lfp': AddLFPNWB(site_dir=self.site_dir),
                 'audio': AddAudioNWB(site_dir=self.site_dir)
         }
