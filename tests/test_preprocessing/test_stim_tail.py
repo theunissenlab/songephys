@@ -148,6 +148,45 @@ class TestPipeline(unittest.TestCase):
         np.testing.assert_array_equal(t3['blank_stop'], t1['blank_stop'])
         self.assertTrue(t3['config']['subtract_tail'])
 
+    def test_extra_artifact_blank_and_no_post_blank(self):
+        # the middle pulse stands in for an artefact without a TTL
+        extra = np.array([False, True, False])
+        fit = lambda **kw: fit_stim_tails(self.read, len(self.x), 4, FS, self.onsets, np.arange(3), cfg(**kw),
+                                          os.path.join(self.tmp, 'blocks.npy'), workers=1,
+                                          progress=lambda s: None, extra=extra)
+        tails = fit()
+        rel = tails['blank_stop'] - tails['onset'][:, None]
+        np.testing.assert_array_equal(tails['extra'], extra)
+        self.assertTrue((rel[[0, 2]] < 30).all())              # pulses: where the fast part ends (~0.7 ms)
+        np.testing.assert_array_equal(rel[1], 30)              # extra: at least extra_artifact_ms_after = 1 ms
+        self.assertTrue(tails['ok'].all())                     # tail fitted for it too
+        # without adaptive_blank the extra artefact is blanked for exactly 1 ms, pulses for ms_after
+        rel = fit(adaptive_blank=False)
+        np.testing.assert_array_equal((rel['blank_stop'] - rel['onset'][:, None])[:, 0], [45, 30, 45])
+        # on the rail for longer than 1 ms: the blank follows the saturation
+        x = self.x.copy()
+        on = int(self.onsets[1])
+        x[on:on + 50] = 32764
+        t2 = fit_stim_tails(lambda a, b: x[a:b], len(x), 4, FS, self.onsets, np.arange(3), cfg(),
+                            os.path.join(self.tmp, 'blocks.npy'), workers=1, progress=lambda s: None, extra=extra)
+        # (the drop off the rail at sample 50 is the last big jump, plus adaptive_extra_samples + 1)
+        np.testing.assert_array_equal((t2['blank_stop'] - t2['onset'][:, None])[1], 61)
+        # blank_after_filter_ms applies to the pulses only
+        sos = make_bandpass_sos(FS, 300, 8000, 5)
+        n = len(self.x)
+        out = tail_blank_filter_chunk(self.read, n, 0, n, np.zeros((0, 2), np.int64), tails, np.arange(4), sos,
+                                      1500, post_blank_n=60)
+        on0 = int(self.onsets[0])
+        self.assertTrue(np.all(out[on0 - 15:on0 + 60] == 0))
+        self.assertTrue(np.all(out[on - 15:on + 30] == 0))
+        self.assertTrue(np.all(np.any(out[on + 30:on + 60] != 0, axis=0)))   # data kept from 1 ms on
+        # the tail is removed there too: no slow lump after the blank
+        self.assertLess(np.abs(out[on + 30:on + 300, 1:]).max(), 400)
+        # files written before this option load with extra = False
+        path = os.path.join(self.tmp, 'old.npz')
+        save_stim_tails(path, {k: v for k, v in tails.items() if k != 'extra'})
+        self.assertFalse(load_stim_tails(path)['extra'].any())
+
     def test_adaptive_only_and_fixed_tail(self):
         t = self.fit(subtract_tail=False)
         self.assertFalse(t['ok'].any())                     # no fits, just blank ends

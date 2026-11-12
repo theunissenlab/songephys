@@ -88,6 +88,20 @@ STIM_ARTIFACT_DEFAULTS = dict(
     # transient settles before this point) but the dirty window is not kept.
     # 0 = off.
     blank_after_filter_ms=0.0,
+    # extra_blank_s: extra [start_s, stop_s] windows to blank on every channel, for
+    # artefacts with no TTL (e.g. the transient when the stimulator is connected).
+    # Like the pulse blanks, the band-pass is run separately on each side.
+    extra_blank_s=(),
+    # extra_artifacts_s: approximate times (s) of artefacts with no TTL that should be
+    # treated like a stimulation pulse (e.g. the jump when the stimulator is connected).
+    # The jump is located within extra_artifact_search_ms of each time; the blank runs
+    # from ms_before before it to extra_artifact_ms_after after it (longer on channels
+    # that stay on the rail, with adaptive_blank), the tail after it is fitted and
+    # subtracted (subtract_tail), and each side is band-passed separately.
+    # blank_after_filter_ms does not apply to these.
+    extra_artifacts_s=(),
+    extra_artifact_search_ms=100.0,
+    extra_artifact_ms_after=1.0,
 )
 
 
@@ -111,7 +125,104 @@ def get_stim_artifact_config(site_config=None, project_config=None):
             cfg[k] = v
     for k in ("enabled", "blank_undelivered", "adaptive_blank", "subtract_tail"):
         cfg[k] = bool(cfg[k])
+    cfg["extra_blank_s"] = parse_extra_blank_s(cfg["extra_blank_s"])
+    cfg["extra_artifacts_s"] = parse_extra_artifacts_s(cfg["extra_artifacts_s"])
     return cfg
+
+
+def parse_extra_artifacts_s(value):
+    """Validate ``extra_artifacts_s``: a time or list of times in seconds (>= 0), returned sorted"""
+    if value is None:
+        return []
+    try:
+        arr = np.atleast_1d(np.asarray(value, dtype=float))
+    except (TypeError, ValueError):
+        raise ValueError("stim_artifact extra_artifacts_s must be a list of times in seconds, got %r" % (value,))
+    if arr.ndim != 1 or not np.isfinite(arr).all() or (arr < 0).any():
+        raise ValueError("stim_artifact extra_artifacts_s must be a list of times in seconds, got %r" % (value,))
+    return np.sort(arr).tolist()
+
+
+def find_jump_onset(read_traces, approx_frame, fs, n_samples, search_ms=100.0, frac=0.2):
+    """Locate an artefact's jump near ``approx_frame``
+
+    Uses the median over channels of the sample-to-sample change, so it follows
+    jumps common to the probe and ignores spikes and LFP. The onset is the first
+    sample whose change reaches ``frac`` of the largest change within
+    ``search_ms`` either side of ``approx_frame``.
+
+    read_traces : callable(start, stop) -> (T, C) raw amplifier data
+
+    Returns (onset_frame, score): the first sample after the jump begins, and the
+    largest change divided by the typical change in the window (like
+    ``score_artifacts``; noise scores a few). (None, 0.0) if there is no data.
+    """
+    s = int(round(search_ms * fs / 1e3))
+    a, b = max(0, int(approx_frame) - s), min(int(n_samples), int(approx_frame) + s + 1)
+    if b - a < 3:
+        return None, 0.0
+    x = np.asarray(read_traces(a, b), dtype=np.float64)
+    d = np.median(np.abs(np.diff(x, axis=0)), axis=1)
+    if d.max() <= 0:
+        return None, 0.0
+    k = int(np.argmax(d >= frac * d.max()))
+    return a + k + 1, float(d.max() / max(np.median(d), 1e-9))
+
+
+def find_extra_artifacts(read_traces, cfg, fs, n_samples):
+    """Jump onsets for ``extra_artifacts_s``; returns (onset_frames, scores, approx_s) of those found
+
+    Times with no clear jump nearby (score below ``delivered_threshold``) or outside
+    the recording are skipped with a warning.
+    """
+    onsets, scores, approx = [], [], []
+    for t in parse_extra_artifacts_s(cfg.get("extra_artifacts_s")):
+        f = int(round(t * fs))
+        onset, score = (None, 0.0) if f >= n_samples else find_jump_onset(
+            read_traces, f, fs, n_samples, cfg["extra_artifact_search_ms"])
+        if onset is None or score <= cfg["delivered_threshold"]:
+            warnings.warn("extra_artifacts_s: no clear jump within %.0f ms of %.3f s (score %.1f); ignored"
+                          % (cfg["extra_artifact_search_ms"], t, score))
+            continue
+        if onsets and onset == onsets[-1]:
+            continue
+        onsets.append(int(onset)); scores.append(score); approx.append(float(t))
+    return np.asarray(onsets, dtype=np.int64), np.asarray(scores, dtype=float), approx
+
+
+def parse_extra_blank_s(value):
+    """Validate ``extra_blank_s``: a list of [start_s, stop_s] pairs (stop > start >= 0)
+
+    A single pair ([23.5, 23.8]) is accepted too. Returns a list of [float, float].
+    """
+    if value is None:
+        return []
+    try:
+        arr = np.asarray(value, dtype=float)
+    except (TypeError, ValueError):
+        raise ValueError("stim_artifact extra_blank_s must be a list of [start_s, stop_s] pairs, got %r" % (value,))
+    if arr.size == 0:
+        return []
+    if arr.ndim == 1 and arr.size == 2:
+        arr = arr.reshape(1, 2)
+    if arr.ndim != 2 or arr.shape[1] != 2 or not np.isfinite(arr).all():
+        raise ValueError("stim_artifact extra_blank_s must be a list of [start_s, stop_s] pairs, got %r" % (value,))
+    if (arr[:, 0] < 0).any() or (arr[:, 1] <= arr[:, 0]).any():
+        raise ValueError("stim_artifact extra_blank_s: each pair needs stop_s > start_s >= 0, got %r" % (value,))
+    return arr.tolist()
+
+
+def extra_blank_windows(cfg, fs, n_samples):
+    """``extra_blank_s`` as sorted, merged [start, stop) sample windows within the recording"""
+    pairs = np.asarray(parse_extra_blank_s(cfg.get("extra_blank_s")), dtype=float).reshape(-1, 2)
+    if len(pairs) == 0:
+        return np.zeros((0, 2), np.int64)
+    w = np.stack([np.floor(pairs[:, 0] * fs), np.ceil(pairs[:, 1] * fs)], 1).astype(np.int64)
+    outside = w[:, 0] >= n_samples
+    if outside.any():
+        warnings.warn("extra_blank_s windows starting after the end of the recording ignored: %s"
+                      % pairs[outside].tolist())
+    return merge_windows(np.clip(w[~outside], 0, n_samples))
 
 
 def needs_stim_tails(cfg):
@@ -444,8 +555,11 @@ def blank_and_filter_chunk(read_traces, n_samples, start, stop, windows, sos, ma
 # ---------------------------------------------------------------------------
 
 def build_stim_events(rising, falling, fs, n_samples, cfg, score=None, peak_uv=None,
-                      digital_bit=None):
-    """Assemble the stim-events dict saved by DetectStimEvents"""
+                      digital_bit=None, extra_artifacts=None):
+    """Assemble the stim-events dict saved by DetectStimEvents
+
+    extra_artifacts : optional (onset_frames, scores, approx_s) from ``find_extra_artifacts``
+    """
     rising = np.asarray(rising, dtype=np.int64)
     falling = np.asarray(falling, dtype=np.int64)
     n = len(rising)
@@ -455,7 +569,12 @@ def build_stim_events(rising, falling, fs, n_samples, cfg, score=None, peak_uv=N
     blanked = delivered | bool(cfg["blank_undelivered"])
     per_pulse = blank_windows(rising, fs, cfg["ms_before"], cfg["ms_after"], n_samples, cfg["offset_ms"])
     bout = group_bouts(rising, fs, cfg["bout_gap_s"])
-    merged = merge_windows(per_pulse[blanked])
+    extra = extra_blank_windows(cfg, fs, n_samples) if cfg["enabled"] else np.zeros((0, 2), np.int64)
+    ea_onset, ea_score, ea_approx = extra_artifacts if (extra_artifacts is not None and cfg["enabled"]) \
+        else (np.zeros(0, np.int64), np.zeros(0), [])
+    ea_onset = np.asarray(ea_onset, dtype=np.int64)
+    ea_windows = blank_windows(ea_onset, fs, cfg["ms_before"], cfg["extra_artifact_ms_after"], n_samples)
+    merged = merge_windows(np.concatenate([per_pulse[blanked].reshape(-1, 2), extra, ea_windows]))
     return dict(
         version=STIM_EVENTS_VERSION,
         enabled=bool(cfg["enabled"]),
@@ -476,6 +595,18 @@ def build_stim_events(rising, falling, fs, n_samples, cfg, score=None, peak_uv=N
         ),
         bouts=summarize_bouts(rising, falling, delivered, bout, fs) if n else [],
         blank_windows=merged.tolist(),
+        # the manual windows on their own (also included in blank_windows)
+        extra_blank_windows=extra.tolist(),
+        # artefacts with no TTL, treated like pulses (extra_artifacts_s). Their fixed
+        # windows are in blank_windows; with adaptive_blank / subtract_tail the per-channel
+        # windows from FitStimTails are used instead.
+        extra_artifacts=dict(
+            onset_frame=ea_onset.tolist(),
+            artifact_score=[float(x) for x in ea_score],
+            approx_s=[float(x) for x in ea_approx],
+            blank_start_frame=ea_windows[:, 0].tolist(),
+            blank_stop_frame=ea_windows[:, 1].tolist(),
+        ),
     )
 
 
@@ -503,10 +634,18 @@ def stim_events_summary(events):
     lines = ["%d TTL events, %d delivered, %d without artefact, %d blanked windows" % (
         n, nd, n - nd, len(events["blank_windows"]))]
     fs = events["sampling_rate"]
+    extra = events.get("extra_blank_windows") or []
+    if extra:
+        lines.append("  %d manual blank windows (extra_blank_s): " % len(extra)
+                     + ", ".join("%.3f-%.3f s" % (a / fs, b / fs) for a, b in extra))
     und = [s / fs for s, d in zip(e["start_frame"], e["delivered"]) if not d]
     if und:
         lines.append("  without artefact at (s): " + ", ".join("%.1f" % t for t in und[:20])
                      + (" ..." if len(und) > 20 else ""))
+    ea = (events.get("extra_artifacts") or {}).get("onset_frame") or []
+    if ea:
+        lines.append("  %d artefacts without a TTL (extra_artifacts_s), jump at (s): " % len(ea)
+                     + ", ".join("%.4f" % (f / fs) for f in ea))
     for b in events["bouts"]:
         t = b["start_frame"] / fs
         lines.append("  bout %d: %dh%02dm%02ds, %d pulses (%d delivered), %.2f Hz" % (

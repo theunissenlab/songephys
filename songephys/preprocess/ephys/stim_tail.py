@@ -162,9 +162,9 @@ def _fit_channels(args):
             onset = base_n
             if meta['adaptive']:
                 b1 = fast_artifact_end(x, onset, meta['search_n'], meta['rail'], meta['jump']) + meta['extra'] + 1
-                b1 = int(np.clip(b1, onset + meta['min_n'], onset + meta['max_n']))
+                b1 = int(np.clip(b1, onset + meta['min_n'][p], onset + meta['max_n']))
             else:
-                b1 = onset + meta['fixed_after_n']
+                b1 = onset + meta['fixed_after_n'][p]
             out['b1'][ci, p] = b1 - onset
             bs = onset - meta['before_n']
             out['baseline'][ci, p] = x[max(bs - b0, 0):max(bs - b1_, 1)].mean()
@@ -188,7 +188,7 @@ def _fit_channels(args):
 
 
 def fit_stim_tails(read_traces, n_samples, n_channels, fs, onsets, bouts, cfg,
-                   tmp_path, workers=None, progress=print):
+                   tmp_path, workers=None, progress=print, extra=None):
     """Adaptive blank ends and tail fits for every pulse x channel.
 
     read_traces : callable(start, stop) -> (T, C) raw signed traces (counts)
@@ -196,6 +196,9 @@ def fit_stim_tails(read_traces, n_samples, n_channels, fs, onsets, bouts, cfg,
     bouts : (P,) bout index (warm starts are shared within a bout)
     cfg : stim_artifact config (see stim_artifact.STIM_ARTIFACT_DEFAULTS)
     tmp_path : scratch .npy file for the raw blocks (deleted afterwards)
+    extra : optional (P,) bool, True for artefacts without a TTL (extra_artifacts_s).
+        Their blank lasts at least ``extra_artifact_ms_after`` after the jump (exactly
+        that without adaptive_blank) and they get no blank_after_filter_ms.
 
     Returns a dict of arrays (see ``save_stim_tails``).
     """
@@ -203,11 +206,17 @@ def fit_stim_tails(read_traces, n_samples, n_channels, fs, onsets, bouts, cfg,
     onsets = np.asarray(onsets, np.int64)
     bouts = np.asarray(bouts, np.int64)
     P = len(onsets)
+    extra = np.zeros(P, bool) if extra is None else np.asarray(extra, bool)
+    if np.any(np.diff(onsets) < 0):
+        raise ValueError("fit_stim_tails needs onsets sorted in time")
     ms = lambda v: int(round(float(v) * fs / 1e3))
+    extra_after_n = ms(cfg.get('extra_artifact_ms_after', 1.0))
     before_n = ms(cfg['ms_before'])
     base_n = ms(BASELINE_MS[0]) + before_n
     fit_n = ms(cfg['tail_fit_ms'])
     max_n = ms(cfg['adaptive_max_ms_after']) if cfg['adaptive_blank'] else ms(cfg['ms_after'])
+    if extra.any():
+        max_n = max(max_n, extra_after_n)
     L = base_n + max_n + fit_n
     # tails stop at the next pulse's blank (fast trains) and at the end of the recording
     next_bs = np.r_[onsets[1:] - before_n, n_samples]
@@ -231,8 +240,10 @@ def fit_stim_tails(read_traces, n_samples, n_channels, fs, onsets, bouts, cfg,
         meta = dict(base_n=base_n, fs=float(fs), n_exp=int(cfg['tail_n_exp']), valid_len=valid,
                     adaptive=bool(cfg['adaptive_blank']), search_n=ms(cfg['adaptive_search_ms']),
                     rail=float(cfg['adaptive_rail_counts']), jump=float(cfg['adaptive_jump_counts']),
-                    extra=int(cfg['adaptive_extra_samples']), min_n=ms(cfg['adaptive_min_ms_after']),
-                    max_n=max_n, fixed_after_n=ms(cfg['ms_after']), before_n=before_n,
+                    extra=int(cfg['adaptive_extra_samples']),
+                    min_n=np.where(extra, extra_after_n, ms(cfg['adaptive_min_ms_after'])),
+                    max_n=max_n, fixed_after_n=np.where(extra, extra_after_n, ms(cfg['ms_after'])),
+                    before_n=before_n,
                     subtract=bool(cfg['subtract_tail']), min_tail_n=ms(MIN_TAIL_MS), bout=bouts)
         workers = int(workers or cfg.get('tail_workers') or min(8, os.cpu_count() or 1))
         groups = [list(g) for g in np.array_split(np.arange(n_channels), min(n_channels, max(workers * 4, 1)))]
@@ -270,7 +281,7 @@ def fit_stim_tails(read_traces, n_samples, n_channels, fs, onsets, bouts, cfg,
     b1 = gather('b1')
     return dict(
         version=STIM_TAILS_VERSION, fs=float(fs), n_samples=int(n_samples),
-        onset=onsets, bout=bouts,
+        onset=onsets, bout=bouts, extra=extra,
         blank_start=onsets - before_n,
         blank_stop=(onsets[:, None] + np.nan_to_num(b1).astype(np.int64)),
         tail_end=tail_end.astype(np.int64),
@@ -284,7 +295,9 @@ def fit_stim_tails(read_traces, n_samples, n_channels, fs, onsets, bouts, cfg,
 def stim_tails_summary(tails):
     fs = tails['fs']
     bs = (tails['blank_stop'] - tails['onset'][:, None]) / fs * 1e3
-    lines = ["Stim tails: %d pulses x %d channels" % tails['blank_stop'].shape,
+    n_extra = int(np.sum(tails['extra'])) if 'extra' in tails else 0
+    lines = ["Stim tails: %d pulses x %d channels" % tails['blank_stop'].shape
+             + (" (%d of them artefacts without a TTL)" % n_extra if n_extra else ""),
              "  blank ends %.2f ms after the pulse (median; 5-95%%: %.2f-%.2f, max %.2f)"
              % (np.median(bs), *np.percentile(bs, [5, 95]), bs.max())]
     ok = tails['ok']
@@ -305,13 +318,16 @@ def load_stim_tails(path):
         out[k] = int(out[k])
     out['fs'] = float(out['fs'])
     out['config'] = json.loads(str(out['config']))
+    if 'extra' not in out:                       # files written before extra_artifacts_s existed
+        out['extra'] = np.zeros(len(out['onset']), bool)
     return out
 
 
 def empty_stim_tails(fs=30000.0, n_samples=0, n_channels=0, k=3):
     z = np.zeros((0, n_channels))
     return dict(version=STIM_TAILS_VERSION, fs=float(fs), n_samples=int(n_samples),
-                onset=np.zeros(0, np.int64), bout=np.zeros(0, np.int64), blank_start=np.zeros(0, np.int64),
+                onset=np.zeros(0, np.int64), bout=np.zeros(0, np.int64), extra=np.zeros(0, bool),
+                blank_start=np.zeros(0, np.int64),
                 blank_stop=np.zeros((0, n_channels), np.int64), tail_end=np.zeros(0, np.int64),
                 taus=np.zeros((0, n_channels, k)), amps=np.zeros((0, n_channels, k)), c=z, baseline=z, r2=z,
                 ok=np.zeros((0, n_channels), bool), taper_n=0, config=json.dumps({}))
@@ -357,10 +373,16 @@ def tail_correction(tails, a, b, chans):
 
 
 def post_filter_windows(tails, post_blank_n, a, b):
-    """[blank_start, onset + post_blank_n) for the fitted pulses overlapping [a, b), relative to a."""
+    """[blank_start, onset + post_blank_n) for the fitted pulses overlapping [a, b), relative to a.
+
+    Artefacts without a TTL (``tails['extra']``) are left out: they keep their own blank only.
+    """
     if post_blank_n <= 0 or not len(tails['onset']):
         return np.zeros((0, 2), np.int64)
     w = np.stack([tails['blank_start'], tails['onset'] + int(post_blank_n)], 1).astype(np.int64)
+    extra = tails.get('extra')
+    if extra is not None and len(extra):
+        w = w[~np.asarray(extra, bool)]
     w = w[(w[:, 1] > a) & (w[:, 0] < b)]
     return np.clip(w, a, b) - a
 

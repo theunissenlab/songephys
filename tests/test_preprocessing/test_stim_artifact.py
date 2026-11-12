@@ -12,6 +12,12 @@ from songephys.preprocess.ephys.stim_artifact import (
     blank_windows,
     build_stim_events,
     extend_windows,
+    extra_blank_windows,
+    find_extra_artifacts,
+    find_jump_onset,
+    parse_extra_artifacts_s,
+    parse_extra_blank_s,
+    stim_events_summary,
     find_ttl_edges,
     get_stim_artifact_config,
     group_bouts,
@@ -128,6 +134,89 @@ class TestDelivered(unittest.TestCase):
         self.assertEqual(ev["events"]["blanked"], [True, False, True])
         self.assertEqual(len(ev["blank_windows"]), 2)
         self.assertIsNone(ev["events"]["blank_start_frame"][1])
+
+
+class TestExtraBlank(unittest.TestCase):
+    def test_parse(self):
+        self.assertEqual(parse_extra_blank_s(None), [])
+        self.assertEqual(parse_extra_blank_s([]), [])
+        self.assertEqual(parse_extra_blank_s([1.0, 1.5]), [[1.0, 1.5]])
+        self.assertEqual(parse_extra_blank_s([[1, 2], [3.5, 4]]), [[1.0, 2.0], [3.5, 4.0]])
+        for bad in ([[2, 1]], [[1, 1]], [[-1, 1]], [1, 2, 3], "soon", [[1, 2, 3]]):
+            with self.assertRaises(ValueError):
+                parse_extra_blank_s(bad)
+        self.assertEqual(get_stim_artifact_config(None, None)["extra_blank_s"], [])
+
+    def test_windows_merged_and_clipped(self):
+        cfg = get_stim_artifact_config(
+            {"stim_artifact": {"enabled": True, "extra_blank_s": [[0.5, 0.6], [0.55, 0.7], [2.9, 5.0]]}})
+        w = extra_blank_windows(cfg, FS, int(3 * FS))
+        np.testing.assert_array_equal(w, [[15000, 21000], [87000, 90000]])
+        with self.assertWarns(UserWarning):
+            w = extra_blank_windows(dict(cfg, extra_blank_s=[[10, 11]]), FS, int(3 * FS))
+        self.assertEqual(w.shape, (0, 2))
+
+    def test_in_stim_events_and_blanked(self):
+        x, frames = synthetic_stim_recording()
+        x[ms(1000):ms(1200)] += 30000                       # a long transient with no TTL
+        x = np.clip(x, -32764, 32764)
+        site = {"stim_artifact": {"enabled": True, "extra_blank_s": [[0.99, 1.25]]}}
+        cfg = get_stim_artifact_config(site)
+        score, peak = score_artifacts(lambda a, b: x[a:b], frames, FS, len(x))
+        ev = build_stim_events(frames, np.array(frames) + 6, FS, len(x), cfg, score, peak, 0)
+        self.assertEqual(ev["extra_blank_windows"], [[ms(990), ms(1250)]])
+        self.assertEqual(len(ev["blank_windows"]), 4)        # 3 pulses + the manual window
+        self.assertIn([ms(990), ms(1250)], ev["blank_windows"])
+        self.assertIn("manual blank", stim_events_summary(ev))
+        # pulses are untouched by the extra window
+        self.assertEqual(ev["events"]["blanked"], [True, True, True])
+        sos = make_bandpass_sos(FS)
+        out = blank_and_filter(x, np.asarray(ev["blank_windows"]), sos)
+        self.assertTrue((out[ms(990):ms(1250)] == 0).all())
+        # without the window the step rings in the filtered data; with it the edges stay small
+        ringing = blank_and_filter(x, np.asarray([w for w in ev["blank_windows"] if w != [ms(990), ms(1250)]]), sos)
+        self.assertGreater(np.abs(ringing[ms(1195):ms(1205)]).max(), 2000)
+        self.assertLess(np.abs(out[ms(1250):ms(1260)]).max(), 500)
+        # nwb blank intervals include it
+        self.assertIn((0.99, 1.25), stim_nwb_rows(ev)[2])
+
+    def test_extra_artifacts_located_at_the_jump(self):
+        x, frames = synthetic_stim_recording()
+        jump = ms(1000) + 7                                   # a step with no TTL, common to all channels
+        x[jump:jump + ms(150)] -= 25000
+        x = np.clip(x, -32764, 32764)
+        read = lambda a, b: x[a:b]
+        on, score = find_jump_onset(read, ms(1010), FS, len(x), search_ms=50)
+        self.assertEqual(on, jump)
+        self.assertGreater(score, 100)
+        self.assertEqual(parse_extra_artifacts_s(1.0), [1.0])
+        self.assertEqual(parse_extra_artifacts_s([2, 1.0]), [1.0, 2.0])
+        with self.assertRaises(ValueError):
+            parse_extra_artifacts_s([-1])
+        cfg = get_stim_artifact_config({"stim_artifact": {"enabled": True, "extra_artifacts_s": [1.01, 2.0, 99]}})
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            found = find_extra_artifacts(read, cfg, FS, len(x))
+        np.testing.assert_array_equal(found[0], [jump])       # nothing at 2.0 s; 99 s is outside
+        self.assertEqual(found[2], [1.01])
+        self.assertEqual(len(w), 2)
+        score, peak = score_artifacts(read, frames, FS, len(x))
+        ev = build_stim_events(frames, np.array(frames) + 6, FS, len(x), cfg, score, peak, 0, extra_artifacts=found)
+        ea = ev["extra_artifacts"]
+        self.assertEqual(ea["onset_frame"], [jump])
+        self.assertEqual((ea["blank_start_frame"], ea["blank_stop_frame"]), ([jump - ms(0.5)], [jump + ms(1.0)]))
+        self.assertIn([jump - ms(0.5), jump + ms(1.0)], ev["blank_windows"])
+        self.assertEqual(len(ev["events"]["start_frame"]), 3)  # not a stim pulse
+        self.assertIn("without a TTL", stim_events_summary(ev))
+        # no extra artefacts given: empty lists
+        self.assertEqual(build_stim_events(frames, np.array(frames) + 6, FS, len(x), cfg, score, peak, 0)
+                         ["extra_artifacts"]["onset_frame"], [])
+
+    def test_disabled_ignores_extra(self):
+        cfg = get_stim_artifact_config({"stim_artifact": {"enabled": False, "extra_blank_s": [[1, 2]]}})
+        ev = build_stim_events([], [], FS, int(3 * FS), cfg)
+        self.assertEqual(ev["extra_blank_windows"], [])
+        self.assertEqual(ev["blank_windows"], [])
 
 
 class TestBouts(unittest.TestCase):

@@ -35,6 +35,7 @@ from ..preprocess.ephys.stim_artifact import (
     score_artifacts,
     build_stim_events,
     empty_stim_events,
+    find_extra_artifacts,
     save_stim_events,
     load_stim_events,
     stim_events_summary,
@@ -1471,7 +1472,10 @@ class DetectStimEvents(luigi.Task):
         offset = int(round(cfg['offset_ms'] * fs / 1e3))
         score, peak_uv = score_artifacts(read_amp, rising + offset, fs, n, gain_uv=gain_uv)
 
-        events = build_stim_events(rising, falling, fs, n, cfg, score, peak_uv, digital_bit=bit)
+        # artefacts without a TTL (extra_artifacts_s): locate the jump near each given time
+        extra = find_extra_artifacts(read_amp, cfg, fs, n)
+        events = build_stim_events(rising, falling, fs, n, cfg, score, peak_uv, digital_bit=bit,
+                                   extra_artifacts=extra)
         save_stim_events(self.output().path, events)
         summary = stim_events_summary(events)
         logger.info(summary)
@@ -1509,7 +1513,8 @@ class FitStimTails(luigi.Task):
         self.output().makedirs()
         ev = events.get('events') or {}
         delivered = np.asarray(ev.get('delivered', []), dtype=bool)
-        if not needs_stim_tails(cfg) or not delivered.any():
+        extra_onsets = np.asarray((events.get('extra_artifacts') or {}).get('onset_frame', []), dtype=np.int64)
+        if not needs_stim_tails(cfg) or not (delivered.any() or len(extra_onsets)):
             save_stim_tails(self.output().path, empty_stim_tails())
             return
         recording = ensure_signed(load_site_recording(site_config, project_cfg, 'RHD2000 amplifier channel'))
@@ -1522,12 +1527,22 @@ class FitStimTails(luigi.Task):
         idx = np.nonzero(delivered)[0]
         onsets = np.asarray(ev['start_frame'], dtype=np.int64)[idx] + offset
         bouts = np.asarray(ev.get('bout', [0] * len(delivered)), dtype=np.int64)[idx]
+        # artefacts without a TTL go through the same blank + tail fit; event_index -1,
+        # each in a bout of its own (warm starts are per bout)
+        if len(extra_onsets):
+            first_free = int(bouts.max()) + 1 if len(bouts) else 0
+            onsets = np.concatenate([onsets, extra_onsets])
+            bouts = np.concatenate([bouts, first_free + np.arange(len(extra_onsets))])
+            idx = np.concatenate([idx, np.full(len(extra_onsets), -1)])
+            order = np.argsort(onsets, kind='stable')
+            onsets, bouts, idx = onsets[order], bouts[order], idx[order]
+        is_extra = idx < 0
         read = lambda a, b: recording.get_traces(start_frame=a, end_frame=b, segment_index=0)
         print("Fitting stimulation tails: %d pulses x %d channels (adaptive_blank=%s, subtract_tail=%s)" % (
             len(onsets), recording.get_num_channels(), cfg['adaptive_blank'], cfg['subtract_tail']))
         tmp = self.output().path[:-4] + '_blocks.tmp.npy'
         tails = fit_stim_tails(read, n, recording.get_num_channels(), fs, onsets, bouts, cfg, tmp,
-                               workers=cfg['tail_workers'] or None)
+                               workers=cfg['tail_workers'] or None, extra=is_extra)
         tails['event_index'] = idx.astype(np.int64)
         tails['channel_ids'] = np.asarray([str(c) for c in recording.get_channel_ids()])
         out = self.output().path
@@ -1657,8 +1672,13 @@ class GenerateSingleSiteMemmap(luigi.Task):
         # separately, so the band-pass never runs across an artefact
         stim_events = load_stim_events(self.input()['stim_events'].path)
         blank = np.asarray(stim_events['blank_windows'], dtype=np.int64).reshape(-1, 2)
+        # manual windows (stim_artifact extra_blank_s); already part of blank_windows
+        extra_blank = np.asarray(stim_events.get('extra_blank_windows', []), dtype=np.int64).reshape(-1, 2)
         stim_info = dict(enabled=stim_events['enabled'], n_events=len(stim_events['events']['start_frame']),
-                         n_delivered=int(np.sum(stim_events['events']['delivered'])), n_blank_windows=len(blank))
+                         n_delivered=int(np.sum(stim_events['events']['delivered'])), n_blank_windows=len(blank),
+                         n_extra_blank_windows=len(extra_blank))
+        if len(extra_blank):
+            print("Blanking %d manual windows (extra_blank_s)" % len(extra_blank))
         if len(blank):
             fs = multirecording.get_sampling_frequency()
             if stim_events['num_samples'] != multirecording.get_num_samples(segment_index=0) or stim_events['sampling_rate'] != fs:
@@ -1676,11 +1696,16 @@ class GenerateSingleSiteMemmap(luigi.Task):
                     raise ValueError("Stim tails were fitted on a recording of a different length; "
                                      "delete %s and rerun" % tails_path)
                 ev = stim_events['events']
+                extra_onsets = (stim_events.get('extra_artifacts') or {}).get('onset_frame', [])
+                if sorted(tails['onset'][tails['extra']].tolist()) != sorted(extra_onsets):
+                    raise ValueError("Stim tails do not cover the artefacts in extra_artifacts_s; "
+                                     "delete %s and rerun" % tails_path)
                 fitted = np.zeros(len(ev['start_frame']), bool)
-                fitted[tails['event_index']] = True
+                fitted[tails['event_index'][tails['event_index'] >= 0]] = True
                 keep = np.asarray(ev['blanked'], bool) & ~fitted
                 blank = np.stack([np.asarray(ev['blank_start_frame'])[keep],
                                   np.asarray(ev['blank_stop_frame'])[keep]], 1).astype(np.int64).reshape(-1, 2)
+                blank = merge_windows(np.concatenate([blank, extra_blank]))
                 post_blank_ms = float(get_stim_artifact_config(site_config, project_cfg)['blank_after_filter_ms'])
                 post_n = int(round(post_blank_ms * fs / 1e3))
                 widest = np.stack([tails['blank_start'],
@@ -1691,6 +1716,7 @@ class GenerateSingleSiteMemmap(luigi.Task):
                                  tail_n_exp=tcfg.get('tail_n_exp'), tail_fit_ms=tcfg.get('tail_fit_ms'),
                                  blank_after_filter_ms=post_blank_ms,
                                  n_fitted_pulses=int(len(tails['onset'])),
+                                 n_extra_artifacts=int(tails['extra'].sum()),
                                  tail_summary=stim_tails_summary(tails))
                 print(stim_tails_summary(tails))
                 if post_blank_ms > 0:
@@ -1725,6 +1751,77 @@ class GenerateSingleSiteMemmap(luigi.Task):
         # kilosort.io.spikeinterface_to_binary, which was ~5x slower here)
         if not self.output()['bin'].exists():
             write_recording_binary(multirecording, self.output()['bin'].path, dtype=np.int16, chunksize=30000)
+
+class PlotStimArtifacts(luigi.Task):
+    """Figures of every stimulation bout and manual blank window
+
+    Compares the raw amplifier data (before blanking) with what was written to the
+    ephys binary (blanked, band-passed, referenced); see preprocess/ephys/stim_plot.py.
+    Delete the index file to redraw.
+
+    Output: raw/stim_artifact_figs/index_<site>.txt, next to stim_bout_NN.png and
+    extra_blank_NN.png
+    """
+    site_dir = SiteParameter()
+
+    def requires(self):
+        return {
+            "site_config": SiteConfig(self.site_dir),
+            "project_config": SiteProjectConfig(self.site_dir),
+            "stim_events": DetectStimEvents(self.site_dir),
+            "memmap": GenerateSingleSiteMemmap(self.site_dir),
+        }
+
+    def output(self):
+        return luigi.LocalTarget(os.path.join(
+            self.site_dir, 'raw', 'stim_artifact_figs', "index_%s.txt" % os.path.basename(self.site_dir)))
+
+    def complete(self):
+        # figures older than the binary or the stim events show data that no longer exists
+        if not self.output().exists():
+            return False
+        drawn = os.path.getmtime(self.output().path)
+        sources = [GenerateSingleSiteMemmap(self.site_dir).output()['bin'].path,
+                   DetectStimEvents(self.site_dir).output().path]
+        return all(os.path.exists(p) and os.path.getmtime(p) <= drawn for p in sources)
+
+    def run(self):
+        from ..preprocess.ephys.stim_plot import plot_stim_artifact_figures
+        site_config = self.input()["site_config"].data()
+        project_cfg = self.input()["project_config"].data()
+        events = load_stim_events(self.input()["stim_events"].path)
+        self.output().makedirs()
+        out_dir = os.path.dirname(self.output().path)
+        written = []
+        if (len(events['events']['start_frame']) or events.get('extra_blank_windows')
+                or (events.get('extra_artifacts') or {}).get('onset_frame')):
+            recording = ensure_signed(load_site_recording(site_config, project_cfg, 'RHD2000 amplifier channel'))
+            info = json.load(open(self.input()['memmap']['info'].path, 'r'))
+            n, fs = recording.get_num_samples(segment_index=0), recording.get_sampling_frequency()
+            if events['num_samples'] != n or info['num_samples'] != n:
+                raise ValueError("Stim events (%d samples), binary (%d) and raw recording (%d) differ in length"
+                                 % (events['num_samples'], info['num_samples'], n))
+            ids = [str(c) for c in recording.get_channel_ids()]
+            bad = ['A-%03d' % x for x in (site_config.get('bad_channels') or [])]
+            raw_cols = [i for i, c in enumerate(ids) if c not in bad]
+            if len(raw_cols) != info['num_channels']:
+                raise ValueError("Binary has %d channels but %d raw channels are not in bad_channels"
+                                 % (info['num_channels'], len(raw_cols)))
+            binary = np.memmap(self.input()['memmap']['bin'].path, dtype=info.get('dtype', 'int16'), mode='r',
+                               shape=(n, info['num_channels']))
+            gains = recording.get_channel_gains()
+            cfg = get_stim_artifact_config(site_config, project_cfg)
+            written = plot_stim_artifact_figures(
+                lambda a, b, cols: recording.get_traces(start_frame=a, end_frame=b, segment_index=0)[:, cols],
+                lambda a, b: binary[a:b], raw_cols, fs, n, events, out_dir,
+                gain_uv=float(np.median(gains)) if gains is not None else 0.195,
+                channel_names=[ids[i] for i in raw_cols],
+                post_blank_ms=cfg['blank_after_filter_ms'] if needs_stim_tails(cfg) else 0.0,
+                annotations=site_config.get('stim_bouts'))
+            print("Wrote %d stimulation artefact figures to %s" % (len(written), out_dir))
+        with open(self.output().path, 'w') as f:
+            f.write("\n".join(os.path.basename(p) for p in written) + ("\n" if written else ""))
+
 
 class RemoteRawData(RemoteTask):
     """
@@ -1774,6 +1871,7 @@ class GenerateSingleSiteFiles(luigi.WrapperTask):
     def requires(self):
         return [
             GenerateSingleSiteMemmap(self.site_dir),
+            PlotStimArtifacts(self.site_dir),
             GenerateSingleSiteDigitalMemmap(self.site_dir),
             GenerateSingleSiteAuxMemmap(self.site_dir),
             GenerateSingleSiteLFP(self.site_dir),
